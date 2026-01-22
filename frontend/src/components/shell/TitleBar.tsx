@@ -3,13 +3,15 @@ interface TitleBarProps {
   onViewModeChange: (mode: 'terminal' | 'circuit') => void
   crtEnabled: boolean
   onCrtToggle: () => void
+  onSettingsClick: () => void
 }
 
 export function TitleBar({ 
   viewMode, 
   onViewModeChange, 
   crtEnabled, 
-  onCrtToggle 
+  onCrtToggle,
+  onSettingsClick,
 }: TitleBarProps) {
   const handleMinimize = () => window.electronAPI?.minimize()
   const handleMaximize = () => window.electronAPI?.maximize()
@@ -59,6 +61,16 @@ export function TitleBar({
           title="Toggle CRT Effect"
         >
           CRT: {crtEnabled ? 'ON' : 'OFF'}
+        </button>
+
+        {/* Settings */}
+        <button
+          onClick={onSettingsClick}
+          className="text-xs px-2 py-1 border border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor transition-none"
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          title="Settings"
+        >
+          ⚙ SETTINGS
         </button>
       </div>
 

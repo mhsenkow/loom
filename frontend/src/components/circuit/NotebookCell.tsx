@@ -1,12 +1,41 @@
 import { useState } from 'react'
-import { CellData } from './CircuitBoard'
+import { CellData, ModelSlot, ModelSlotConfig, InputMode } from './CircuitBoard'
+import { FilePicker, ReadMode } from './FilePicker'
 import type { ModuleType } from '../../types/module'
+
+const INPUT_MODE_INDICATORS: Record<InputMode, { icon: string; color: string }> = {
+  previous: { icon: '●', color: '#33ff00' },
+  all: { icon: '●●●', color: '#33ff00' },
+  none: { icon: '○', color: '#666' },
+}
+
+const READ_MODE_LABELS: Record<ReadMode, string> = {
+  raw: '📄 Raw',
+  preview: '👁️ Preview',
+  structure: '🏗️ Structure',
+  summarize: '📝 Summarize',
+  stats: '📊 Stats',
+  extract: '🎯 Extract',
+}
+
+const SLOT_COLORS: Record<ModelSlot, string> = {
+  A: '#33ff00',
+  B: '#00bfff',
+  C: '#ff9500',
+}
+
+const SLOT_LABELS: Record<ModelSlot, string> = {
+  A: 'Creative',
+  B: 'Critical',
+  C: 'Fast',
+}
 
 interface NotebookCellProps {
   cell: CellData
   index: number
   totalCells: number
   models: string[]
+  modelSlots: ModelSlotConfig
   onUpdate: (updates: Partial<CellData>) => void
   onDelete: () => void
   onMoveUp: () => void
@@ -18,15 +47,18 @@ export function NotebookCell({
   cell,
   index,
   totalCells,
-  models,
+  models: _models,
+  modelSlots,
   onUpdate,
   onDelete,
   onMoveUp,
   onMoveDown,
   onRun,
 }: NotebookCellProps) {
+  void _models // Keep prop for future use
   const [isEditing, setIsEditing] = useState(false)
   const [editContent, setEditContent] = useState(cell.content)
+  const [showFilePicker, setShowFilePicker] = useState(false)
 
   const typeConfig: Record<ModuleType, { 
     icon: string
@@ -58,6 +90,24 @@ export function NotebookCell({
       bgColor: 'bg-phosphor-dim',
       description: 'Displays output and sends to Terminal',
     },
+    image_gen: {
+      icon: '🎨',
+      color: 'text-pink-400',
+      bgColor: 'bg-pink-500',
+      description: 'Generates image from input prompt',
+    },
+    markdown: {
+      icon: '📝',
+      color: 'text-gray-400',
+      bgColor: 'bg-gray-600',
+      description: 'Documentation / notes (not executed)',
+    },
+    data_loader: {
+      icon: '📁',
+      color: 'text-cyan-400',
+      bgColor: 'bg-cyan-600',
+      description: 'Loads file from data folder. Enter file path.',
+    },
   }
 
   const config = typeConfig[cell.type]
@@ -84,7 +134,6 @@ export function NotebookCell({
     }
   }
 
-  // Different placeholder based on cell type
   const getPlaceholder = () => {
     switch (cell.type) {
       case 'data_input':
@@ -95,9 +144,24 @@ export function NotebookCell({
         return 'Transform template. Use {{input}} to reference previous output.'
       case 'log_entry':
         return 'Optional: Label for output'
+      case 'image_gen':
+        return 'Optional: Negative prompt (what to avoid)'
+      case 'markdown':
+        return 'Write notes or documentation here...'
+      case 'data_loader':
+        return 'File path (e.g., data.csv, reports/summary.pdf)'
       default:
         return 'Enter content...'
     }
+  }
+
+  // Get the resolved model name for display
+  const getResolvedModel = (): string => {
+    if (cell.model) return cell.model
+    if (cell.modelSlot && modelSlots[cell.modelSlot]) {
+      return modelSlots[cell.modelSlot]
+    }
+    return 'Default'
   }
 
   return (
@@ -105,11 +169,32 @@ export function NotebookCell({
       {/* Header */}
       <div className={`${config.bgColor} text-void px-4 py-2 flex items-center justify-between`}>
         <div className="flex items-center gap-3">
+          {/* Input mode indicator */}
+          {index > 0 && (
+            <span 
+              className="text-[8px] opacity-60"
+              style={{ color: INPUT_MODE_INDICATORS[cell.inputMode || 'previous'].color }}
+              title={`Input mode: ${cell.inputMode || 'previous'}`}
+            >
+              {INPUT_MODE_INDICATORS[cell.inputMode || 'previous'].icon}
+            </span>
+          )}
           <span className="text-sm">{config.icon}</span>
           <span className="font-mono text-xs font-bold tracking-wider">
             [{index + 1}] {cell.label}
           </span>
           <span className={`led ${statusIndicator[cell.status]}`} />
+          
+          {/* Show slot badge for AI cells */}
+          {cell.type === 'ai_processor' && cell.modelSlot && (
+            <span 
+              className="text-[10px] font-bold px-1.5 py-0.5 bg-black/30"
+              style={{ color: SLOT_COLORS[cell.modelSlot] }}
+              title={`Using slot ${cell.modelSlot} (${SLOT_LABELS[cell.modelSlot]}): ${getResolvedModel()}`}
+            >
+              {cell.modelSlot}
+            </span>
+          )}
         </div>
 
         {/* Cell Actions */}
@@ -142,29 +227,146 @@ export function NotebookCell({
 
       {/* Body */}
       <div className="p-4 bg-slate">
-        {/* Type Description */}
+        {/* Type Description + Controls */}
         <div className="text-[10px] text-terminal-muted uppercase tracking-widest mb-3 flex items-center justify-between">
           <span>{config.description}</span>
           
-          {/* Model Selector for AI cells */}
-          {cell.type === 'ai_processor' && models.length > 0 && (
+          {/* Slot Selector for AI cells */}
+          {cell.type === 'ai_processor' && (
+            <div className="flex items-center gap-2">
+              <span className="normal-case text-terminal-muted">Slot:</span>
+              <div className="flex border border-terminal-border">
+                {(['A', 'B', 'C'] as ModelSlot[]).map((slot) => (
+                  <button
+                    key={slot}
+                    onClick={() => onUpdate({ modelSlot: slot, model: undefined })}
+                    className={`px-2 py-0.5 text-[10px] font-bold transition-none ${
+                      cell.modelSlot === slot 
+                        ? 'bg-void' 
+                        : 'hover:bg-void/50'
+                    }`}
+                    style={{ 
+                      color: cell.modelSlot === slot ? SLOT_COLORS[slot] : '#666',
+                      borderRight: slot !== 'C' ? '1px solid #2a2a2a' : 'none',
+                    }}
+                    title={`${SLOT_LABELS[slot]}: ${modelSlots[slot] || 'Default'}`}
+                  >
+                    {slot}
+                  </button>
+                ))}
+              </div>
+              {cell.modelSlot && (
+                <span 
+                  className="text-[9px] normal-case"
+                  style={{ color: SLOT_COLORS[cell.modelSlot] }}
+                >
+                  {modelSlots[cell.modelSlot] || 'Default'}
+                </span>
+              )}
+            </div>
+          )}
+          
+          {/* Model Selector for Image cells */}
+          {cell.type === 'image_gen' && (
             <select
-              value={cell.model || ''}
-              onChange={(e) => onUpdate({ model: e.target.value || undefined })}
-              className="bg-void border border-terminal-border text-phosphor text-[10px] px-2 py-1 focus:outline-none focus:border-phosphor"
+              value={cell.model || 'sdxl'}
+              onChange={(e) => onUpdate({ model: e.target.value })}
+              className="bg-void border border-terminal-border text-pink-400 text-[10px] px-2 py-1 focus:outline-none focus:border-pink-400"
             >
-              <option value="">Default Model</option>
-              {models.filter(m => !m.includes('embed')).map((model) => (
-                <option key={model} value={model}>
-                  {model}
-                </option>
-              ))}
+              <optgroup label="Local (MPS/CUDA)">
+                <option value="sdxl">SDXL (8GB)</option>
+                <option value="sdxl-turbo">SDXL Turbo - Fast (8GB)</option>
+                <option value="sd-3">Stable Diffusion 3 (16GB)</option>
+                <option value="flux-schnell">FLUX Schnell (32GB)</option>
+                <option value="flux-dev">FLUX Dev (32GB)</option>
+                <option value="sd-1.5">SD 1.5 - Classic (4GB)</option>
+              </optgroup>
             </select>
+          )}
+          
+          {/* Read mode indicator for Data cells */}
+          {cell.type === 'data_loader' && cell.readMode && (
+            <span className="text-[10px] text-cyan-400">
+              {READ_MODE_LABELS[cell.readMode as ReadMode] || cell.readMode}
+            </span>
           )}
         </div>
 
-        {/* Content Area - only show for types that need input */}
-        {cell.type !== 'log_entry' && (
+        {/* Content Area - Special handling for data_loader */}
+        {cell.type === 'data_loader' && (
+          <>
+            {/* File selector UI */}
+            <div className="flex items-center gap-2 mb-2">
+              <button
+                onClick={() => setShowFilePicker(true)}
+                className="btn-terminal text-xs flex items-center gap-2"
+                style={{ borderColor: '#00bfff', color: '#00bfff' }}
+              >
+                📁 Browse Files
+              </button>
+              {cell.content && (
+                <span className="text-xs text-phosphor font-mono truncate flex-1">
+                  {cell.content}
+                </span>
+              )}
+            </div>
+            
+            {/* Manual path input */}
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={editContent}
+                onChange={(e) => {
+                  setEditContent(e.target.value)
+                  onUpdate({ content: e.target.value })
+                }}
+                placeholder="Or type path: data.csv, reports/summary.pdf"
+                className="flex-1 bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-cyan-500"
+              />
+            </div>
+            
+            {/* Read mode selector */}
+            <div className="mt-3 pt-3 border-t border-terminal-border">
+              <div className="text-[10px] text-terminal-muted mb-2">Read Mode:</div>
+              <div className="flex flex-wrap gap-1">
+                {(['raw', 'preview', 'summarize', 'structure', 'stats', 'extract'] as ReadMode[]).map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => onUpdate({ readMode: mode })}
+                    className={`px-2 py-1 text-[10px] border ${
+                      cell.readMode === mode 
+                        ? 'border-cyan-500 bg-cyan-900/30 text-cyan-400' 
+                        : 'border-terminal-border text-terminal-muted hover:border-cyan-500/50'
+                    }`}
+                  >
+                    {READ_MODE_LABELS[mode]}
+                  </button>
+                ))}
+              </div>
+              <div className="text-[9px] text-terminal-muted mt-1">
+                {cell.readMode === 'summarize' && 'AI will summarize the document'}
+                {cell.readMode === 'structure' && 'AI will analyze the data structure'}
+                {cell.readMode === 'stats' && 'AI will compute statistics (best for CSV)'}
+                {cell.readMode === 'extract' && 'AI will extract key data points'}
+                {cell.readMode === 'preview' && 'First 50 lines only'}
+                {(!cell.readMode || cell.readMode === 'raw') && 'Full file content as-is'}
+              </div>
+            </div>
+            
+            {/* File Picker Modal */}
+            <FilePicker
+              isOpen={showFilePicker}
+              onClose={() => setShowFilePicker(false)}
+              onSelect={(path, mode) => {
+                setEditContent(path)
+                onUpdate({ content: path, readMode: mode })
+              }}
+            />
+          </>
+        )}
+
+        {/* Content Area - Regular cells */}
+        {cell.type !== 'log_entry' && cell.type !== 'data_loader' && (
           <>
             {isEditing ? (
               <textarea
@@ -192,14 +394,26 @@ export function NotebookCell({
         )}
 
         {/* Output Section */}
-        {(cell.output || cell.status === 'running') && (
+        {(cell.output || cell.status === 'running' || cell.error) && (
           <div className={`mt-3 p-3 border ${cell.error ? 'bg-red-900/20 border-red-500' : 'bg-void/50 border-phosphor-dim'}`}>
             <div className={`text-[10px] uppercase tracking-widest mb-2 ${cell.error ? 'text-red-400' : 'text-phosphor-dim'}`}>
               {cell.error ? 'ERROR' : 'OUTPUT'}
             </div>
-            <div className={`font-mono text-sm whitespace-pre-wrap ${cell.error ? 'text-red-400' : 'text-phosphor'}`}>
-              {cell.error || cell.output || (cell.status === 'running' ? '...' : '')}
-            </div>
+            
+            {/* Image output */}
+            {cell.type === 'image_gen' && cell.output?.startsWith('data:image') ? (
+              <div className="flex justify-center">
+                <img 
+                  src={cell.output} 
+                  alt="Generated" 
+                  className="max-w-full max-h-[400px] border border-phosphor-dim"
+                />
+              </div>
+            ) : (
+              <div className={`font-mono text-sm whitespace-pre-wrap ${cell.error ? 'text-red-400' : 'text-phosphor'}`}>
+                {cell.error || cell.output || (cell.status === 'running' ? '...' : '')}
+              </div>
+            )}
           </div>
         )}
 

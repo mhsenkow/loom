@@ -5,3 +5,14 @@ ollama>=0.1.6
 chromadb>=0.4.22
 pydantic>=2.5.0
 python-dotenv>=1.0.0
+httpx>=0.26.0
+
+# Image generation (local)
+torch>=2.1.0
+diffusers>=0.25.0
+transformers>=4.36.0
+accelerate>=0.25.0
+safetensors>=0.4.0
+
+# File processing
+pymupdf>=1.23.0

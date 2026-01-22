@@ -24,6 +24,9 @@ export const ModuleNode = memo(({ data, selected }: NodeProps<ModuleNodeData>) =
     ai_processor: '◆',
     script_execution: '⚙',
     log_entry: '◀',
+    image_gen: '🎨',
+    markdown: '📝',
+    data_loader: '📁',
   }
 
   const headerColors: Record<ModuleType, string> = {
@@ -31,6 +34,9 @@ export const ModuleNode = memo(({ data, selected }: NodeProps<ModuleNodeData>) =
     ai_processor: 'bg-amber-500 text-void',
     script_execution: 'bg-cyan-500 text-void',
     log_entry: 'bg-phosphor-dim text-void',
+    image_gen: 'bg-pink-500 text-void',
+    markdown: 'bg-gray-600 text-white',
+    data_loader: 'bg-cyan-600 text-white',
   }
 
   return (

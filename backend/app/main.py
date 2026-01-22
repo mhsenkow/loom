@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from app.routers import modules
+from app.routers import modules, images, files
 from app.services.ollama_client import OllamaClient
 from app.services.vector_store import VectorStore
 
@@ -37,6 +37,8 @@ app.add_middleware(
 
 # Include routers
 app.include_router(modules.router, prefix="/api/modules", tags=["modules"])
+app.include_router(images.router, prefix="/api/images", tags=["images"])
+app.include_router(files.router, prefix="/api/files", tags=["files"])
 
 # Initialize services
 ollama_client = OllamaClient()

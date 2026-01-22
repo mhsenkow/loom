@@ -3,6 +3,7 @@ import { CRTContainer } from './components/shell/CRTContainer'
 import { TitleBar } from './components/shell/TitleBar'
 import { TerminalFeed } from './components/terminal/TerminalFeed'
 import { CircuitBoard } from './components/circuit/CircuitBoard'
+import { SettingsModal } from './components/shell/SettingsModal'
 import { useSocket } from './hooks/useSocket'
 import { useSystemStatus } from './hooks/useSystemStatus'
 
@@ -11,6 +12,7 @@ type ViewMode = 'terminal' | 'circuit'
 function App() {
   const [viewMode, setViewMode] = useState<ViewMode>('terminal')
   const [crtEnabled, setCrtEnabled] = useState(true)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   
   const { connected: socketConnected } = useSocket()
   const { status } = useSystemStatus()
@@ -24,6 +26,13 @@ function App() {
           onViewModeChange={setViewMode}
           crtEnabled={crtEnabled}
           onCrtToggle={() => setCrtEnabled(!crtEnabled)}
+          onSettingsClick={() => setSettingsOpen(true)}
+        />
+
+        {/* Settings Modal */}
+        <SettingsModal 
+          isOpen={settingsOpen} 
+          onClose={() => setSettingsOpen(false)} 
         />
         
         {/* Main Content Area - Both views always mounted for state persistence */}

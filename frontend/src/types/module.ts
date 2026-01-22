@@ -1,4 +1,11 @@
-export type ModuleType = 'log_entry' | 'ai_processor' | 'script_execution' | 'data_input'
+export type ModuleType = 
+  | 'log_entry' 
+  | 'ai_processor' 
+  | 'script_execution' 
+  | 'data_input'
+  | 'image_gen'
+  | 'markdown'
+  | 'data_loader'
 
 export type ModuleStatus = 'idle' | 'running' | 'success' | 'error'
 
