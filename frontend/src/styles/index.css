@@ -1,0 +1,212 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Base reset for retro terminal aesthetic */
+@layer base {
+  * {
+    border-radius: 0 !important;
+  }
+  
+  html {
+    font-family: 'JetBrains Mono', monospace;
+    background-color: #050505;
+    color: #33ff00;
+  }
+  
+  body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background-color: #050505;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Custom scrollbar - terminal style */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  
+  ::-webkit-scrollbar-track {
+    background: #0a0f14;
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    background: #33ff00;
+    border: 1px solid #1a8000;
+  }
+  
+  ::-webkit-scrollbar-thumb:hover {
+    background: #44ff22;
+  }
+
+  /* Selection styling */
+  ::selection {
+    background: #33ff00;
+    color: #050505;
+  }
+}
+
+/* CRT Scanline Effect */
+@layer components {
+  .crt-overlay {
+    pointer-events: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 9999;
+    background: repeating-linear-gradient(
+      0deg,
+      rgba(0, 0, 0, 0.15) 0px,
+      rgba(0, 0, 0, 0.15) 1px,
+      transparent 1px,
+      transparent 2px
+    );
+  }
+
+  .crt-flicker {
+    animation: crtFlicker 0.1s ease-in-out;
+  }
+
+  @keyframes crtFlicker {
+    0% { opacity: 0.97; }
+    25% { opacity: 1; }
+    50% { opacity: 0.98; }
+    75% { opacity: 1; }
+    100% { opacity: 0.99; }
+  }
+
+  /* Terminal prompt cursor */
+  .terminal-cursor {
+    display: inline-block;
+    width: 10px;
+    height: 1.2em;
+    background-color: #33ff00;
+    animation: blink 1s step-end infinite;
+  }
+
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+
+  /* LED Status Indicators */
+  .led {
+    width: 8px;
+    height: 8px;
+    border: 1px solid currentColor;
+  }
+
+  .led-idle {
+    background-color: #3a3a3a;
+    border-color: #666666;
+  }
+
+  .led-running {
+    background-color: #ffb000;
+    border-color: #cc8800;
+    box-shadow: 0 0 6px #ffb000;
+    animation: pulse-glow 1s ease-in-out infinite;
+  }
+
+  .led-success {
+    background-color: #33ff00;
+    border-color: #1a8000;
+    box-shadow: 0 0 6px #33ff00;
+  }
+
+  .led-error {
+    background-color: #ff3333;
+    border-color: #cc0000;
+    box-shadow: 0 0 6px #ff3333;
+  }
+
+  /* Button styles - brutalist / tactile */
+  .btn-terminal {
+    @apply font-mono text-sm px-4 py-2 border border-phosphor text-phosphor bg-void;
+    @apply hover:bg-phosphor hover:text-void;
+    @apply active:shadow-none active:translate-x-[2px] active:translate-y-[2px];
+    @apply transition-none;
+    box-shadow: 2px 2px 0 #33ff00;
+  }
+
+  .btn-terminal:hover {
+    box-shadow: 2px 2px 0 #33ff00;
+  }
+
+  .btn-terminal:active {
+    box-shadow: none;
+  }
+
+  /* Module / Node chip styling */
+  .module-chip {
+    @apply bg-slate border border-phosphor;
+    box-shadow: 2px 2px 0 #1a8000;
+  }
+
+  .module-chip-header {
+    @apply bg-phosphor text-void px-3 py-1 font-mono text-xs font-bold uppercase tracking-wider;
+  }
+
+  /* Port connectors */
+  .port {
+    @apply w-3 h-3 border border-phosphor bg-void;
+  }
+
+  .port:hover {
+    @apply bg-phosphor;
+  }
+
+  .port-connected {
+    @apply bg-phosphor-dim;
+  }
+}
+
+/* Tiptap editor overrides */
+.tiptap {
+  outline: none;
+  font-family: 'JetBrains Mono', monospace;
+  color: #33ff00;
+}
+
+.tiptap p {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.tiptap p.is-editor-empty:first-child::before {
+  color: #666666;
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+
+/* React Flow overrides */
+.react-flow__node {
+  border-radius: 0 !important;
+}
+
+.react-flow__handle {
+  border-radius: 0 !important;
+  width: 12px !important;
+  height: 12px !important;
+  background: #0a0f14 !important;
+  border: 1px solid #33ff00 !important;
+}
+
+.react-flow__handle:hover {
+  background: #33ff00 !important;
+}
+
+.react-flow__edge-path {
+  stroke: #33ff00 !important;
+  stroke-width: 2 !important;
+}
+
+.react-flow__background-pattern {
+  fill: #1a8000 !important;
+}
