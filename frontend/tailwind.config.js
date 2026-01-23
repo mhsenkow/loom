@@ -7,27 +7,27 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        void: '#050505',
-        slate: '#0a0f14',
+        void: 'var(--theme-void, #050505)',
+        slate: 'var(--theme-slate, #0a0f14)',
         phosphor: {
-          DEFAULT: '#33ff00',
-          dim: '#1a8000',
-          glow: '#33ff0050',
+          DEFAULT: 'var(--theme-phosphor, #33ff00)',
+          dim: 'var(--theme-phosphor-dim, #1a8000)',
+          glow: 'var(--theme-phosphor-glow, #33ff0050)',
         },
         terminal: {
-          gray: '#3a3a3a',
-          muted: '#666666',
-          border: '#2a2a2a',
+          gray: 'var(--theme-terminal-gray, #3a3a3a)',
+          muted: 'var(--theme-terminal-muted, #666666)',
+          border: 'var(--theme-terminal-border, #2a2a2a)',
         }
       },
       fontFamily: {
-        mono: ['JetBrains Mono', 'Fira Code', 'Consolas', 'monospace'],
+        mono: ['var(--theme-font, "JetBrains Mono")', 'Fira Code', 'Consolas', 'monospace'],
       },
       boxShadow: {
-        'glow': '0 0 10px #33ff00, 0 0 20px #33ff0050',
-        'glow-sm': '0 0 5px #33ff00',
-        'block': '4px 4px 0 #33ff00',
-        'block-sm': '2px 2px 0 #33ff00',
+        'glow': '0 0 10px var(--theme-phosphor, #33ff00), 0 0 20px var(--theme-phosphor-glow, #33ff0050)',
+        'glow-sm': '0 0 5px var(--theme-phosphor, #33ff00)',
+        'block': '4px 4px 0 var(--theme-phosphor, #33ff00)',
+        'block-sm': '2px 2px 0 var(--theme-phosphor, #33ff00)',
       },
       borderRadius: {
         'none': '0px',
@@ -43,8 +43,8 @@ module.exports = {
           '50%': { opacity: '0.8' },
         },
         pulseGlow: {
-          '0%, 100%': { boxShadow: '0 0 5px #33ff00' },
-          '50%': { boxShadow: '0 0 15px #33ff00, 0 0 25px #33ff0050' },
+          '0%, 100%': { boxShadow: '0 0 5px var(--theme-phosphor, #33ff00)' },
+          '50%': { boxShadow: '0 0 15px var(--theme-phosphor, #33ff00), 0 0 25px var(--theme-phosphor-glow, #33ff0050)' },
         },
         blink: {
           '0%, 100%': { opacity: '1' },

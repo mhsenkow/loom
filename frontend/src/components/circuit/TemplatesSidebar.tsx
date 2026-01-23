@@ -1,16 +1,18 @@
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { CellData, ModelSlot, InputMode } from './CircuitBoard'
+import { loadSavedCircuits, deleteCircuit, SavedCircuit } from '../../hooks/useCircuitRunner'
 
 export interface NotebookTemplate {
   id: string
   name: string
   description: string
   icon: string
-  category: 'thinking' | 'writing' | 'music' | 'data' | 'code' | 'scripts'
+  category: 'thinking' | 'writing' | 'music' | 'data' | 'code' | 'scripts' | 'mine'
   cells: Omit<CellData, 'id' | 'status'>[]
 }
 
 const CATEGORIES = [
+  { id: 'mine', label: 'MINE', icon: '★' },
   { id: 'thinking', label: 'THINK', icon: '🧠' },
   { id: 'writing', label: 'WRITE', icon: '✍️' },
   { id: 'music', label: 'MUSIC', icon: '🎵' },
@@ -45,6 +47,59 @@ const data = (label: string, filePath: string, readMode: string = 'raw', inputMo
   type: 'data_loader', label, content: filePath, output: '', readMode, inputMode,
 })
 
+const conditional = (
+  label: string,
+  conditionType: 'regex' | 'keyword' | 'length' | 'contains' | 'ai_check',
+  conditionValue: string,
+  onPass?: string,
+  onFail?: string,
+  inputMode: InputMode = 'previous',
+  loopBackTo?: number,
+  loopBackMax?: number
+): Omit<CellData, 'id' | 'status'> => ({
+  type: 'conditional',
+  label,
+  content: '',
+  output: '',
+  conditionType,
+  conditionValue,
+  onPass,
+  onFail,
+  inputMode,
+  loopBackTo,
+  loopBackMax,
+})
+
+const webFetch = (
+  label: string,
+  url: string,
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET',
+  headers?: string,
+  body?: string,
+  inputMode: InputMode = 'previous'
+): Omit<CellData, 'id' | 'status'> => ({
+  type: 'web_fetch',
+  label,
+  content: url,
+  output: '',
+  fetchMethod: method,
+  fetchHeaders: headers,
+  fetchBody: body,
+  inputMode,
+})
+
+const imageGen = (
+  label: string,
+  negativePrompt: string = '',
+  inputMode: InputMode = 'previous'
+): Omit<CellData, 'id' | 'status'> => ({
+  type: 'image_gen',
+  label,
+  content: negativePrompt,
+  output: '',
+  inputMode,
+})
+
 export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
   // ============================================
   // THINKING - Sharp reasoning tools
@@ -52,7 +107,7 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
   {
     id: 'steelman',
     name: 'Steel Man',
-    description: 'Best case for, best case against, decide',
+    description: 'Best case for, best case against, then decide',
     icon: '⚔️',
     category: 'thinking',
     cells: [
@@ -66,7 +121,7 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
   {
     id: 'inversion',
     name: 'Inversion',
-    description: 'How to fail → avoid that → succeed',
+    description: 'How to fail, then invert each into a rule to succeed',
     icon: '🔃',
     category: 'thinking',
     cells: [
@@ -117,6 +172,29 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
     ]
   },
   {
+    id: 'five-whys-root-gate',
+    name: 'Five Whys (Root? Gate)',
+    description: 'Loop until it’s root, not a symptom — “Is this the real cause?”',
+    icon: '🔍',
+    category: 'thinking',
+    cells: [
+      input('PROBLEM', 'Our best engineer just quit'),
+      ai('DIG', 'Ask "why" 5 times. Each answer becomes the next question. Stop at the systemic cause.', 'B'),
+      conditional(
+        'ROOT?',
+        'ai_check',
+        'Is this the actual root cause, or is it still a symptom of something deeper? Could we ask "why" one more time meaningfully? Answer only YES or NO.',
+        undefined,
+        'Max revisions reached.',
+        'previous',
+        2, // loop back to DIG (1-based)
+        3
+      ),
+      ai('FIX', 'What action addresses the ROOT, not symptoms?', 'A'),
+      output('ROOT CAUSE'),
+    ]
+  },
+  {
     id: 'first-principles',
     name: 'First Principles',
     description: 'Strip to physics, rebuild',
@@ -157,6 +235,51 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
     ]
   },
   {
+    id: 'red-team-fortified',
+    name: 'Red Team (Fortified Gate)',
+    description: 'Don’t stop until every attack is answered — loop back to DEFEND if not',
+    icon: '🛡️',
+    category: 'thinking',
+    cells: [
+      input('IDEA', 'We should expand into the European market'),
+      ai('DESTROY', 'You\'re the opposition. Tear this apart. Find every weakness.', 'B'),
+      ai('DEFEND', 'Review the original idea and the attacks. Address each attack. Strengthen or admit the limitation.', 'A', 'all'),
+      conditional(
+        'FORTIFIED?',
+        'ai_check',
+        'Have we addressed every serious attack? Is there any gap an opponent could exploit? Answer only YES or NO.',
+        undefined,
+        'Max revisions reached.',
+        'previous',
+        3, // loop back to DEFEND (1-based)
+        3
+      ),
+      output('BATTLE-TESTED'),
+    ]
+  },
+  {
+    id: 'idea-refiner',
+    name: 'Idea Refiner (Quality Loop)',
+    description: 'Expand the idea, gate: “Is it compelling?” — loops back to refine if not',
+    icon: '🔄',
+    category: 'thinking',
+    cells: [
+      input('IDEA', 'An app that helps people remember dreams'),
+      ai('EXPAND', 'Flesh this out: problem, solution, why it matters. Make it clear and compelling.', 'A'),
+      conditional(
+        'COMPELLING?',
+        'ai_check',
+        'Is this idea compelling and clear? Would someone get it in 30 seconds? Answer only YES or NO.',
+        undefined,
+        'Max revisions reached.',
+        'previous',
+        2,  // loop back to EXPAND (1-based)
+        3
+      ),
+      output('IDEA'),
+    ]
+  },
+  {
     id: 'opportunity-cost',
     name: 'Opportunity Cost',
     description: 'What are you NOT doing?',
@@ -168,6 +291,35 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
       ai('BEST ALT', 'What\'s the single best alternative? What\'s its value?', 'B'),
       ai('TRUE COST', 'Review the choice and alternatives. Feature X costs = best alternative forgone. Still worth it?', 'B', 'all'),
       output('DECISION'),
+    ]
+  },
+  {
+    id: 'fetch-red-team',
+    name: 'Fetch & Red Team',
+    description: 'Fetch article URL, attack the main claim',
+    icon: '🌐',
+    category: 'thinking',
+    cells: [
+      input('URL', 'https://example.com/op-ed-or-article'),
+      webFetch('FETCH', '{{input}}', 'GET'),
+      ai('CLAIM', 'Extract the main argument or claim from this text in one sentence.', 'B'),
+      ai('DESTROY', 'You\'re the opposition. Tear this claim apart. Find every weakness.', 'B'),
+      ai('DEFEND', 'Address each attack. Strengthen or admit the limitation.', 'A', 'all'),
+      output('BATTLE-TESTED'),
+    ]
+  },
+  {
+    id: 'idea-visual',
+    name: 'Idea → Visual',
+    description: 'One visual metaphor for your idea, then generate the image',
+    icon: '🎨',
+    category: 'thinking',
+    cells: [
+      input('IDEA', 'Compound interest is the 8th wonder of the world'),
+      ai('METAPHOR', 'One visual metaphor that captures this. Concrete: objects, setting, light. No abstract shapes.', 'A'),
+      ai('PROMPT', 'Turn it into a detailed image prompt. Photographic or illustration. One paragraph.', 'A'),
+      imageGen('VISUAL', 'blurry, text, generic'),
+      output('ART'),
     ]
   },
 
@@ -183,18 +335,42 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
     cells: [
       input('TOPIC', 'Proposal to switch from Slack to Discord for company chat'),
       ai('DRAFT', 'Write a one-page memo: CONTEXT (why now), PROBLEM (what\'s broken), SOLUTION (what to do), TRADEOFFS (costs), ASK (decision needed).', 'A'),
-      ai('EDIT', 'Cut it in half. Remove weasel words. Make every sentence earn its place.', 'B'),
+      ai('EDIT', 'Cut it in half. Remove weasel words. Make every sentence earn its place. Target ~300 words.', 'B'),
+      output('MEMO'),
+    ]
+  },
+  {
+    id: 'memo-one-page-gate',
+    name: 'One-Pager (One Page Gate)',
+    description: 'Gate: under ~300 words and scannable? Loop back to EDIT if not',
+    icon: '📄',
+    category: 'writing',
+    cells: [
+      input('TOPIC', 'Proposal to switch from Slack to Discord for company chat'),
+      ai('DRAFT', 'Write a one-page memo: CONTEXT, PROBLEM, SOLUTION, TRADEOFFS, ASK.', 'A'),
+      ai('EDIT', 'Cut to ~300 words. Remove weasel words. Make it scannable.', 'B'),
+      conditional(
+        'ONE PAGE?',
+        'ai_check',
+        'Is this under ~300 words and scannable with clear sections? Would a busy exec get the ASK in 30 seconds? Answer only YES or NO.',
+        undefined,
+        'Max revisions reached.',
+        'previous',
+        3, // loop back to EDIT (1-based)
+        3
+      ),
       output('MEMO'),
     ]
   },
   {
     id: 'cold-email',
     name: 'Cold Email',
-    description: 'Get replies from strangers',
+    description: 'Gate: need @ — then research, draft, and 5 subject lines',
     icon: '📧',
     category: 'writing',
     cells: [
       input('GOAL', 'Get a meeting with VP of Engineering at Stripe to discuss partnership'),
+      conditional('HAS_CONTEXT', 'contains', '@', undefined, '[FILTERED: need email address]'),
       ai('RESEARCH', 'What would this person care about? What\'s their likely pain? What makes you credible?', 'B'),
       ai('DRAFT', 'Write the email. Short. Specific value prop. Clear ask. No fluff.', 'A'),
       ai('SUBJECT', 'Write 5 subject lines. Pick the one that would make YOU open it.', 'A'),
@@ -216,6 +392,29 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
     ]
   },
   {
+    id: 'explain-until-simple',
+    name: 'Explain (Simplicity Gate)',
+    description: 'Keep simplifying until a 12-year-old would get it — loop back if not',
+    icon: '🔄',
+    category: 'writing',
+    cells: [
+      input('CONCEPT', 'Explain how quantum entanglement works'),
+      ai('SIMPLE', 'Explain to a smart 12-year-old. Analogies only. No jargon. One short pass.', 'A'),
+      conditional(
+        'SIMPLE ENOUGH?',
+        'ai_check',
+        'Would a smart 12-year-old understand this without looking anything up? Answer only YES or NO.',
+        undefined,
+        'Max revisions reached.',
+        'previous',
+        2, // loop back to SIMPLE (1-based)
+        3
+      ),
+      ai('GAPS', 'What would they ask next? Add one short paragraph to answer it.', 'B'),
+      output('EXPLANATION'),
+    ]
+  },
+  {
     id: 'thread',
     name: 'Twitter Thread',
     description: 'Idea → viral thread',
@@ -226,6 +425,29 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
       ai('HOOK', 'Write 5 opening tweets. Controversial, specific, makes people want to read more.', 'A'),
       ai('THREAD', 'Build the thread: hook → story/evidence → counterintuitive insight → takeaway. 8-12 tweets.', 'A'),
       ai('SHARPEN', 'Make each tweet punchier. Remove filler. Add one specific example.', 'B'),
+      output('THREAD'),
+    ]
+  },
+  {
+    id: 'thread-gate',
+    name: 'Thread (Quality Loop)',
+    description: 'Thread with “is it compelling?” gate — loops back to Hook if not',
+    icon: '🔄',
+    category: 'writing',
+    cells: [
+      input('INSIGHT', 'Most productivity advice is backwards - you should do less, not optimize more'),
+      ai('HOOK', 'Write 5 opening tweets. Controversial, specific, makes people want to read more.', 'A'),
+      ai('THREAD', 'Build the thread: hook → story/evidence → counterintuitive insight → takeaway. 8-12 tweets.', 'A'),
+      conditional(
+        'COMPELLING?',
+        'ai_check',
+        'Is this thread compelling? Would people keep scrolling? Answer only YES or NO.',
+        undefined,
+        'Max revisions reached.',
+        'previous',
+        2,  // loop back to HOOK (1-based)
+        3
+      ),
       output('THREAD'),
     ]
   },
@@ -241,6 +463,35 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
       ai('FLESH', 'Add specific details, dialogue, sensory moments. Make it vivid.', 'A'),
       ai('TRIM', 'Cut 30%. Keep only what advances plot or reveals character.', 'B'),
       output('STORY'),
+    ]
+  },
+  {
+    id: 'story-scene-art',
+    name: 'Story → Scene Art',
+    description: 'One vivid scene from your story, turned into an image',
+    icon: '🎨',
+    category: 'writing',
+    cells: [
+      input('SEED', 'Startup founder burns out, loses everything, rebuilds differently'),
+      ai('SCENE', 'Pick the single most vivid moment. One paragraph: setting, light, gesture, emotion. No abstraction.', 'A'),
+      ai('PROMPT', 'Turn this scene into a detailed image prompt. Cinematic, specific. Style: concept art or film still.', 'A'),
+      imageGen('SCENE', 'blurry, text, cartoon'),
+      output('ART'),
+    ]
+  },
+  {
+    id: 'fetch-mimic-voice',
+    name: 'Fetch & Mimic Voice',
+    description: 'URL of a piece you love → analyze tone → rewrite your draft in that voice',
+    icon: '🌐',
+    category: 'writing',
+    cells: [
+      input('URL', 'https://example.com/article-or-landing-page-you-love'),
+      webFetch('FETCH', '{{input}}', 'GET'),
+      ai('VOICE', 'Analyze: sentence length, rhythm, word choice, tone, structure. What makes it distinctive? One short rubric.', 'B'),
+      input('DRAFT', 'Your draft to rewrite in that voice...'),
+      ai('REWRITE', 'Rewrite the DRAFT to match the VOICE. Keep the same content, change the sound.', 'A', 'all'),
+      output('REWRITE'),
     ]
   },
   {
@@ -290,6 +541,30 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
     ]
   },
   {
+    id: 'concept-song-gate',
+    name: 'Concept → Song (Quality Loop)',
+    description: 'Song with “is it good?” gate — loops back to Hook if not',
+    icon: '🔄',
+    category: 'music',
+    cells: [
+      input('CONCEPT', 'The exhaustion of pretending to be okay at work'),
+      ai('IMAGES', '10 specific images/moments that embody this. Be visceral.', 'A'),
+      ai('HOOK', 'The chorus hook - one phrase that says it all. 5 options.', 'A'),
+      ai('LYRICS', 'Full lyrics: V1, Chorus, V2, Chorus, Bridge, Chorus. Use the images. No clichés.', 'A'),
+      conditional(
+        'GOOD?',
+        'ai_check',
+        'Is this song good? Would it get stuck in someone\'s head? Answer only YES or NO.',
+        undefined,
+        'Max revisions reached.',
+        'previous',
+        3,  // loop back to Hook (1-based)
+        3
+      ),
+      output('SONG'),
+    ]
+  },
+  {
     id: 'rewrite-lyrics',
     name: 'Rewrite Lyrics',
     description: 'Fix what\'s not working',
@@ -330,6 +605,29 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
     ]
   },
   {
+    id: 'hook-lab-earworm-gate',
+    name: 'Hook Lab (Earworm Gate)',
+    description: 'Loop until it’s sticky — “Would this get stuck in someone’s head?”',
+    icon: '🪝',
+    category: 'music',
+    cells: [
+      input('THEME', 'Song about finally leaving a toxic relationship'),
+      ai('HOOKS', '15 potential hook lines. Memorable, singable, unexpected.', 'A'),
+      ai('PICK_ONE', 'Pick the single strongest. Rewrite it 3 ways. Pick the best.', 'B'),
+      conditional(
+        'EARWORM?',
+        'ai_check',
+        'Would this hook get stuck in someone\'s head after one listen? Is it singable and distinct? Answer only YES or NO.',
+        undefined,
+        'Max revisions reached.',
+        'previous',
+        2, // loop back to HOOKS (1-based) — try new batch
+        3
+      ),
+      output('HOOK'),
+    ]
+  },
+  {
     id: 'bridge-writer',
     name: 'Write the Bridge',
     description: 'The turn that saves the song',
@@ -351,7 +649,7 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
     cells: [
       input('SONG', 'Describe song or paste lyrics/chords'),
       input('GENRES', 'bossa nova, trap, 80s synth ballad'),
-      ai('FLIP', 'Reimagine in each genre: tempo, instruments, production, vocal style. Be specific.', 'A'),
+      ai('FLIP', 'Reimagine the SONG in each GENRE: tempo, instruments, production, vocal style. Be specific.', 'A', 'all'),
       output('VERSIONS'),
     ]
   },
@@ -366,6 +664,33 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
       ai('LAYERS', 'What instruments when? Build dynamics through the song. Entrances, exits.', 'A'),
       ai('DETAILS', 'Specific production moments: effects, transitions, ear candy. What makes each section distinct?', 'A'),
       output('PRODUCTION'),
+    ]
+  },
+  {
+    id: 'lyrics-from-web',
+    name: 'Lyrics from Web',
+    description: 'Fetch lyrics page URL, extract and analyze mood',
+    icon: '🌐',
+    category: 'music',
+    cells: [
+      input('URL', 'Paste a lyrics page URL (e.g. Genius, AZLyrics)'),
+      webFetch('FETCH', '{{input}}', 'GET'),
+      ai('EXTRACT', 'Extract just the song lyrics from this page. Remove ads, nav, line numbers. Plain text only.', 'B'),
+      ai('MOOD', 'What\'s the emotional core? Suggest 3 chord progressions and a tempo that fit.', 'A'),
+      output('LYRICS + MOOD'),
+    ]
+  },
+  {
+    id: 'concept-cover-art',
+    name: 'Concept → Cover Art',
+    description: 'Vibe to album art — AI designs the prompt, you get the image',
+    icon: '🎨',
+    category: 'music',
+    cells: [
+      input('CONCEPT', 'The exhaustion of pretending to be okay at work'),
+      ai('PROMPT', 'Write a detailed image prompt for album cover art that captures this. Style: bold, graphic, no text. One paragraph.', 'A'),
+      imageGen('COVER', 'blurry, text, words, watermark'),
+      output('ART'),
     ]
   },
 
@@ -426,6 +751,84 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
     ]
   },
   {
+    id: 'api-fetch-analyze',
+    name: 'Fetch & Analyze API',
+    description: 'Fetch from API, then analyze with AI',
+    icon: '🌐',
+    category: 'data',
+    cells: [
+      webFetch('FETCH', 'https://api.github.com/repos/vercel/next.js/releases/latest', 'GET'),
+      ai('ANALYZE', 'Summarize this API response. What are the key details?', 'A'),
+      output('SUMMARY'),
+    ]
+  },
+  {
+    id: 'conditional-route',
+    name: 'Smart Router',
+    description: 'Gate: only if it contains ? — then answer',
+    icon: '⚡',
+    category: 'scripts',
+    cells: [
+      input('MESSAGE', 'What is the weather today?'),
+      conditional('IS_QUESTION', 'contains', '?', undefined, '[FILTERED: not a question]'),
+      ai('ANSWER', 'Answer the question concisely.', 'C'),
+      output('RESPONSE'),
+    ]
+  },
+  {
+    id: 'web-scrape-summarize',
+    name: 'Web Scrape & Summarize',
+    description: 'Fetch webpage, extract text, summarize',
+    icon: '📰',
+    category: 'data',
+    cells: [
+      input('URL', 'https://example.com/article'),
+      webFetch('FETCH', '{{input}}', 'GET'),
+      ai('EXTRACT', 'Extract the main text content from this HTML. Remove navigation, ads, footers. Just the article body.', 'B'),
+      ai('SUMMARIZE', 'Summarize this article in 3 bullet points.', 'A'),
+      output('SUMMARY'),
+    ]
+  },
+  {
+    id: 'style-guide-rewrite',
+    name: 'Style Guide Rewrite',
+    description: 'Load a doc (voice/style), rewrite your draft to match',
+    icon: '📁',
+    category: 'writing',
+    cells: [
+      data('STYLE', 'style-guide.pdf', 'summarize', 'none'),
+      input('DRAFT', 'Your draft to rewrite in that voice...'),
+      ai('REWRITE', 'Rewrite the DRAFT to match the STYLE guide. Voice, terms, structure, level of formality. Keep the substance.', 'A', 'all'),
+      output('REWRITE'),
+    ]
+  },
+  {
+    id: 'api-post-process',
+    name: 'API POST & Process',
+    description: 'Send data to API, process response',
+    icon: '📡',
+    category: 'scripts',
+    cells: [
+      input('DATA', '{"name": "John", "email": "john@example.com"}'),
+      webFetch('POST', 'https://api.example.com/users', 'POST', '{"Content-Type": "application/json"}', '{{input}}'),
+      ai('VALIDATE', 'Check if this API response indicates success. Extract key fields.', 'B'),
+      output('RESULT'),
+    ]
+  },
+  {
+    id: 'length-filter',
+    name: 'Length Filter',
+    description: 'Gate: under 5000 chars — else [FILTERED], then summarize',
+    icon: '📏',
+    category: 'scripts',
+    cells: [
+      input('TEXT', 'Paste long text here...'),
+      conditional('CHECK_LENGTH', 'length', '5000', undefined, '[FILTERED: text too long]'),
+      ai('SUMMARIZE', 'Summarize this text.', 'A'),
+      output('SUMMARY'),
+    ]
+  },
+  {
     id: 'csv-to-json',
     name: 'CSV → JSON',
     description: 'Convert data formats',
@@ -476,6 +879,29 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
       output('ARTICLE'),
     ]
   },
+  {
+    id: 'data-story-newsworthy-gate',
+    name: 'Data → Story (Newsworthy Gate)',
+    description: 'Loop until an editor would run it — “Is this newsworthy?”',
+    icon: '📰',
+    category: 'data',
+    cells: [
+      data('DATA', 'City_of_Seattle_Wage_Data.csv', 'stats'),
+      ai('STORY', 'Write a compelling 2-paragraph story. Human angle. No overclaiming—only what the data supports.', 'A'),
+      conditional(
+        'NEWSWORTHY?',
+        'ai_check',
+        'Would an editor run this? Is it newsworthy, accurate, and not overclaiming from the data? Answer only YES or NO.',
+        undefined,
+        'Max revisions reached.',
+        'previous',
+        2, // loop back to STORY (1-based)
+        3
+      ),
+      ai('HEADLINE', 'Write 5 headlines that make people want to click.', 'A'),
+      output('ARTICLE'),
+    ]
+  },
 
   // ============================================
   // CODE - Developer workflows
@@ -503,6 +929,29 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
       input('CODE', 'Paste code to review...'),
       ai('ISSUES', 'Bugs, edge cases, code smells. Be specific with line numbers.', 'B'),
       ai('IMPROVED', 'Show the refactored version with comments explaining changes.', 'A'),
+      output('REVIEW'),
+    ]
+  },
+  {
+    id: 'review-ship-it-gate',
+    name: 'Code Review (Ship It? Gate)',
+    description: 'Don’t stop until you’d merge it — loop back to IMPROVED if not',
+    icon: '✅',
+    category: 'code',
+    cells: [
+      input('CODE', 'Paste code to review...'),
+      ai('ISSUES', 'Bugs, edge cases, code smells. Be specific with line numbers.', 'B'),
+      ai('IMPROVED', 'Show the refactored version with comments explaining changes.', 'A'),
+      conditional(
+        'SHIP IT?',
+        'ai_check',
+        'Would you merge this code as-is? No critical bugs, readable, maintainable? Answer only YES or NO.',
+        undefined,
+        'Max revisions reached.',
+        'previous',
+        3, // loop back to IMPROVED (1-based)
+        3
+      ),
       output('REVIEW'),
     ]
   },
@@ -549,11 +998,12 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
   {
     id: 'regex',
     name: 'Regex Builder',
-    description: 'Finally understand that regex',
+    description: 'Gate: valid email? — then regex + explain + test cases',
     icon: '🎭',
     category: 'code',
     cells: [
       input('NEED', 'Match email addresses, but only .com and .org domains'),
+      conditional('IS_VALID_EMAIL', 'regex', '^[\\w\\.-]+@[\\w\\.-]+\\.(com|org)$', undefined, '[FILTERED: invalid email format]'),
       ai('REGEX', 'Write the regex. Explain each part.', 'A'),
       ai('TEST', 'Show 5 strings that match and 5 that don\'t.', 'B'),
       output('REGEX'),
@@ -665,19 +1115,86 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
       output('PROMPT'),
     ]
   },
+  {
+    id: 'prompt-craft-works-gate',
+    name: 'Prompt Craft (Works? Gate)',
+    description: 'Loop until the prompt produces good output — “Does it work?”',
+    icon: '🔄',
+    category: 'scripts',
+    cells: [
+      input('GOAL', 'I want an AI that helps write marketing copy for SaaS products'),
+      input('SAMPLE', 'Product: Project management tool. Audience: PMs. Tone: Professional but warm.'),
+      ai('PROMPT', 'Write the system prompt: role, context, constraints, 1–2 examples, output format.', 'A'),
+      ai('RUN_TEST', 'Using the GOAL and SAMPLE above, produce one example output as the AI would. Then briefly: does it match the goal?', 'B', 'all'),
+      conditional(
+        'WORKS?',
+        'ai_check',
+        'Does the example output match the goal? Would a user be satisfied? Answer only YES or NO.',
+        undefined,
+        'Max revisions reached.',
+        'previous',
+        3, // loop back to PROMPT (1-based)
+        3
+      ),
+      output('PROMPT'),
+    ]
+  },
 ]
 
 
 interface TemplatesSidebarProps {
-  onSelectTemplate: (template: NotebookTemplate) => void
+  onSelectTemplate: (template: NotebookTemplate, circuitName: string) => void
+  onNewCircuit: () => void
+  currentCircuitName: string  // Currently active circuit name
   isCollapsed: boolean
   onToggleCollapse: () => void
 }
 
-export function TemplatesSidebar({ onSelectTemplate, isCollapsed, onToggleCollapse }: TemplatesSidebarProps) {
-  const [activeCategory, setActiveCategory] = useState<typeof CATEGORIES[number]['id']>('thinking')
+export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircuitName, isCollapsed, onToggleCollapse }: TemplatesSidebarProps) {
+  const [activeCategory, setActiveCategory] = useState<typeof CATEGORIES[number]['id']>('mine')
+  const [savedCircuits, setSavedCircuits] = useState<Record<string, SavedCircuit>>({})
+  const [hoveredCircuit, setHoveredCircuit] = useState<string | null>(null)
   
-  const filteredTemplates = NOTEBOOK_TEMPLATES.filter(t => t.category === activeCategory)
+  // Check if current circuit matches a template or saved circuit
+  const isCurrentTemplate = (templateId: string) => currentCircuitName === templateId
+  const isCurrentSavedCircuit = (name: string) => currentCircuitName === name
+  
+  // Load saved circuits
+  const refreshSavedCircuits = useCallback(() => {
+    setSavedCircuits(loadSavedCircuits())
+  }, [])
+  
+  useEffect(() => {
+    refreshSavedCircuits()
+    // Refresh periodically to catch saves from other parts of the app
+    const interval = setInterval(refreshSavedCircuits, 2000)
+    return () => clearInterval(interval)
+  }, [refreshSavedCircuits])
+  
+  const handleDeleteCircuit = (name: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (confirm(`Delete circuit "${name}"?`)) {
+      deleteCircuit(name)
+      refreshSavedCircuits()
+    }
+  }
+  
+  // Convert saved circuit to template format
+  const savedCircuitToTemplate = (name: string, circuit: SavedCircuit): NotebookTemplate => ({
+    id: `saved-${name}`,
+    name: name,
+    description: `${circuit.cells.length} cells • saved ${new Date(circuit.savedAt).toLocaleDateString()}`,
+    icon: '◆',
+    category: 'mine',
+    cells: circuit.cells,
+  })
+  
+  const filteredTemplates = activeCategory === 'mine' 
+    ? [] // We'll render saved circuits separately
+    : NOTEBOOK_TEMPLATES.filter(t => t.category === activeCategory)
+  
+  const savedCircuitList = Object.entries(savedCircuits)
+    .sort(([, a], [, b]) => b.savedAt - a.savedAt)
 
   return (
     <div 
@@ -723,24 +1240,118 @@ export function TemplatesSidebar({ onSelectTemplate, isCollapsed, onToggleCollap
       {/* Template List */}
       {!isCollapsed && (
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
-          {filteredTemplates.map((template) => (
-            <button
-              key={template.id}
-              onClick={() => onSelectTemplate(template)}
-              className="w-full text-left p-2 hover:bg-void group transition-colors"
-              title={template.description}
-            >
-              <div className="flex items-center gap-2">
-                <span className="text-sm">{template.icon}</span>
-                <span className="text-xs text-terminal-muted group-hover:text-phosphor truncate">
-                  {template.name}
-                </span>
-              </div>
-              <p className="text-[9px] text-terminal-muted/60 mt-1 line-clamp-2 pl-6">
-                {template.description}
-              </p>
-            </button>
-          ))}
+          {/* NEW button - always at top */}
+          <button
+            onClick={onNewCircuit}
+            className="w-full text-left p-2 hover:bg-void group transition-colors border border-dashed border-terminal-border hover:border-phosphor"
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-phosphor">+</span>
+              <span className="text-xs text-phosphor group-hover:text-phosphor">
+                New Circuit
+              </span>
+            </div>
+            <p className="text-[9px] text-terminal-muted/60 mt-1 pl-6">
+              Start with a blank notebook
+            </p>
+          </button>
+          
+          {/* MINE category - show saved circuits */}
+          {activeCategory === 'mine' && (
+            <>
+              {/* Current unsaved circuit indicator */}
+              {currentCircuitName && !savedCircuits[currentCircuitName] && (
+                <div className="p-2 bg-void border-l-2 border-amber-500 mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-amber-500">○</span>
+                    <span className="text-xs text-amber-400 font-bold truncate">
+                      /{currentCircuitName}
+                    </span>
+                    <span className="text-[8px] text-amber-500/60 ml-auto">unsaved</span>
+                  </div>
+                  <p className="text-[9px] text-amber-500/50 mt-1 pl-6">
+                    Save to keep this circuit
+                  </p>
+                </div>
+              )}
+              
+              {savedCircuitList.length === 0 && !currentCircuitName ? (
+                <div className="text-center py-6 text-terminal-muted text-[10px]">
+                  No saved circuits yet.
+                  <div className="mt-1 text-terminal-muted/50">
+                    Create and save a circuit to see it here.
+                  </div>
+                </div>
+              ) : (
+                savedCircuitList.map(([name, circuit]) => {
+                const isActive = isCurrentSavedCircuit(name)
+                return (
+                  <div
+                    key={name}
+                    onMouseEnter={() => setHoveredCircuit(name)}
+                    onMouseLeave={() => setHoveredCircuit(null)}
+                    className={`w-full text-left p-2 hover:bg-void group transition-colors relative cursor-pointer ${
+                      isActive ? 'bg-void border-l-2 border-phosphor' : ''
+                    }`}
+                    onClick={() => onSelectTemplate(savedCircuitToTemplate(name, circuit), name)}
+                    title={`Run with /${name}`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className={`text-sm ${isActive ? 'text-phosphor' : 'text-phosphor/50'}`}>◆</span>
+                      <span className={`text-xs truncate flex-1 ${
+                        isActive ? 'text-phosphor font-bold' : 'text-terminal-muted group-hover:text-phosphor'
+                      }`}>
+                        /{name}
+                      </span>
+                      {/* Delete button */}
+                      {hoveredCircuit === name && !isActive && (
+                        <span
+                          onClick={(e) => handleDeleteCircuit(name, e)}
+                          className="text-red-400/50 hover:text-red-400 text-xs px-1 cursor-pointer"
+                          title="Delete circuit"
+                        >
+                          ×
+                        </span>
+                      )}
+                    </div>
+                    <p className={`text-[9px] mt-1 pl-6 ${isActive ? 'text-phosphor/50' : 'text-terminal-muted/60'}`}>
+                      {circuit.cells.length} cells • {new Date(circuit.savedAt).toLocaleDateString()}
+                    </p>
+                  </div>
+                )
+              })
+              )}
+            </>
+          )}
+          
+          {/* Regular templates for other categories */}
+          {activeCategory !== 'mine' && filteredTemplates.map((template) => {
+            const isActive = isCurrentTemplate(template.id)
+            return (
+              <button
+                key={template.id}
+                onClick={() => onSelectTemplate(template, template.id)}
+                className={`w-full text-left p-2 hover:bg-void group transition-colors ${
+                  isActive ? 'bg-void border-l-2 border-phosphor' : ''
+                }`}
+                title={template.description}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-sm">{template.icon}</span>
+                  <span className={`text-xs truncate ${
+                    isActive ? 'text-phosphor font-bold' : 'text-terminal-muted group-hover:text-phosphor'
+                  }`}>
+                    {template.name}
+                  </span>
+                </div>
+                <p className={`text-[9px] mt-1 line-clamp-2 pl-6 ${
+                  isActive ? 'text-phosphor/50' : 'text-terminal-muted/60'
+                }`}>
+                  {template.description}
+                </p>
+              </button>
+            )
+          })}
         </div>
       )}
 
@@ -764,11 +1375,33 @@ export function TemplatesSidebar({ onSelectTemplate, isCollapsed, onToggleCollap
             ))}
           </div>
           
+          {/* NEW button */}
+          <button
+            onClick={onNewCircuit}
+            className="p-2 border-b border-terminal-border text-phosphor hover:bg-void flex justify-center"
+            title="New Circuit"
+          >
+            <span className="text-sm">+</span>
+          </button>
+          
           <div className="flex-1 overflow-y-auto py-2">
-            {filteredTemplates.map((template) => (
+            {/* Saved circuits for MINE category */}
+            {activeCategory === 'mine' && savedCircuitList.map(([name, circuit]) => (
+              <button
+                key={name}
+                onClick={() => onSelectTemplate(savedCircuitToTemplate(name, circuit), name)}
+                className="w-full p-2 hover:bg-void flex justify-center"
+                title={`/${name}: ${circuit.cells.length} cells`}
+              >
+                <span className="text-sm text-phosphor">◆</span>
+              </button>
+            ))}
+            
+            {/* Regular templates */}
+            {activeCategory !== 'mine' && filteredTemplates.map((template) => (
               <button
                 key={template.id}
-                onClick={() => onSelectTemplate(template)}
+                onClick={() => onSelectTemplate(template, template.id)}
                 className="w-full p-2 hover:bg-void flex justify-center"
                 title={`${template.name}: ${template.description}`}
               >

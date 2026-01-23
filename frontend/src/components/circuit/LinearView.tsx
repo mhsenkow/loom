@@ -1,3 +1,4 @@
+import { useState, useRef, useEffect } from 'react'
 import { CellData, ModelSlotConfig, InputMode } from './CircuitBoard'
 import { NotebookCell } from './NotebookCell'
 
@@ -5,6 +6,10 @@ interface LinearViewProps {
   cells: CellData[]
   models: string[]
   modelSlots: ModelSlotConfig
+  circuitName: string
+  onCircuitNameChange: (name: string) => void
+  onSaveCircuit: () => void
+  isSaved: boolean
   onUpdateCell: (id: string, updates: Partial<CellData>) => void
   onDeleteCell: (id: string) => void
   onMoveCell: (id: string, direction: 'up' | 'down') => void
@@ -118,15 +123,121 @@ function CellConnector({ inputMode, onToggle, prevCellLabel, allCellCount }: Cel
   )
 }
 
+// Loop-back indicator component - shows dotted line going backwards
+interface LoopBackIndicatorProps {
+  fromIndex: number
+  toIndex: number
+  cells: CellData[]
+  onUpdate: (newLoopBackTo: number) => void
+}
+
+function LoopBackIndicator({ fromIndex, toIndex, cells, onUpdate }: LoopBackIndicatorProps) {
+  const [isHovered, setIsHovered] = useState(false)
+  
+  // Only show if going backwards
+  if (toIndex >= fromIndex) return null
+  
+  const targetCell = cells[toIndex]
+  const distance = fromIndex - toIndex
+  
+  return (
+    <div 
+      className="relative w-full mb-2 flex items-center justify-center"
+      style={{ height: `${Math.max(40, distance * 20)}px` }}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
+      {/* Dotted vertical line going backwards */}
+      <div 
+        className="absolute left-1/2 -translate-x-1/2 w-0.5"
+        style={{
+          height: '100%',
+          background: 'repeating-linear-gradient(to top, #a855f7 0px, #a855f7 8px, transparent 8px, transparent 12px)',
+          top: 0,
+        }}
+      />
+      
+      {/* Arrow indicator at top pointing up */}
+      <div 
+        className="absolute left-1/2 -translate-x-1/2 top-0 -translate-y-1/2 text-purple-400 text-lg"
+        style={{ transform: 'translateX(-50%) translateY(-50%) rotate(180deg)' }}
+      >
+        ↶
+      </div>
+      
+      {/* Clickable label in the middle */}
+      <div className="absolute left-1/2 -translate-x-1/2 top-1/2 -translate-y-1/2 pointer-events-auto z-10">
+        <button
+          onClick={() => {
+            // Cycle through valid loop-back targets (only prior cells)
+            const current = toIndex + 1 // 1-based
+            const max = fromIndex + 1
+            const next = current === 1 ? max : current - 1
+            onUpdate(next)
+          }}
+          className={`
+            px-2 py-1 text-[9px] border transition-all whitespace-nowrap
+            ${isHovered 
+              ? 'border-purple-400 bg-purple-900/30 text-purple-300 shadow-glow-sm' 
+              : 'border-purple-600/50 bg-void/80 text-purple-400/70'
+            }
+            hover:border-purple-400 hover:text-purple-300
+          `}
+          title={`Loops back to cell ${toIndex + 1} (${targetCell?.label || 'unknown'}). Click to change target.`}
+        >
+          ↶ [{toIndex + 1}] {targetCell?.label || ''}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export function LinearView({
   cells,
   models,
   modelSlots,
+  circuitName,
+  onCircuitNameChange,
+  onSaveCircuit,
+  isSaved,
   onUpdateCell,
   onDeleteCell,
   onMoveCell,
   onRunCell,
 }: LinearViewProps) {
+  const [isEditingName, setIsEditingName] = useState(false)
+  const [editName, setEditName] = useState(circuitName)
+  const [expandedCellId, setExpandedCellId] = useState<string | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  
+  // Sync editName when circuitName changes from outside
+  useEffect(() => {
+    setEditName(circuitName)
+  }, [circuitName])
+  
+  // Focus input when editing starts
+  useEffect(() => {
+    if (isEditingName && inputRef.current) {
+      inputRef.current.focus()
+      inputRef.current.select()
+    }
+  }, [isEditingName])
+  
+  const handleNameSubmit = () => {
+    const cleanName = editName.toLowerCase().replace(/[^a-z0-9-]/g, '').replace(/\s+/g, '-')
+    onCircuitNameChange(cleanName)
+    setEditName(cleanName)
+    setIsEditingName(false)
+  }
+  
+  const handleNameKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleNameSubmit()
+    } else if (e.key === 'Escape') {
+      setEditName(circuitName)
+      setIsEditingName(false)
+    }
+  }
   
   const cycleInputMode = (cellId: string, currentMode: InputMode | undefined) => {
     const modes: InputMode[] = ['previous', 'all', 'none']
@@ -140,11 +251,59 @@ export function LinearView({
       <div className="max-w-3xl mx-auto">
         {/* Header */}
         <div className="border-b border-terminal-border pb-4 mb-6">
-          <h1 className="text-phosphor font-bold text-lg tracking-wider">
-            CIRCUIT NOTEBOOK
-          </h1>
-          <p className="text-terminal-muted text-xs mt-1">
+          {/* Title with editable name */}
+          <div className="flex items-baseline gap-3">
+            <span className="text-phosphor font-bold text-lg tracking-wider">CIRCUIT</span>
+            
+            {isEditingName ? (
+              <div className="flex items-center border border-phosphor bg-void">
+                <span className="text-phosphor text-lg px-1">/</span>
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+                  onBlur={handleNameSubmit}
+                  onKeyDown={handleNameKeyDown}
+                  className="bg-transparent text-phosphor font-bold text-lg tracking-wider w-48 focus:outline-none"
+                  placeholder="circuit-name"
+                />
+              </div>
+            ) : (
+              <button
+                onClick={() => setIsEditingName(true)}
+                className="group flex items-center border border-terminal-border hover:border-phosphor transition-colors bg-void px-2"
+                title="Click to rename circuit"
+              >
+                <span className="text-terminal-muted text-lg">/</span>
+                <span className={`font-bold text-lg tracking-wider ${
+                  circuitName ? 'text-phosphor' : 'text-terminal-muted'
+                }`}>
+                  {circuitName || 'untitled'}
+                </span>
+                <span className="text-terminal-muted text-xs ml-2 opacity-0 group-hover:opacity-100">✎</span>
+              </button>
+            )}
+            
+            {/* Save button */}
+            {circuitName && (
+              <button
+                onClick={onSaveCircuit}
+                className={`text-xs px-2 py-1 border transition-colors ${
+                  isSaved
+                    ? 'border-green-500 text-green-400 bg-green-900/20'
+                    : 'border-terminal-border text-terminal-muted hover:border-phosphor hover:text-phosphor'
+                }`}
+                title="Save circuit for terminal use"
+              >
+                {isSaved ? '✓ saved' : '▣ save'}
+              </button>
+            )}
+          </div>
+          
+          <p className="text-terminal-muted text-xs mt-2">
             {cells.length} cells • Click connectors to change data flow
+            {circuitName && <span className="ml-2 text-phosphor/50">• run with /{circuitName}</span>}
           </p>
           
           {/* Legend */}
@@ -179,6 +338,20 @@ export function LinearView({
               />
             )}
             
+            {/* Loop-back indicator (if this cell has a loop-back) */}
+            {cell.type === 'conditional' && cell.loopBackTo && cell.loopBackTo > 0 && cell.loopBackTo <= index + 1 && (
+              <LoopBackIndicator
+                fromIndex={index}
+                toIndex={cell.loopBackTo - 1}
+                cells={cells}
+                onUpdate={(newLoopBackTo) => {
+                  const cellId = cell.id
+                  const updates: Partial<CellData> = { loopBackTo: newLoopBackTo }
+                  onUpdateCell(cellId, updates)
+                }}
+              />
+            )}
+            
             <NotebookCell
               cell={cell}
               index={index}
@@ -190,6 +363,9 @@ export function LinearView({
               onMoveUp={() => onMoveCell(cell.id, 'up')}
               onMoveDown={() => onMoveCell(cell.id, 'down')}
               onRun={() => onRunCell(cell.id)}
+              isExpanded={expandedCellId === cell.id}
+              onExpand={() => setExpandedCellId(cell.id)}
+              onCollapse={() => setExpandedCellId(null)}
             />
           </div>
         ))}

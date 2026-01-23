@@ -2,6 +2,98 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ========== THEME VARIABLES ========== */
+/* Phosphor – DEC VT100, early PC. American/European green. */
+[data-theme="phosphor"],
+:root {
+  --theme-void: #050505;
+  --theme-slate: #0a0f14;
+  --theme-phosphor: #33ff00;
+  --theme-phosphor-dim: #1a8000;
+  --theme-phosphor-glow: #33ff0050;
+  --theme-terminal-gray: #3a3a3a;
+  --theme-terminal-muted: #666666;
+  --theme-terminal-border: #2a2a2a;
+  --theme-scanline: 0.15;
+  --theme-vignette: 0.4;
+  --theme-curve: 0.98;
+  --theme-font: 'JetBrains Mono', 'Consolas', monospace;
+  --theme-font-primary: 'JetBrains Mono';
+  --theme-prompt: '>';
+}
+
+/* Ruby – Soviet / Eastern bloc. ES EVM, SM 1420, warm amber. Chamfered corners, rolling scanlines. */
+[data-theme="ruby"] {
+  --theme-void: #0c0505;
+  --theme-slate: #140a0a;
+  --theme-phosphor: #e85c20;
+  --theme-phosphor-dim: #8b3d18;
+  --theme-phosphor-glow: #e85c2050;
+  --theme-terminal-gray: #4a3028;
+  --theme-terminal-muted: #886650;
+  --theme-terminal-border: #2a1814;
+  --theme-scanline: 0.18;
+  --theme-vignette: 0.5;
+  --theme-curve: 0.97;
+  --theme-font: 'Share Tech Mono', 'Consolas', monospace;
+  --theme-font-primary: 'Share Tech Mono';
+  --theme-prompt: '►';
+}
+
+/* Sapphire – IBM 3270, Fujitsu, NEC. IBM Plex Mono, rock-steady. */
+[data-theme="sapphire"] {
+  --theme-void: #05050c;
+  --theme-slate: #0a0c18;
+  --theme-phosphor: #3d8cff;
+  --theme-phosphor-dim: #1e4080;
+  --theme-phosphor-glow: #3d8cff50;
+  --theme-terminal-gray: #2a304a;
+  --theme-terminal-muted: #506088;
+  --theme-terminal-border: #141a2a;
+  --theme-scanline: 0.14;
+  --theme-vignette: 0.4;
+  --theme-curve: 0.98;
+  --theme-font: 'IBM Plex Mono', 'Consolas', monospace;
+  --theme-font-primary: 'IBM Plex Mono';
+  --theme-prompt: '▷';
+}
+
+/* Diamond – Medical, SGI. Fira Code, circular LEDs, light breath. */
+[data-theme="diamond"] {
+  --theme-void: #08080a;
+  --theme-slate: #0c0e12;
+  --theme-phosphor: #b8ccf0;
+  --theme-phosphor-dim: #6a7a9a;
+  --theme-phosphor-glow: #b8ccf050;
+  --theme-terminal-gray: #3a3e48;
+  --theme-terminal-muted: #7a8290;
+  --theme-terminal-border: #1a1e24;
+  --theme-scanline: 0.10;
+  --theme-vignette: 0.3;
+  --theme-curve: 0.99;
+  --theme-font: 'Fira Code', 'Consolas', monospace;
+  --theme-font-primary: 'Fira Code';
+  --theme-prompt: '▸';
+}
+
+/* Ebony – Apple II, NeXT. Cutive Mono (typewriter), soft pulse. */
+[data-theme="ebony"] {
+  --theme-void: #0a0a08;
+  --theme-slate: #121210;
+  --theme-phosphor: #d8d4c8;
+  --theme-phosphor-dim: #8a8678;
+  --theme-phosphor-glow: #d8d4c850;
+  --theme-terminal-gray: #3a3a34;
+  --theme-terminal-muted: #767268;
+  --theme-terminal-border: #242420;
+  --theme-scanline: 0.12;
+  --theme-vignette: 0.35;
+  --theme-curve: 0.99;
+  --theme-font: 'Cutive Mono', 'Consolas', monospace;
+  --theme-font-primary: 'Cutive Mono';
+  --theme-prompt: '›';
+}
+
 /* Base reset for retro terminal aesthetic */
 @layer base {
   * {
@@ -9,46 +101,44 @@
   }
   
   html {
-    font-family: 'JetBrains Mono', monospace;
-    background-color: #050505;
-    color: #33ff00;
+    font-family: var(--theme-font, 'JetBrains Mono', 'Consolas', monospace);
+    background-color: var(--theme-void);
+    color: var(--theme-phosphor);
   }
   
   body {
     margin: 0;
     padding: 0;
     overflow: hidden;
-    background-color: #050505;
+    background-color: var(--theme-void);
     -webkit-font-smoothing: antialiased;
   }
 
-  /* Custom scrollbar - terminal style */
   ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
   }
   
   ::-webkit-scrollbar-track {
-    background: #0a0f14;
+    background: var(--theme-slate);
   }
   
   ::-webkit-scrollbar-thumb {
-    background: #33ff00;
-    border: 1px solid #1a8000;
+    background: var(--theme-phosphor);
+    border: 1px solid var(--theme-phosphor-dim);
   }
   
   ::-webkit-scrollbar-thumb:hover {
-    background: #44ff22;
+    filter: brightness(1.15);
   }
 
-  /* Selection styling */
   ::selection {
-    background: #33ff00;
-    color: #050505;
+    background: var(--theme-phosphor);
+    color: var(--theme-void);
   }
 }
 
-/* CRT Scanline Effect */
+/* CRT: scanlines, vignette, tube feel */
 @layer components {
   .crt-overlay {
     pointer-events: none;
@@ -57,13 +147,51 @@
     left: 0;
     width: 100%;
     height: 100%;
-    z-index: 9999;
+    z-index: 9998;
     background: repeating-linear-gradient(
       0deg,
-      rgba(0, 0, 0, 0.15) 0px,
-      rgba(0, 0, 0, 0.15) 1px,
+      rgba(0 0 0 / var(--theme-scanline, 0.15)) 0px,
+      rgba(0 0 0 / var(--theme-scanline, 0.15)) 1px,
       transparent 1px,
       transparent 2px
+    );
+  }
+
+  /* Theme-specific scanline animation */
+  [data-theme="phosphor"] .crt-overlay { animation: scanline-pulse 3s ease-in-out infinite; }
+  [data-theme="ruby"] .crt-overlay {
+    background-size: 100% 2px;
+    animation: scanline-roll 8s linear infinite;
+  }
+  [data-theme="sapphire"] .crt-overlay { animation: none; }
+  [data-theme="diamond"] .crt-overlay { animation: scanline-breathe 4s ease-in-out infinite; }
+  [data-theme="ebony"] .crt-overlay { animation: scanline-pulse 3.5s ease-in-out infinite; }
+
+  /* Ruby: chamfered (cut-off) corners, Soviet cabinet feel */
+  [data-theme="ruby"] .loom-app {
+    clip-path: polygon(0 10px, 10px 0, calc(100% - 10px) 0, 100% 10px, 100% calc(100% - 10px), calc(100% - 10px) 100%, 10px 100%, 0 calc(100% - 10px));
+  }
+
+  /* Diamond: circular LEDs, precision-instrument look */
+  [data-theme="diamond"] .led { border-radius: 50% !important; }
+
+  /* Terminal prompt char – per-theme glyph */
+  .prompt-char::before { content: var(--theme-prompt, '>'); }
+
+  /* Vignette: darker edges, like a CRT tube */
+  .crt-vignette {
+    pointer-events: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 9999;
+    background: radial-gradient(
+      ellipse 80% 80% at 50% 50%,
+      transparent 20%,
+      rgba(0 0 0 / 0.15) 60%,
+      rgba(0 0 0 / var(--theme-vignette, 0.4)) 100%
     );
   }
 
@@ -79,12 +207,24 @@
     100% { opacity: 0.99; }
   }
 
-  /* Terminal prompt cursor */
+  @keyframes scanline-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.88; }
+  }
+  @keyframes scanline-roll {
+    0% { background-position: 0 0; }
+    100% { background-position: 0 2px; }
+  }
+  @keyframes scanline-breathe {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.92; }
+  }
+
   .terminal-cursor {
     display: inline-block;
     width: 10px;
     height: 1.2em;
-    background-color: #33ff00;
+    background-color: var(--theme-phosphor);
     animation: blink 1s step-end infinite;
   }
 
@@ -93,7 +233,6 @@
     50% { opacity: 0; }
   }
 
-  /* LED Status Indicators */
   .led {
     width: 8px;
     height: 8px;
@@ -101,8 +240,8 @@
   }
 
   .led-idle {
-    background-color: #3a3a3a;
-    border-color: #666666;
+    background-color: var(--theme-terminal-gray);
+    border-color: var(--theme-terminal-muted);
   }
 
   .led-running {
@@ -113,9 +252,9 @@
   }
 
   .led-success {
-    background-color: #33ff00;
-    border-color: #1a8000;
-    box-shadow: 0 0 6px #33ff00;
+    background-color: var(--theme-phosphor);
+    border-color: var(--theme-phosphor-dim);
+    box-shadow: 0 0 6px var(--theme-phosphor);
   }
 
   .led-error {
@@ -124,34 +263,31 @@
     box-shadow: 0 0 6px #ff3333;
   }
 
-  /* Button styles - brutalist / tactile */
   .btn-terminal {
     @apply font-mono text-sm px-4 py-2 border border-phosphor text-phosphor bg-void;
     @apply hover:bg-phosphor hover:text-void;
     @apply active:shadow-none active:translate-x-[2px] active:translate-y-[2px];
     @apply transition-none;
-    box-shadow: 2px 2px 0 #33ff00;
+    box-shadow: 2px 2px 0 var(--theme-phosphor);
   }
 
   .btn-terminal:hover {
-    box-shadow: 2px 2px 0 #33ff00;
+    box-shadow: 2px 2px 0 var(--theme-phosphor);
   }
 
   .btn-terminal:active {
     box-shadow: none;
   }
 
-  /* Module / Node chip styling */
   .module-chip {
     @apply bg-slate border border-phosphor;
-    box-shadow: 2px 2px 0 #1a8000;
+    box-shadow: 2px 2px 0 var(--theme-phosphor-dim);
   }
 
   .module-chip-header {
     @apply bg-phosphor text-void px-3 py-1 font-mono text-xs font-bold uppercase tracking-wider;
   }
 
-  /* Port connectors */
   .port {
     @apply w-3 h-3 border border-phosphor bg-void;
   }
@@ -168,8 +304,8 @@
 /* Tiptap editor overrides */
 .tiptap {
   outline: none;
-  font-family: 'JetBrains Mono', monospace;
-  color: #33ff00;
+  font-family: var(--theme-font, inherit);
+  color: var(--theme-phosphor);
 }
 
 .tiptap p {
@@ -178,7 +314,7 @@
 }
 
 .tiptap p.is-editor-empty:first-child::before {
-  color: #666666;
+  color: var(--theme-terminal-muted);
   content: attr(data-placeholder);
   float: left;
   height: 0;
@@ -194,19 +330,19 @@
   border-radius: 0 !important;
   width: 12px !important;
   height: 12px !important;
-  background: #0a0f14 !important;
-  border: 1px solid #33ff00 !important;
+  background: var(--theme-slate) !important;
+  border: 1px solid var(--theme-phosphor) !important;
 }
 
 .react-flow__handle:hover {
-  background: #33ff00 !important;
+  background: var(--theme-phosphor) !important;
 }
 
 .react-flow__edge-path {
-  stroke: #33ff00 !important;
+  stroke: var(--theme-phosphor) !important;
   stroke-width: 2 !important;
 }
 
 .react-flow__background-pattern {
-  fill: #1a8000 !important;
+  fill: var(--theme-phosphor-dim) !important;
 }

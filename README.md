@@ -150,7 +150,11 @@ Once LOOM is running, you can use these commands in the terminal:
 | `/ai <prompt>` | Send a prompt to the AI |
 | `/models` | List available Ollama models |
 | `/status` | Show system status (Ollama, ChromaDB) |
-| `/clear` | Clear the terminal |
+| `/clear` | Clear the display; use `/restore` to bring it back |
+| `/restore` | Restore content from before `/clear` |
+| `/saveas <name>` | Save current session to a named slot |
+| `/load <name>` | Load a saved session (replaces current) |
+| `/sessions` | List saved sessions |
 
 **Tip:** You can also just type naturally - any non-command input is automatically sent to the AI.
 

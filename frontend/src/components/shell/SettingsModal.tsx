@@ -5,30 +5,55 @@ interface SettingsModalProps {
   onClose: () => void
 }
 
+export type ThemeId = 'phosphor' | 'ruby' | 'sapphire' | 'diamond' | 'ebony'
+
 interface Settings {
   huggingfaceToken: string
   comfyuiUrl: string
   comfyuiEnabled: boolean
   dataFolderPath: string
+  theme: ThemeId
 }
 
 const SETTINGS_KEY = 'loom-settings'
+
+const THEMES: { id: ThemeId; name: string; subtitle: string; swatch: string }[] = [
+  { id: 'phosphor', name: 'Phosphor', subtitle: 'DEC VT100, early PC', swatch: '#33ff00' },
+  { id: 'ruby', name: 'Ruby', subtitle: 'Soviet, Eastern bloc amber', swatch: '#e85c20' },
+  { id: 'sapphire', name: 'Sapphire', subtitle: 'IBM 3270, Fujitsu, NEC', swatch: '#3d8cff' },
+  { id: 'diamond', name: 'Diamond', subtitle: 'Medical, SGI, precision', swatch: '#b8ccf0' },
+  { id: 'ebony', name: 'Ebony', subtitle: 'Apple II, NeXT, ivory', swatch: '#d8d4c8' },
+]
+
+// Apply theme to document (call on load and when user changes)
+export function applyTheme(theme: ThemeId) {
+  document.documentElement.dataset.theme = theme
+}
 
 // Load settings from localStorage
 export function loadSettings(): Settings {
   try {
     const stored = localStorage.getItem(SETTINGS_KEY)
     if (stored) {
-      return JSON.parse(stored)
+      const parsed = JSON.parse(stored)
+      if (parsed.theme && THEMES.some(t => t.id === parsed.theme)) {
+        return { ...defaultSettings(), ...parsed }
+      }
+      return { ...defaultSettings(), ...parsed, theme: 'phosphor' }
     }
   } catch (e) {
     console.warn('[LOOM] Failed to load settings:', e)
   }
+  return defaultSettings()
+}
+
+function defaultSettings(): Settings {
   return {
     huggingfaceToken: '',
     comfyuiUrl: 'http://localhost:8188',
     comfyuiEnabled: false,
     dataFolderPath: '',
+    theme: 'phosphor',
   }
 }
 
@@ -86,6 +111,9 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     if (key === 'dataFolderPath') {
       setDataFolderStatus('idle')
     }
+    if (key === 'theme') {
+      applyTheme(value as ThemeId)
+    }
   }
 
   if (!isOpen) return null
@@ -113,6 +141,44 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
         {/* Content */}
         <div className="p-6 space-y-6">
+          {/* Theme Section */}
+          <section>
+            <h3 className="text-phosphor font-bold text-sm tracking-wider mb-3">
+              CRT THEME
+            </h3>
+            <p className="text-terminal-muted text-xs mb-3">
+              Retro phosphor vibes. Scanlines and vignette vary by theme.
+            </p>
+            <div className="grid grid-cols-5 gap-2">
+              {THEMES.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => updateSetting('theme', t.id)}
+                  className={`flex flex-col items-center p-3 border transition-colors ${
+                    settings.theme === t.id
+                      ? 'border-phosphor bg-void'
+                      : 'border-terminal-border hover:border-phosphor/50'
+                  }`}
+                  title={t.subtitle}
+                >
+                  <span
+                    className="w-8 h-8 mb-2 border-2"
+                    style={{
+                      backgroundColor: t.swatch,
+                      borderColor: 'currentColor',
+                      boxShadow: `0 0 12px ${t.swatch}80`,
+                    }}
+                  />
+                  <span className="text-[10px] font-bold text-phosphor">{t.name}</span>
+                  <span className="text-[9px] text-terminal-muted mt-0.5 text-center leading-tight">
+                    {t.subtitle}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+
           {/* Data Folder Section */}
           <section>
             <h3 className="text-cyan-400 font-bold text-sm tracking-wider mb-3">

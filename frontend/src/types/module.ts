@@ -6,6 +6,8 @@ export type ModuleType =
   | 'image_gen'
   | 'markdown'
   | 'data_loader'
+  | 'conditional'
+  | 'web_fetch'
 
 export type ModuleStatus = 'idle' | 'running' | 'success' | 'error'
 

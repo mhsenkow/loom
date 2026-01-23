@@ -1,13 +1,34 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { CommandInput } from './CommandInput'
+import { SessionPanel, SaveSessionModal } from './SessionPanel'
+import { CircuitTrace } from './CircuitTrace'
 import { useSocket } from '../../hooks/useSocket'
 import { useSystemStatus } from '../../hooks/useSystemStatus'
 import { terminalOutputBus, getCircuitContext } from '../../hooks/useTerminalOutput'
+import { 
+  useCircuitRunner, 
+  useCircuitExecution,
+  getCircuitNames, 
+  loadSavedCircuits,
+  saveCircuit,
+  SavedCircuit,
+} from '../../hooks/useCircuitRunner'
+import { NOTEBOOK_TEMPLATES } from '../circuit/TemplatesSidebar'
 import type { LogEntry } from '../../types/module'
 
 const STORAGE_KEY = 'loom-terminal-history'
 const SESSIONS_KEY = 'loom-terminal-sessions'
+const BEFORE_CLEAR_KEY = 'loom-terminal-before-clear'
 const MAX_STORED_ENTRIES = 500
+const PANEL_COLLAPSED_KEY = 'loom-session-panel-collapsed'
+
+// State for collecting circuit inputs
+interface CircuitInputState {
+  circuitName: string
+  requiredInputs: string[]
+  collectedInputs: Record<string, string>
+  currentInputIndex: number
+}
 
 // Load saved sessions index
 function loadSessionsIndex(): Record<string, { savedAt: number; entryCount: number }> {
@@ -69,6 +90,33 @@ function deleteSession(name: string): boolean {
   }
 }
 
+// Stash current entries for /restore (used before /clear)
+function stashBeforeClear(entries: LogEntry[]): void {
+  const isAlreadyCleared = entries.length === 1 &&
+    entries[0].type === 'system' &&
+    entries[0].content?.includes('Display cleared')
+  if (entries.length === 0 || isAlreadyCleared) return
+  try {
+    localStorage.setItem(BEFORE_CLEAR_KEY, JSON.stringify(entries))
+  } catch (e) {
+    console.warn('[LOOM] Failed to stash before clear:', e)
+  }
+}
+
+// Load stashed entries (from before /clear)
+function loadBeforeClear(): LogEntry[] | null {
+  try {
+    const stored = localStorage.getItem(BEFORE_CLEAR_KEY)
+    if (stored) {
+      const parsed = JSON.parse(stored)
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed
+    }
+  } catch (e) {
+    console.warn('[LOOM] Failed to load before-clear stash:', e)
+  }
+  return null
+}
+
 // Load entries from localStorage
 function loadEntries(): LogEntry[] {
   try {
@@ -103,11 +151,29 @@ function loadEntries(): LogEntry[] {
 export function TerminalFeed() {
   const { connected, sendChat } = useSocket()
   const { status, models, fetchModels, setActiveModel } = useSystemStatus()
+  const { runCircuit, getRequiredInputs } = useCircuitRunner()
+  const circuitExecution = useCircuitExecution()
   
   const [entries, setEntries] = useState<LogEntry[]>(loadEntries)
+  const [panelCollapsed, setPanelCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem(PANEL_COLLAPSED_KEY) === 'true'
+    } catch {
+      return false
+    }
+  })
+  const [showSaveModal, setShowSaveModal] = useState(false)
+  const [circuitInputState, setCircuitInputState] = useState<CircuitInputState | null>(null)
   
   const feedRef = useRef<HTMLDivElement>(null)
   const currentAIEntryRef = useRef<string | null>(null)
+  
+  // Persist panel state
+  useEffect(() => {
+    try {
+      localStorage.setItem(PANEL_COLLAPSED_KEY, String(panelCollapsed))
+    } catch {}
+  }, [panelCollapsed])
 
   // Auto-scroll to bottom on new entries
   useEffect(() => {
@@ -170,8 +236,11 @@ export function TerminalFeed() {
     }])
   }, [])
 
-  const handleAIRequest = useCallback((prompt: string, timestamp: number) => {
-    // Create AI entry
+  const handleAIRequest = useCallback((
+    prompt: string, 
+    timestamp: number, 
+    contextMode: 'input' | 'key' | 'full' = 'input'
+  ) => {
     const entryId = `ai-${timestamp}`
     currentAIEntryRef.current = entryId
     
@@ -183,7 +252,6 @@ export function TerminalFeed() {
       status: 'running',
     }])
 
-    // Handle streaming chunks
     const handleChunk = (chunk: { content: string }) => {
       setEntries(prev => prev.map(entry => 
         entry.id === entryId
@@ -192,7 +260,6 @@ export function TerminalFeed() {
       ))
     }
 
-    // Handle status updates
     const handleStatus = (statusData: { status: string; message: string }) => {
       if (statusData.status === 'success' || statusData.status === 'error') {
         setEntries(prev => prev.map(entry => 
@@ -208,20 +275,40 @@ export function TerminalFeed() {
       }
     }
 
-    // Use active model or first available
     const modelToUse = status.activeModel || models[0] || 'llama3.1:8b'
-    
-    // Include Circuit context if available
     const circuitContext = getCircuitContext()
-    const enhancedPrompt = circuitContext
-      ? `${circuitContext}\n\n---\n\nUser question: ${prompt}`
-      : prompt
     
-    // Send to backend
+    // Build prompt based on context mode
+    let enhancedPrompt: string
+    
+    if (contextMode === 'input') {
+      enhancedPrompt = circuitContext
+        ? `${circuitContext}\n\n---\n\nUser question: ${prompt}`
+        : prompt
+    } else {
+      // Full or Key: include conversation history (entries not yet including this user message)
+      const relevant = entries.filter(e => e.type === 'user' || e.type === 'ai').slice(-16)
+      const historyBlock = relevant.map(e => {
+        if (e.type === 'user') return `User: ${e.content}`
+        const text = e.content || ''
+        if (contextMode === 'key') {
+          return `Assistant: ${text.slice(0, 120)}${text.length > 120 ? '...' : ''}`
+        }
+        return `Assistant: ${text}`
+      }).join('\n\n')
+      
+      const withHistory = historyBlock
+        ? `Previous conversation:\n\n${historyBlock}\n\nUser: ${prompt}`
+        : `User: ${prompt}`
+      
+      enhancedPrompt = circuitContext
+        ? `${circuitContext}\n\n---\n\n${withHistory}`
+        : withHistory
+    }
+    
     const sent = sendChat(enhancedPrompt, modelToUse, handleChunk, handleStatus)
     
     if (!sent) {
-      // Fallback to simulated response if not connected
       setEntries(prev => prev.map(entry => 
         entry.id === entryId
           ? { 
@@ -232,7 +319,7 @@ export function TerminalFeed() {
           : entry
       ))
     }
-  }, [sendChat, status.activeModel, models])
+  }, [sendChat, status.activeModel, models, entries])
 
   const handleSlashCommand = useCallback((command: string, timestamp: number) => {
     const [cmd, ...args] = command.slice(1).split(' ')
@@ -247,38 +334,66 @@ export function TerminalFeed() {
           '  /model <name>  - Switch active model',
           '  /models        - List available Ollama models',
           '',
+          'CIRCUITS:',
+          '  /circuits           - List saved circuits',
+          '  /run <name>         - Run a saved circuit',
+          '  /<circuit-name>     - Shorthand to run a circuit',
+          '',
           'SESSION:',
-          '  /clear              - Clear display (auto-save preserved)',
-          '  /reset              - Wipe everything including auto-save',
-          '  /saveas <name>      - Save session to named slot',
+          '  /clear              - Clear display; /restore to bring back',
+          '  /restore            - Restore content from before /clear',
+          '  /reset              - Wipe everything (no restore)',
+          '  /saveas <name>      - Save current session to a named slot',
           '  /saveas <name> last:N - Save only last N entries',
           '  /sessions           - List saved sessions',
-          '  /load <name>        - Load session (appends to current)',
+          '  /load <name>        - Load a saved session (replaces current)',
           '  /delete <name>      - Delete a saved session',
           '',
           'SYSTEM:',
           '  /status        - Show system status',
           '  /help          - Show this message',
           '',
-          'Conversation auto-saves and persists across refreshes.',
+          'Current session auto-saves. Use SAVE in the Sessions panel or /saveas to name it.',
         ].join('\n'), timestamp)
         break
         
-      case 'clear':
+      case 'clear': {
+        stashBeforeClear(entries)
+        setCircuitInputState(null)
         setEntries([{
           id: `system-${timestamp}`,
           type: 'system',
-          content: 'TERMINAL CLEARED (history preserved)',
+          content: 'Display cleared. Use /restore to bring back.',
           timestamp,
         }])
         break
+      }
+
+      case 'restore': {
+        const stashed = loadBeforeClear()
+        if (stashed && stashed.length > 0) {
+          setEntries(prev => [{
+            id: `system-${timestamp}`,
+            type: 'system',
+            content: 'Restored.',
+            timestamp,
+          }, ...stashed])
+        } else {
+          addErrorEntry('Nothing to restore. Use /clear first to stash the display.', timestamp)
+        }
+        break
+      }
 
       case 'reset':
-        localStorage.removeItem(STORAGE_KEY)
+        try {
+          localStorage.removeItem(STORAGE_KEY)
+          localStorage.removeItem(BEFORE_CLEAR_KEY)
+        } catch {}
+        setCircuitInputState(null)
         setEntries([{
           id: `system-${timestamp}`,
           type: 'system',
-          content: 'TERMINAL RESET - All history deleted',
+          content: 'TERMINAL RESET — All history and /restore stash deleted.',
           timestamp,
         }])
         break
@@ -332,7 +447,7 @@ export function TerminalFeed() {
             return `  ${name} (${info.entryCount} entries) - ${date}`
           }).join('\n')
           
-          addSystemEntry(`SAVED SESSIONS:\n\n${sessionList}\n\nUse /load <name> to restore.`, timestamp)
+          addSystemEntry(`SAVED SESSIONS:\n\n${sessionList}\n\n/load <name> opens (replaces current).`, timestamp)
         }
         break
       }
@@ -346,19 +461,17 @@ export function TerminalFeed() {
         
         const sessionEntries = loadSession(sessionName)
         if (sessionEntries) {
-          // Add a separator and append the session
-          setEntries(prev => [
-            ...prev,
+          setEntries([
             {
               id: `system-${timestamp}`,
               type: 'system',
-              content: `─── LOADED SESSION: ${sessionName} (${sessionEntries.length} entries) ───`,
+              content: `Loaded: ${sessionName} (${sessionEntries.length} entries)`,
               timestamp,
             },
             ...sessionEntries,
           ])
         } else {
-          addErrorEntry(`Session "${sessionName}" not found`, timestamp)
+          addErrorEntry(`Session "${sessionName}" not found. Use /sessions to list.`, timestamp)
         }
         break
       }
@@ -428,18 +541,182 @@ export function TerminalFeed() {
           `  Backend: ${connected ? 'CONNECTED' : 'DISCONNECTED'}`,
           `  Ollama:  ${status.connected ? 'ONLINE' : 'STANDBY'}`,
           `  Models:  ${models.length} available`,
+          `  Circuits: ${getCircuitNames().length} saved`,
         ].join('\n'), timestamp)
         break
-        
-      default:
-        addErrorEntry(`Unknown command: /${cmd}`, timestamp)
-    }
-  }, [addSystemEntry, addErrorEntry, handleAIRequest, fetchModels, connected, status.connected, models.length])
 
-  const handleCommand = useCallback((command: string) => {
+      case 'circuits': {
+        const circuitNames = getCircuitNames()
+        const circuits = loadSavedCircuits()
+        
+        // Build saved circuits list
+        const savedList = circuitNames.length > 0 
+          ? circuitNames.map(name => {
+              const circuit = circuits[name]
+              const inputCount = circuit.cells.filter(c => c.type === 'data_input').length
+              const cellCount = circuit.cells.length
+              return `  /${name} (${cellCount} cells${inputCount > 0 ? `, ${inputCount} inputs` : ''})`
+            }).join('\n')
+          : '  (none yet)'
+        
+        // Group templates by category
+        const categories = ['thinking', 'writing', 'music', 'data', 'code', 'scripts'] as const
+        const categoryLabels: Record<string, string> = {
+          thinking: 'THINK',
+          writing: 'WRITE', 
+          music: 'MUSIC',
+          data: 'DATA',
+          code: 'CODE',
+          scripts: 'SCRIPTS',
+        }
+        
+        const templatesByCategory = categories.map(cat => {
+          const templates = NOTEBOOK_TEMPLATES.filter(t => t.category === cat)
+          if (templates.length === 0) return ''
+          
+          const list = templates.map(t => {
+            const inputCount = t.cells.filter(c => c.type === 'data_input').length
+            return `    /${t.id} - ${t.name}${inputCount > 0 ? ` (${inputCount} inputs)` : ''}`
+          }).join('\n')
+          
+          return `  ${categoryLabels[cat]}:\n${list}`
+        }).filter(Boolean).join('\n\n')
+        
+        addSystemEntry(
+          `CIRCUITS:\n\n` +
+          `YOUR SAVED:\n${savedList}\n\n` +
+          `TEMPLATES:\n${templatesByCategory}\n\n` +
+          `Run with: /<name>`,
+          timestamp
+        )
+        break
+      }
+
+      case 'run': {
+        const circuitName = args.join('-').trim()
+        if (!circuitName) {
+          addErrorEntry('Usage: /run <circuit-name>', timestamp)
+          break
+        }
+        
+        // Check saved circuits first, then templates
+        const circuitNames = getCircuitNames()
+        const template = NOTEBOOK_TEMPLATES.find(t => t.id === circuitName)
+        
+        if (!circuitNames.includes(circuitName) && !template) {
+          addErrorEntry(`Circuit "${circuitName}" not found.\nUse /circuits to see available circuits.`, timestamp)
+          break
+        }
+        
+        // If it's a template, save it as a circuit first
+        if (template && !circuitNames.includes(circuitName)) {
+          const savedCircuit: SavedCircuit = {
+            name: template.id,
+            cells: template.cells.map((cell, idx) => ({
+              ...cell,
+              id: `cell-${Date.now()}-${idx}`,
+            })),
+            modelSlots: { A: '', B: '', C: '' },
+            savedAt: Date.now(),
+          }
+          saveCircuit(savedCircuit)
+        }
+        
+        // Check if circuit needs inputs
+        const requiredInputs = getRequiredInputs(circuitName)
+        
+        if (requiredInputs.length > 0) {
+          // Start input collection
+          setCircuitInputState({
+            circuitName,
+            requiredInputs,
+            collectedInputs: {},
+            currentInputIndex: 0,
+          })
+          
+          addSystemEntry(
+            `Running circuit: ${circuitName}\n\nPlease provide inputs:\n\n[${requiredInputs[0]}]:`,
+            timestamp
+          )
+        } else {
+          // Run immediately
+          addSystemEntry(`Running circuit: ${circuitName}...`, timestamp)
+          
+          runCircuit(circuitName, {}).then(output => {
+            setEntries(prev => [...prev, {
+              id: `circuit-output-${Date.now()}`,
+              type: 'ai',
+              content: output,
+              timestamp: Date.now(),
+              status: 'success',
+            }])
+          }).catch(err => {
+            addErrorEntry(`Circuit failed: ${err.message}`, Date.now())
+          })
+        }
+        break
+      }
+        
+      default: {
+        // Check if command matches a saved circuit or template
+        const circuitNames = getCircuitNames()
+        const template = NOTEBOOK_TEMPLATES.find(t => t.id === cmd)
+        
+        if (circuitNames.includes(cmd) || template) {
+          // If it's a template, save it as a circuit first
+          if (template && !circuitNames.includes(cmd)) {
+            const savedCircuit: SavedCircuit = {
+              name: template.id,
+              cells: template.cells.map((cell, idx) => ({
+                ...cell,
+                id: `cell-${Date.now()}-${idx}`,
+              })),
+              modelSlots: { A: '', B: '', C: '' },
+              savedAt: Date.now(),
+            }
+            saveCircuit(savedCircuit)
+          }
+          
+          // Now run it
+          const requiredInputs = getRequiredInputs(cmd)
+          
+          if (requiredInputs.length > 0) {
+            setCircuitInputState({
+              circuitName: cmd,
+              requiredInputs,
+              collectedInputs: {},
+              currentInputIndex: 0,
+            })
+            
+            addSystemEntry(
+              `Running circuit: ${cmd}\n\nProvide inputs:\n\n[${requiredInputs[0]}]:`,
+              timestamp
+            )
+          } else {
+            addSystemEntry(`Running circuit: ${cmd}...`, timestamp)
+            
+            runCircuit(cmd, {}).then(output => {
+              setEntries(prev => [...prev, {
+                id: `circuit-output-${Date.now()}`,
+                type: 'ai',
+                content: output,
+                timestamp: Date.now(),
+                status: 'success',
+              }])
+            }).catch(err => {
+              addErrorEntry(`Circuit failed: ${err.message}`, Date.now())
+            })
+          }
+        } else {
+          addErrorEntry(`Unknown command: /${cmd}`, timestamp)
+        }
+      }
+    }
+  }, [addSystemEntry, addErrorEntry, handleAIRequest, fetchModels, connected, status, models.length, getRequiredInputs, runCircuit])
+
+  const handleCommand = useCallback((command: string, contextMode: 'input' | 'key' | 'full' = 'input') => {
     const timestamp = Date.now()
     
-    // Add user entry
     const userEntry: LogEntry = {
       id: `user-${timestamp}`,
       type: 'user',
@@ -449,14 +726,97 @@ export function TerminalFeed() {
     
     setEntries(prev => [...prev, userEntry])
 
-    // Parse command
+    if (circuitInputState) {
+      const { circuitName, requiredInputs, collectedInputs, currentInputIndex } = circuitInputState
+      const currentLabel = requiredInputs[currentInputIndex]
+      
+      // Store this input
+      const newCollectedInputs = { ...collectedInputs, [currentLabel]: command }
+      
+      if (currentInputIndex < requiredInputs.length - 1) {
+        // More inputs needed
+        const nextLabel = requiredInputs[currentInputIndex + 1]
+        setCircuitInputState({
+          ...circuitInputState,
+          collectedInputs: newCollectedInputs,
+          currentInputIndex: currentInputIndex + 1,
+        })
+        addSystemEntry(`[${nextLabel}]:`, timestamp)
+      } else {
+        // All inputs collected, run the circuit
+        setCircuitInputState(null)
+        addSystemEntry(`All inputs collected. Running ${circuitName}...`, timestamp)
+        
+        runCircuit(circuitName, newCollectedInputs).then(output => {
+          setEntries(prev => [...prev, {
+            id: `circuit-output-${Date.now()}`,
+            type: 'ai',
+            content: output,
+            timestamp: Date.now(),
+            status: 'success',
+          }])
+        }).catch(err => {
+          addErrorEntry(`Circuit failed: ${err.message}`, Date.now())
+        })
+      }
+      return
+    }
+
     if (command.startsWith('/')) {
       handleSlashCommand(command, timestamp)
     } else {
-      // Regular input - send to AI
-      handleAIRequest(command, timestamp)
+      handleAIRequest(command, timestamp, contextMode)
     }
-  }, [handleSlashCommand, handleAIRequest])
+  }, [handleSlashCommand, handleAIRequest, circuitInputState, addSystemEntry, addErrorEntry, runCircuit])
+
+  // Session panel handlers
+  const handleLoadSession = useCallback((name: string) => {
+    const sessionEntries = loadSession(name)
+    if (sessionEntries) {
+      const timestamp = Date.now()
+      setEntries([
+        {
+          id: `system-${timestamp}`,
+          type: 'system',
+          content: `Loaded: ${name} (${sessionEntries.length} entries)`,
+          timestamp,
+        },
+        ...sessionEntries,
+      ])
+    }
+  }, [])
+
+  const handleSaveSession = useCallback((name: string) => {
+    // Filter out system initialization messages
+    const filtered = entries.filter(e => 
+      !(e.type === 'system' && (e.content.includes('INITIALIZED') || e.content.includes('BACKEND CONNECTED')))
+    )
+    
+    if (saveSession(name, filtered)) {
+      const timestamp = Date.now()
+      setEntries(prev => [...prev, {
+        id: `system-${timestamp}`,
+        type: 'system',
+        content: `Session saved as "${name}" (${filtered.length} entries)`,
+        timestamp,
+      }])
+    }
+  }, [entries])
+
+  const handleNewSession = useCallback(() => {
+    const timestamp = Date.now()
+    setEntries([{
+      id: `system-${timestamp}`,
+      type: 'system',
+      content: 'NEW SESSION STARTED',
+      timestamp,
+    }, {
+      id: `system-${timestamp + 1}`,
+      type: 'system',
+      content: 'Type /help for available commands.',
+      timestamp: timestamp + 1,
+    }])
+  }, [])
 
   const formatTimestamp = (ts: number) => {
     const date = new Date(ts)
@@ -464,29 +824,58 @@ export function TerminalFeed() {
   }
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Terminal Feed */}
-      <div 
-        ref={feedRef}
-        className="flex-1 overflow-y-auto p-4"
-      >
-        <div className="max-w-3xl mx-auto space-y-3">
-          {entries.map((entry) => (
-            <LogEntryBlock 
-              key={entry.id} 
-              entry={entry} 
-              formatTimestamp={formatTimestamp}
-            />
-          ))}
+    <div className="h-full flex">
+      {/* Session Panel */}
+      <SessionPanel
+        isCollapsed={panelCollapsed}
+        onToggleCollapse={() => setPanelCollapsed(prev => !prev)}
+        onLoadSession={handleLoadSession}
+        onSaveSession={() => setShowSaveModal(true)}
+        onNewSession={handleNewSession}
+        currentEntryCount={entries.length}
+      />
+      
+      {/* Main Terminal Area */}
+      <div className="flex-1 flex flex-col">
+        {/* Terminal Feed */}
+        <div 
+          ref={feedRef}
+          className="flex-1 overflow-y-auto p-4"
+        >
+          <div className="max-w-3xl mx-auto space-y-3">
+            {entries.map((entry) => (
+              <LogEntryBlock 
+                key={entry.id} 
+                entry={entry} 
+                formatTimestamp={formatTimestamp}
+              />
+            ))}
+          </div>
         </div>
-      </div>
 
-      {/* Command Input */}
-      <div className="border-t border-terminal-border p-4">
-        <div className="max-w-3xl mx-auto">
-          <CommandInput onSubmit={handleCommand} />
+        {/* Command Input */}
+        <div className="border-t border-terminal-border p-4">
+          <div className="max-w-3xl mx-auto">
+            <CommandInput 
+              onSubmit={handleCommand} 
+              placeholder={circuitInputState 
+                ? `Enter value for [${circuitInputState.requiredInputs[circuitInputState.currentInputIndex]}]...`
+                : undefined
+              }
+            />
+          </div>
         </div>
       </div>
+      
+      {/* Circuit Execution Trace */}
+      {circuitExecution && <CircuitTrace />}
+      
+      {/* Save Session Modal */}
+      <SaveSessionModal
+        isOpen={showSaveModal}
+        onClose={() => setShowSaveModal(false)}
+        onSave={handleSaveSession}
+      />
     </div>
   )
 }

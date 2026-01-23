@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { CellData, ModelSlot, ModelSlotConfig, InputMode } from './CircuitBoard'
 import { FilePicker, ReadMode } from './FilePicker'
 import type { ModuleType } from '../../types/module'
@@ -41,7 +41,12 @@ interface NotebookCellProps {
   onMoveUp: () => void
   onMoveDown: () => void
   onRun: () => void
+  isExpanded?: boolean
+  onExpand?: () => void
+  onCollapse?: () => void
 }
+
+const CELL_BODY_MAX_HEIGHT = 280
 
 export function NotebookCell({
   cell,
@@ -54,11 +59,29 @@ export function NotebookCell({
   onMoveUp,
   onMoveDown,
   onRun,
+  isExpanded = false,
+  onExpand,
+  onCollapse,
 }: NotebookCellProps) {
   void _models // Keep prop for future use
   const [isEditing, setIsEditing] = useState(false)
   const [editContent, setEditContent] = useState(cell.content)
   const [showFilePicker, setShowFilePicker] = useState(false)
+  const [hasOverflow, setHasOverflow] = useState(false)
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || isExpanded) {
+      setHasOverflow(false)
+      return
+    }
+    const check = () => setHasOverflow(el.scrollHeight > el.clientHeight)
+    check()
+    const ro = new ResizeObserver(check)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [cell.output, cell.content, cell.error, cell.status, isExpanded])
 
   const typeConfig: Record<ModuleType, { 
     icon: string
@@ -108,6 +131,18 @@ export function NotebookCell({
       bgColor: 'bg-cyan-600',
       description: 'Loads file from data folder. Enter file path.',
     },
+    conditional: {
+      icon: '⚡',
+      color: 'text-purple-400',
+      bgColor: 'bg-purple-600',
+      description: 'Passes input only if condition is met. Otherwise outputs onFail value.',
+    },
+    web_fetch: {
+      icon: '🌐',
+      color: 'text-blue-400',
+      bgColor: 'bg-blue-600',
+      description: 'Fetches content from a URL. Supports GET/POST with headers and body.',
+    },
   }
 
   const config = typeConfig[cell.type]
@@ -150,6 +185,10 @@ export function NotebookCell({
         return 'Write notes or documentation here...'
       case 'data_loader':
         return 'File path (e.g., data.csv, reports/summary.pdf)'
+      case 'conditional':
+        return 'Condition description (e.g., "contains question mark")'
+      case 'web_fetch':
+        return 'URL (or use {{input}} to use previous cell output as URL)'
       default:
         return 'Enter content...'
     }
@@ -292,6 +331,23 @@ export function NotebookCell({
           )}
         </div>
 
+        {/* Scrollable content: max-height when collapsed, expand toggle when overflow */}
+        <div
+          ref={scrollRef}
+          className={`relative ${isExpanded ? '' : 'overflow-y-auto'}`}
+          style={isExpanded ? undefined : { maxHeight: CELL_BODY_MAX_HEIGHT }}
+        >
+          {hasOverflow && !isExpanded && onExpand && (
+            <button
+              type="button"
+              onClick={onExpand}
+              className="absolute top-2 right-2 z-10 p-1.5 border border-phosphor bg-void text-phosphor text-[10px] hover:bg-phosphor hover:text-void transition-colors"
+              title="Expand to full height"
+            >
+              ⛶
+            </button>
+          )}
+
         {/* Content Area - Special handling for data_loader */}
         {cell.type === 'data_loader' && (
           <>
@@ -365,8 +421,208 @@ export function NotebookCell({
           </>
         )}
 
+        {/* Content Area - Conditional cell */}
+        {cell.type === 'conditional' && (
+          <>
+            <div className="mb-3">
+              <div className="text-[10px] text-terminal-muted mb-2">Condition Type:</div>
+              <div className="flex flex-wrap gap-1 mb-3">
+                {(['regex', 'keyword', 'length', 'contains', 'ai_check'] as const).map((type) => (
+                  <button
+                    key={type}
+                    onClick={() => onUpdate({ conditionType: type })}
+                    className={`px-2 py-1 text-[10px] border ${
+                      cell.conditionType === type 
+                        ? 'border-purple-500 bg-purple-900/30 text-purple-400' 
+                        : 'border-terminal-border text-terminal-muted hover:border-purple-500/50'
+                    }`}
+                  >
+                    {type === 'regex' && 'Regex'}
+                    {type === 'keyword' && 'Keyword'}
+                    {type === 'length' && 'Length'}
+                    {type === 'contains' && 'Contains'}
+                    {type === 'ai_check' && 'AI Check'}
+                  </button>
+                ))}
+              </div>
+              
+              {cell.conditionType && (
+                <div className="space-y-2">
+                  <div>
+                    <label className="text-[10px] text-terminal-muted block mb-1">
+                      {cell.conditionType === 'regex' && 'Pattern (regex):'}
+                      {cell.conditionType === 'keyword' && 'Keyword to match:'}
+                      {cell.conditionType === 'length' && 'Max length (characters):'}
+                      {cell.conditionType === 'contains' && 'Text to find:'}
+                      {cell.conditionType === 'ai_check' && 'AI prompt (e.g., "Is this a question? Answer YES or NO"):'}
+                    </label>
+                    <input
+                      type={cell.conditionType === 'length' ? 'number' : 'text'}
+                      value={cell.conditionValue || ''}
+                      onChange={(e) => onUpdate({ conditionValue: e.target.value })}
+                      placeholder={
+                        cell.conditionType === 'regex' ? 'e.g., \\?$' :
+                        cell.conditionType === 'keyword' ? 'e.g., urgent' :
+                        cell.conditionType === 'length' ? 'e.g., 1000' :
+                        cell.conditionType === 'contains' ? 'e.g., @example.com' :
+                        'e.g., Is this a question? Answer YES or NO'
+                      }
+                      className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-purple-500"
+                    />
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] text-terminal-muted block mb-1">On Pass (default: input):</label>
+                      <input
+                        type="text"
+                        value={cell.onPass || ''}
+                        onChange={(e) => onUpdate({ onPass: e.target.value })}
+                        placeholder="Leave empty to pass input through"
+                        className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-purple-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-terminal-muted block mb-1">On Fail (default: empty):</label>
+                      <input
+                        type="text"
+                        value={cell.onFail || ''}
+                        onChange={(e) => onUpdate({ onFail: e.target.value })}
+                        placeholder="Output when condition fails"
+                        className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-purple-500"
+                      />
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-2 pt-2 border-t border-terminal-border/50">
+                    <div>
+                      <label className="text-[10px] text-terminal-muted block mb-1">On fail: loop back to cell # (0 = no loop):</label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={index}
+                        value={cell.loopBackTo ?? 0}
+                        onChange={(e) => onUpdate({ loopBackTo: Math.max(0, parseInt(e.target.value) || 0) })}
+                        placeholder="0"
+                        className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-purple-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-terminal-muted block mb-1">Max loop passes:</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={cell.loopBackMax ?? 3}
+                        onChange={(e) => onUpdate({ loopBackMax: Math.max(1, Math.min(10, parseInt(e.target.value) || 3)) })}
+                        className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-purple-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+            
+            <div className="mt-3 pt-3 border-t border-terminal-border">
+              <textarea
+                value={editContent}
+                onChange={(e) => setEditContent(e.target.value)}
+                onBlur={handleSave}
+                onKeyDown={handleKeyDown}
+                placeholder={getPlaceholder()}
+                className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-purple-500 min-h-[60px]"
+              />
+            </div>
+          </>
+        )}
+
+        {/* Content Area - Web Fetch cell */}
+        {cell.type === 'web_fetch' && (
+          <>
+            <div className="mb-3">
+              <div className="text-[10px] text-terminal-muted mb-2">HTTP Method:</div>
+              <div className="flex flex-wrap gap-1 mb-3">
+                {(['GET', 'POST', 'PUT', 'DELETE'] as const).map((method) => (
+                  <button
+                    key={method}
+                    onClick={() => onUpdate({ fetchMethod: method })}
+                    className={`px-2 py-1 text-[10px] border ${
+                      (cell.fetchMethod || 'GET') === method 
+                        ? 'border-blue-500 bg-blue-900/30 text-blue-400' 
+                        : 'border-terminal-border text-terminal-muted hover:border-blue-500/50'
+                    }`}
+                  >
+                    {method}
+                  </button>
+                ))}
+              </div>
+              
+              <div className="space-y-2">
+                <div>
+                  <label className="text-[10px] text-terminal-muted block mb-1">URL (or use {'{{input}}'}):</label>
+                  <input
+                    type="text"
+                    value={editContent}
+                    onChange={(e) => {
+                      setEditContent(e.target.value)
+                      onUpdate({ content: e.target.value })
+                    }}
+                    placeholder="https://api.example.com/data or {{input}}"
+                    className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                
+                {(cell.fetchMethod === 'POST' || cell.fetchMethod === 'PUT') && (
+                  <div>
+                    <label className="text-[10px] text-terminal-muted block mb-1">Body (can use {'{{input}}'}):</label>
+                    <textarea
+                      value={cell.fetchBody || ''}
+                      onChange={(e) => onUpdate({ fetchBody: e.target.value })}
+                      placeholder='{"key": "value"} or {{input}}'
+                      className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-blue-500 min-h-[60px]"
+                    />
+                  </div>
+                )}
+                
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] text-terminal-muted block mb-1">Headers (JSON or key:value):</label>
+                    <textarea
+                      value={cell.fetchHeaders || ''}
+                      onChange={(e) => onUpdate({ fetchHeaders: e.target.value })}
+                      placeholder='{"Authorization": "Bearer token"}'
+                      className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-blue-500 min-h-[40px]"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <div>
+                      <label className="text-[10px] text-terminal-muted block mb-1">Timeout (seconds):</label>
+                      <input
+                        type="number"
+                        value={cell.fetchTimeout || 30}
+                        onChange={(e) => onUpdate({ fetchTimeout: parseInt(e.target.value) || 30 })}
+                        className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-terminal-muted block mb-1">Max Size (bytes, 8MB default):</label>
+                      <input
+                        type="number"
+                        value={cell.fetchMaxSize ?? 8388608}
+                        onChange={(e) => onUpdate({ fetchMaxSize: parseInt(e.target.value) || 8388608 })}
+                        placeholder="8388608"
+                        className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+
         {/* Content Area - Regular cells */}
-        {cell.type !== 'log_entry' && cell.type !== 'data_loader' && (
+        {cell.type !== 'log_entry' && cell.type !== 'data_loader' && cell.type !== 'conditional' && cell.type !== 'web_fetch' && (
           <>
             {isEditing ? (
               <textarea
@@ -415,6 +671,19 @@ export function NotebookCell({
               </div>
             )}
           </div>
+        )}
+
+        </div>
+
+        {isExpanded && onCollapse && (
+          <button
+            type="button"
+            onClick={onCollapse}
+            className="fixed right-6 top-1/2 -translate-y-1/2 z-[100] p-2 border border-phosphor bg-void text-phosphor text-xs hover:bg-phosphor hover:text-void transition-colors"
+            title="Collapse to max height"
+          >
+            ◫
+          </button>
         )}
 
         {/* Footer */}

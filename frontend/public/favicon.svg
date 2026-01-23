@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" fill="#0a0a0a" rx="6"/>
+  <!-- Loom = hub + 4 circuit nodes, phosphor green -->
+  <circle cx="16" cy="16" r="5" fill="none" stroke="#33ff00" stroke-width="1.8"/>
+  <circle cx="16" cy="16" r="2" fill="#33ff00"/>
+  <circle cx="8" cy="9" r="1.8" fill="#33ff00"/>
+  <circle cx="24" cy="9" r="1.8" fill="#33ff00"/>
+  <circle cx="8" cy="23" r="1.8" fill="#33ff00"/>
+  <circle cx="24" cy="23" r="1.8" fill="#33ff00"/>
+  <path d="M16 16 L8 9 M16 16 L24 9 M16 16 L8 23 M16 16 L24 23" stroke="#33ff00" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+</svg>

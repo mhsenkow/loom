@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { CRTContainer } from './components/shell/CRTContainer'
 import { TitleBar } from './components/shell/TitleBar'
 import { TerminalFeed } from './components/terminal/TerminalFeed'
 import { CircuitBoard } from './components/circuit/CircuitBoard'
-import { SettingsModal } from './components/shell/SettingsModal'
+import { SettingsModal, loadSettings, applyTheme } from './components/shell/SettingsModal'
 import { useSocket } from './hooks/useSocket'
 import { useSystemStatus } from './hooks/useSystemStatus'
 
@@ -13,13 +13,19 @@ function App() {
   const [viewMode, setViewMode] = useState<ViewMode>('terminal')
   const [crtEnabled, setCrtEnabled] = useState(true)
   const [settingsOpen, setSettingsOpen] = useState(false)
+
+  // Apply saved theme on load
+  useEffect(() => {
+    const s = loadSettings()
+    applyTheme(s.theme)
+  }, [])
   
   const { connected: socketConnected } = useSocket()
   const { status } = useSystemStatus()
 
   return (
     <CRTContainer enabled={crtEnabled}>
-      <div className="h-screen w-screen flex flex-col bg-void text-phosphor font-mono overflow-hidden">
+      <div className="loom-app h-screen w-screen flex flex-col bg-void text-phosphor font-mono overflow-hidden">
         {/* Custom Title Bar */}
         <TitleBar 
           viewMode={viewMode}

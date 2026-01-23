@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useState, useEffect } from 'react'
 import ReactFlow, {
   Node,
   Edge,
@@ -15,10 +15,12 @@ import 'reactflow/dist/style.css'
 import { ModuleNode } from './ModuleNode'
 import { LinearView } from './LinearView'
 import { TemplatesSidebar, NotebookTemplate } from './TemplatesSidebar'
+import { LoopBackEdge } from './LoopBackEdge'
 import type { ModuleType, ModuleStatus } from '../../types/module'
 import { useSocket } from '../../hooks/useSocket'
 import { useSystemStatus } from '../../hooks/useSystemStatus'
 import { useSendToTerminal } from '../../hooks/useTerminalOutput'
+import { saveCircuit, saveModelSlots, loadModelSlots, SavedCircuit } from '../../hooks/useCircuitRunner'
 
 type ViewMode = 'linear' | 'canvas'
 
@@ -40,6 +42,11 @@ const SLOT_LABELS: Record<ModelSlot, { label: string; desc: string; color: strin
 // Register custom node types
 const nodeTypes = {
   module: ModuleNode,
+}
+
+// Register custom edge types
+const edgeTypes = {
+  loopback: LoopBackEdge,
 }
 
 // Custom edge options for orthogonal routing
@@ -64,6 +71,19 @@ export interface CellData {
   modelSlot?: ModelSlot // Which slot to use (A, B, or C)
   readMode?: string    // For data_loader: how to read/process the file
   inputMode?: InputMode // How to receive input: 'previous' = last cell, 'all' = entire notebook, 'none' = just own content
+  // Conditional cell parameters
+  conditionType?: 'regex' | 'keyword' | 'length' | 'contains' | 'ai_check' // For conditional cells
+  conditionValue?: string  // Pattern/keyword/value for condition
+  onPass?: string  // Output when condition passes (default: input)
+  onFail?: string  // Output when condition fails (default: '')
+  loopBackTo?: number  // 1-based cell index to re-run from when condition fails (0 = no loop)
+  loopBackMax?: number  // Max loop iterations (default: 3)
+  // Web fetch cell parameters
+  fetchMethod?: 'GET' | 'POST' | 'PUT' | 'DELETE'  // For web_fetch cells
+  fetchHeaders?: string  // JSON string or key:value pairs
+  fetchBody?: string  // Body template (can use {{input}})
+  fetchTimeout?: number  // Timeout in seconds (default: 30)
+  fetchMaxSize?: number  // Max response size in bytes (default: 8388608 = 8MB)
 }
 
 // Initial demo cells
@@ -92,12 +112,23 @@ const initialCells: CellData[] = [
   },
 ]
 
+// Canvas layout: zigzag down the canvas with more spacing; conditionals add a branch offset
+const LAYOUT = { BASE_X: 180, BASE_Y: 60, STEP_X: 420, STEP_Y: 280, BRANCH_OFFSET: 100 }
+
+function getNodePosition(index: number, cells: CellData[]): { x: number; y: number } {
+  const prevIsConditional = index > 0 && cells[index - 1].type === 'conditional'
+  const col = index % 2
+  const x = LAYOUT.BASE_X + col * LAYOUT.STEP_X + (prevIsConditional ? LAYOUT.BRANCH_OFFSET : 0)
+  const y = LAYOUT.BASE_Y + index * LAYOUT.STEP_Y
+  return { x, y }
+}
+
 // Convert cells to React Flow nodes
 function cellsToNodes(cells: CellData[]): Node[] {
   return cells.map((cell, index) => ({
     id: cell.id,
     type: 'module',
-    position: { x: 100 + index * 300, y: 100 },
+    position: getNodePosition(index, cells),
     data: {
       label: cell.label,
       moduleType: cell.type,
@@ -107,9 +138,11 @@ function cellsToNodes(cells: CellData[]): Node[] {
   }))
 }
 
-// Generate edges between sequential nodes
+// Generate edges between sequential nodes + loop-back edges
 function generateEdges(cells: CellData[]): Edge[] {
   const edges: Edge[] = []
+  
+  // Forward edges (sequential flow)
   for (let i = 0; i < cells.length - 1; i++) {
     edges.push({
       id: `e-${cells[i].id}-${cells[i + 1].id}`,
@@ -118,6 +151,30 @@ function generateEdges(cells: CellData[]): Edge[] {
       ...defaultEdgeOptions,
     })
   }
+  
+  // Loop-back edges (from conditional cells with loopBackTo)
+  for (let i = 0; i < cells.length; i++) {
+    const cell = cells[i]
+    if (cell.type === 'conditional' && cell.loopBackTo && cell.loopBackTo > 0 && cell.loopBackTo <= i + 1) {
+      // loopBackTo is 1-based, convert to 0-based index
+      const targetIndex = cell.loopBackTo - 1
+      const targetCell = cells[targetIndex]
+      if (targetCell) {
+        edges.push({
+          id: `loopback-${cell.id}-${targetCell.id}`,
+          source: cell.id,
+          target: targetCell.id,
+          type: 'loopback',
+          animated: true,
+          updatable: true, // Allow dragging to change target
+          style: { stroke: '#a855f7', strokeWidth: 2, strokeDasharray: '8,4' },
+          // Store metadata for updating
+          data: { cellId: cell.id, loopBackTo: cell.loopBackTo },
+        })
+      }
+    }
+  }
+  
   return edges
 }
 
@@ -128,17 +185,41 @@ export function CircuitBoard() {
   const [isRunning, setIsRunning] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [showModelConfig, setShowModelConfig] = useState(false)
+  const [circuitName, setCircuitName] = useState<string>('')
+  const [showSaveSuccess, setShowSaveSuccess] = useState(false)
   
   const { sendChat } = useSocket()
   const { status, models } = useSystemStatus()
   const sendToTerminal = useSendToTerminal()
   
   // Model slot configuration - maps slots to actual model names
-  const [modelSlots, setModelSlots] = useState<ModelSlotConfig>({
-    A: '', // Will default to first available
-    B: '',
-    C: '',
-  })
+  const [modelSlots, setModelSlots] = useState<ModelSlotConfig>(() => loadModelSlots())
+  
+  // Persist model slots when they change
+  useEffect(() => {
+    saveModelSlots(modelSlots)
+  }, [modelSlots])
+  
+  // Save the current circuit
+  const handleSaveCircuit = useCallback(() => {
+    const name = circuitName.trim().toLowerCase().replace(/\s+/g, '-')
+    if (!name) {
+      alert('Please enter a circuit name')
+      return
+    }
+    
+    const circuit: SavedCircuit = {
+      name,
+      cells: cells.map(({ status, output, error, ...rest }) => rest),
+      modelSlots,
+      savedAt: Date.now(),
+    }
+    
+    if (saveCircuit(circuit)) {
+      setShowSaveSuccess(true)
+      setTimeout(() => setShowSaveSuccess(false), 2000)
+    }
+  }, [circuitName, cells, modelSlots])
   
   // Resolve a slot to an actual model name
   const resolveModel = useCallback((slot?: ModelSlot, directModel?: string): string => {
@@ -157,14 +238,24 @@ export function CircuitBoard() {
   const [nodes, setNodes, onNodesChange] = useNodesState(cellsToNodes(initialCells))
   const [edges, setEdges, onEdgesChange] = useEdgesState(generateEdges(initialCells))
 
+  // Sync nodes and edges when cells change in canvas mode
+  useEffect(() => {
+    if (viewMode === 'canvas') {
+      setNodes(cellsToNodes(cells))
+      setEdges(generateEdges(cells))
+    }
+  }, [cells, viewMode, setNodes, setEdges])
+
   // Load a template into the notebook
-  const loadTemplate = useCallback((template: NotebookTemplate) => {
+  const loadTemplate = useCallback((template: NotebookTemplate, name: string) => {
     const newCells: CellData[] = template.cells.map((cell, index) => ({
       ...cell,
       id: `cell-${Date.now()}-${index}`,
       status: 'idle' as ModuleStatus,
     }))
     setCells(newCells)
+    setCircuitName(name)
+    setShowSaveSuccess(false)
     // Sync to canvas if in canvas mode
     if (viewMode === 'canvas') {
       setNodes(cellsToNodes(newCells))
@@ -177,6 +268,42 @@ export function CircuitBoard() {
     setNodes(cellsToNodes(cells))
     setEdges(generateEdges(cells))
   }, [cells, setNodes, setEdges])
+  
+  // Create a new empty circuit
+  const newCircuit = useCallback(() => {
+    const newCells: CellData[] = [
+      {
+        id: `cell-${Date.now()}-0`,
+        type: 'data_input',
+        label: 'INPUT',
+        content: '',
+        status: 'idle',
+      },
+      {
+        id: `cell-${Date.now()}-1`,
+        type: 'ai_processor',
+        label: 'AI',
+        content: '',
+        status: 'idle',
+        modelSlot: 'A',
+      },
+      {
+        id: `cell-${Date.now()}-2`,
+        type: 'log_entry',
+        label: 'OUTPUT',
+        content: '',
+        status: 'idle',
+      },
+    ]
+    setCells(newCells)
+    setCircuitName('')
+    setShowSaveSuccess(false)
+    // Sync to canvas if in canvas mode
+    if (viewMode === 'canvas') {
+      setNodes(cellsToNodes(newCells))
+      setEdges(generateEdges(newCells))
+    }
+  }, [viewMode, setNodes, setEdges])
 
   const onConnect = useCallback(
     (connection: Connection) => {
@@ -194,6 +321,8 @@ export function CircuitBoard() {
       image_gen: 'IMAGE',
       markdown: 'NOTE',
       data_loader: 'DATA',
+      conditional: 'GATE',
+      web_fetch: 'FETCH',
     }
 
     const newCell: CellData = {
@@ -203,18 +332,20 @@ export function CircuitBoard() {
       content: '',
       status: 'idle',
       modelSlot: type === 'ai_processor' ? 'A' : undefined,
+      conditionType: type === 'conditional' ? 'contains' : undefined,
+      conditionValue: type === 'conditional' ? '' : undefined,
+      fetchMethod: type === 'web_fetch' ? 'GET' : undefined,
     }
     
     setCells((prev) => [...prev, newCell])
     
     if (viewMode === 'canvas') {
-      const lastNode = nodes[nodes.length - 1]
+      const newCells = [...cells, newCell]
+      const pos = getNodePosition(newCells.length - 1, newCells)
       const newNode: Node = {
         id: newCell.id,
         type: 'module',
-        position: lastNode 
-          ? { x: lastNode.position.x + 300, y: lastNode.position.y }
-          : { x: 100, y: 100 },
+        position: pos,
         data: {
           label: newCell.label,
           moduleType: type,
@@ -239,10 +370,15 @@ export function CircuitBoard() {
   }
 
   const updateCell = useCallback((id: string, updates: Partial<CellData>) => {
-    setCells((prev) => 
-      prev.map((cell) => cell.id === id ? { ...cell, ...updates } : cell)
-    )
-  }, [])
+    setCells((prev) => {
+      const updated = prev.map((cell) => cell.id === id ? { ...cell, ...updates } : cell)
+      // Regenerate edges if in canvas mode and loopBackTo changed
+      if (viewMode === 'canvas' && updates.loopBackTo !== undefined) {
+        setEdges(generateEdges(updated))
+      }
+      return updated
+    })
+  }, [viewMode])
 
   const deleteCell = (id: string) => {
     setCells((prev) => prev.filter((cell) => cell.id !== id))
@@ -308,12 +444,12 @@ export function CircuitBoard() {
     }
   }, [])
 
-  // Execute a single cell with input from previous cell(s)
+  // Execute a single cell with input from previous cell(s). Conditional can return { loopBackTo } to request a loop.
   const executeCell = useCallback(async (
     cell: CellData, 
     input: string,
     originalQuestion?: string
-  ): Promise<string> => {
+  ): Promise<string | { loopBackTo: number }> => {
     const modelToUse = resolveModel(cell.modelSlot, cell.model)
     
     switch (cell.type) {
@@ -483,12 +619,159 @@ export function CircuitBoard() {
           throw new Error(`File load error: ${e instanceof Error ? e.message : e}`)
         }
       
+      case 'conditional':
+        // Evaluate condition and return appropriate output
+        const conditionType = cell.conditionType || 'contains'
+        const conditionValue = cell.conditionValue || ''
+        let conditionPassed = false
+        
+        try {
+          if (conditionType === 'regex') {
+            const regex = new RegExp(conditionValue)
+            conditionPassed = regex.test(input)
+          } else if (conditionType === 'keyword') {
+            conditionPassed = input.toLowerCase().includes(conditionValue.toLowerCase())
+          } else if (conditionType === 'length') {
+            const maxLength = parseInt(conditionValue) || 0
+            conditionPassed = input.length <= maxLength
+          } else if (conditionType === 'contains') {
+            conditionPassed = input.includes(conditionValue)
+          } else if (conditionType === 'ai_check') {
+            // Use AI to check condition
+            const aiModel = resolveModel(cell.modelSlot, cell.model)
+            const checkPrompt = conditionValue || 'Does this text meet the condition? Answer only YES or NO.'
+            const fullPrompt = `${checkPrompt}\n\nText: ${input}\n\nAnswer:`
+            
+            return new Promise((resolve, reject) => {
+              let aiResponse = ''
+              const sent = sendChat(
+                fullPrompt,
+                aiModel,
+                (chunk) => {
+                  aiResponse += chunk.content
+                },
+                (statusData) => {
+                  if (statusData.status === 'success') {
+                    const passed = aiResponse.trim().toUpperCase().includes('YES')
+                    if (passed) {
+                      resolve(cell.onPass || input)
+                    } else if ((cell.loopBackTo ?? 0) >= 1) {
+                      resolve({ loopBackTo: cell.loopBackTo! })
+                    } else {
+                      resolve(cell.onFail || '')
+                    }
+                  } else if (statusData.status === 'error') {
+                    reject(new Error(statusData.message))
+                  }
+                }
+              )
+              if (!sent) reject(new Error('Backend not connected'))
+            })
+          }
+          
+          // For non-AI conditions
+          if (conditionPassed) return cell.onPass || input
+          if ((cell.loopBackTo ?? 0) >= 1) return { loopBackTo: cell.loopBackTo! }
+          return cell.onFail || ''
+        } catch (e) {
+          throw new Error(`Condition evaluation error: ${e instanceof Error ? e.message : e}`)
+        }
+      
+      case 'web_fetch':
+        // Fetch from URL
+        let url = cell.content.trim()
+        if (url.includes('{{input}}')) {
+          url = url.replace(/\{\{input\}\}/g, input)
+        }
+        if (!url) {
+          throw new Error('No URL specified')
+        }
+        
+        const method = cell.fetchMethod || 'GET'
+        const timeout = (cell.fetchTimeout || 30) * 1000
+        const maxSize = cell.fetchMaxSize ?? 8388608
+        
+        updateCell(cell.id, { output: `Fetching ${method} ${url}...` })
+        
+        try {
+          // Parse headers
+          let headers: Record<string, string> = {}
+          if (cell.fetchHeaders) {
+            try {
+              headers = JSON.parse(cell.fetchHeaders)
+            } catch {
+              // Try key:value format
+              const lines = cell.fetchHeaders.split('\n')
+              for (const line of lines) {
+                const [key, ...valueParts] = line.split(':')
+                if (key && valueParts.length) {
+                  headers[key.trim()] = valueParts.join(':').trim()
+                }
+              }
+            }
+          }
+          
+          // Prepare body for POST/PUT
+          let body: string | undefined = undefined
+          if ((method === 'POST' || method === 'PUT') && cell.fetchBody) {
+            const bodyTemplate = cell.fetchBody.includes('{{input}}') 
+              ? cell.fetchBody.replace(/\{\{input\}\}/g, input)
+              : cell.fetchBody
+            
+            // Try to parse as JSON, otherwise use as-is
+            try {
+              JSON.parse(bodyTemplate)
+              body = bodyTemplate
+            } catch {
+              body = bodyTemplate
+            }
+          }
+          
+          // Create abort controller for timeout
+          const controller = new AbortController()
+          const timeoutId = setTimeout(() => controller.abort(), timeout)
+          
+          const response = await fetch(url, {
+            method,
+            headers: {
+              'Content-Type': 'application/json',
+              ...headers,
+            },
+            body: body,
+            signal: controller.signal,
+          })
+          
+          clearTimeout(timeoutId)
+          
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+          }
+          
+          // Check content length
+          const contentLength = response.headers.get('content-length')
+          if (contentLength && parseInt(contentLength) > maxSize) {
+            throw new Error(`Response too large: ${contentLength} bytes (max: ${maxSize})`)
+          }
+          
+          const text = await response.text()
+          if (text.length > maxSize) {
+            throw new Error(`Response too large: ${text.length} bytes (max: ${maxSize})`)
+          }
+          
+          return text
+        } catch (e) {
+          if (e instanceof Error && e.name === 'AbortError') {
+            throw new Error(`Request timeout after ${timeout / 1000}s`)
+          }
+          throw new Error(`Fetch error: ${e instanceof Error ? e.message : e}`)
+        }
+      
       default:
         return input
     }
   }, [resolveModel, sendChat, sendToTerminal, updateCell])
 
-  // Run a single cell
+  // Run a single cell (loop-back is ignored: { loopBackTo } is treated as onFail)
   const runCell = useCallback(async (id: string) => {
     const cellIndex = cells.findIndex((c) => c.id === id)
     if (cellIndex === -1) return
@@ -499,7 +782,10 @@ export function CircuitBoard() {
     updateCell(id, { status: 'running', output: undefined, error: undefined })
     
     try {
-      const output = await executeCell(cell, input, originalQuestion)
+      const result = await executeCell(cell, input, originalQuestion)
+      const output = typeof result === 'object' && result !== null && 'loopBackTo' in result
+        ? (cell.onFail ?? '')
+        : (result as string)
       updateCell(id, { status: 'success', output })
     } catch (e) {
       updateCell(id, { 
@@ -509,34 +795,46 @@ export function CircuitBoard() {
     }
   }, [cells, executeCell, updateCell, gatherInput])
 
-  // Run all cells sequentially
+  // Run all cells sequentially (with optional loop-back from conditionals)
   const runAllCells = useCallback(async () => {
     setIsRunning(true)
-    
-    // Create a working copy of cells to track outputs as we execute
     const workingCells = [...cells]
-    
+    const loopCounts = new Map<string, number>()
+
     for (let i = 0; i < workingCells.length; i++) {
       const cell = workingCells[i]
       updateCell(cell.id, { status: 'running', output: undefined, error: undefined })
-      
-      // Gather input based on inputMode
+
       const { input, originalQuestion } = gatherInput(i, workingCells)
-      
+
       try {
-        const output = await executeCell(cell, input, originalQuestion)
+        const result = await executeCell(cell, input, originalQuestion)
+        let output: string
+
+        if (typeof result === 'object' && result !== null && 'loopBackTo' in result) {
+          const r = result as { loopBackTo: number }
+          const count = loopCounts.get(cell.id) ?? 0
+          const max = cell.loopBackMax ?? 3
+          if (count >= max) {
+            output = cell.onFail || ''
+            loopCounts.delete(cell.id)
+          } else {
+            loopCounts.set(cell.id, count + 1)
+            i = r.loopBackTo - 2 // 1-based → 0-based; for-loop i++ runs next, so -2 to land on loopBackTo cell
+            continue
+          }
+        } else {
+          output = result as string
+        }
+
         updateCell(cell.id, { status: 'success', output })
-        // Update working copy so subsequent cells can access this output
         workingCells[i] = { ...workingCells[i], output }
       } catch (e) {
-        updateCell(cell.id, { 
-          status: 'error', 
-          error: e instanceof Error ? e.message : 'Unknown error' 
-        })
+        updateCell(cell.id, { status: 'error', error: e instanceof Error ? e.message : 'Unknown error' })
         break
       }
     }
-    
+
     setIsRunning(false)
   }, [cells, executeCell, updateCell, gatherInput])
 
@@ -558,6 +856,8 @@ export function CircuitBoard() {
       {/* Templates Sidebar */}
       <TemplatesSidebar
         onSelectTemplate={loadTemplate}
+        onNewCircuit={newCircuit}
+        currentCircuitName={circuitName}
         isCollapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
       />
@@ -659,6 +959,12 @@ export function CircuitBoard() {
             <button onClick={() => addCell('script_execution')} className="btn-terminal text-xs">
               + SCRIPT
             </button>
+            <button onClick={() => addCell('conditional')} className="btn-terminal text-xs" style={{ borderColor: '#a855f7', color: '#a855f7' }}>
+              + GATE
+            </button>
+            <button onClick={() => addCell('web_fetch')} className="btn-terminal text-xs" style={{ borderColor: '#60a5fa', color: '#60a5fa' }}>
+              + FETCH
+            </button>
             <button onClick={() => addCell('markdown')} className="btn-terminal text-xs" style={{ borderColor: '#888', color: '#888' }}>
               + NOTE
             </button>
@@ -691,6 +997,10 @@ export function CircuitBoard() {
               cells={cells}
               models={models}
               modelSlots={modelSlots}
+              circuitName={circuitName}
+              onCircuitNameChange={setCircuitName}
+              onSaveCircuit={handleSaveCircuit}
+              isSaved={showSaveSuccess}
               onUpdateCell={updateCell}
               onDeleteCell={deleteCell}
               onMoveCell={moveCell}
@@ -704,8 +1014,36 @@ export function CircuitBoard() {
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
               nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
               defaultEdgeOptions={defaultEdgeOptions}
               connectionMode={ConnectionMode.Loose}
+              connectionLineStyle={{ stroke: '#33ff00', strokeWidth: 2 }}
+              onEdgeUpdate={(oldEdge, newConnection) => {
+                // Handle loop-back edge updates
+                if (oldEdge.type === 'loopback' && oldEdge.data) {
+                  const targetIndex = cells.findIndex(c => c.id === newConnection.target)
+                  if (targetIndex >= 0) {
+                    const newLoopBackTo = targetIndex + 1 // Convert to 1-based
+                    updateCell(oldEdge.data.cellId, { loopBackTo: newLoopBackTo })
+                    // Edges will regenerate via updateCell's effect
+                  }
+                } else {
+                  // Regular edge update
+                  setEdges((eds) =>
+                    eds.map((edge) =>
+                      edge.id === oldEdge.id
+                        ? { ...edge, ...newConnection }
+                        : edge
+                    )
+                  )
+                }
+              }}
+              onEdgeUpdateEnd={(oldEdge, newConnection) => {
+                // After dragging ends, regenerate edges to ensure consistency
+                if (oldEdge.type === 'loopback') {
+                  setEdges(generateEdges(cells))
+                }
+              }}
               fitView
               className="bg-void"
             >

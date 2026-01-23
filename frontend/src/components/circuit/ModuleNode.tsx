@@ -27,6 +27,8 @@ export const ModuleNode = memo(({ data, selected }: NodeProps<ModuleNodeData>) =
     image_gen: '🎨',
     markdown: '📝',
     data_loader: '📁',
+    conditional: '⚡',
+    web_fetch: '🌐',
   }
 
   const headerColors: Record<ModuleType, string> = {
@@ -37,6 +39,8 @@ export const ModuleNode = memo(({ data, selected }: NodeProps<ModuleNodeData>) =
     image_gen: 'bg-pink-500 text-void',
     markdown: 'bg-gray-600 text-white',
     data_loader: 'bg-cyan-600 text-white',
+    conditional: 'bg-purple-600 text-white',
+    web_fetch: 'bg-blue-600 text-white',
   }
 
   return (

@@ -21,12 +21,12 @@ export function CRTContainer({ children, enabled = true }: CRTContainerProps) {
     <div className={`relative ${flicker && enabled ? 'crt-flicker' : ''}`}>
       {children}
       
-      {/* CRT Scanline Overlay */}
+      {/* CRT: scanlines + vignette (tube feel) */}
       {enabled && (
-        <div 
-          className="crt-overlay"
-          aria-hidden="true"
-        />
+        <>
+          <div className="crt-overlay" aria-hidden="true" />
+          <div className="crt-vignette" aria-hidden="true" />
+        </>
       )}
     </div>
   )
