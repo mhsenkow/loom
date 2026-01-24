@@ -1,5 +1,10 @@
 # LOOM // Personal Intelligence OS
 
+<img width="2560" height="1440" alt="image" src="https://github.com/user-attachments/assets/d972b27e-1a4d-40cd-9c0d-e74c2ed78e46" />
+
+<img width="2560" height="1440" alt="image" src="https://github.com/user-attachments/assets/9eebe68f-8896-47f3-8200-d3b529af8c8e" />
+
+
 > Retro-Terminal Edition
 
 A local-first, desktop-class Personal Intelligence OS with a "Cassette Futurism" / "90s Mainframe" aesthetic. Think *Alien* terminals, *Metal Gear Solid* UI, or a highly polished Linux terminal.
