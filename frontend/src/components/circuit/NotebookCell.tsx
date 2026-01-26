@@ -143,6 +143,24 @@ export function NotebookCell({
       bgColor: 'bg-blue-600',
       description: 'Fetches content from a URL. Supports GET/POST with headers and body.',
     },
+    vector_index: {
+      icon: '📚',
+      color: 'text-green-400',
+      bgColor: 'bg-green-600',
+      description: 'Index a file into the vector store for semantic search. Enter file path.',
+    },
+    vector_search: {
+      icon: '🔍',
+      color: 'text-yellow-400',
+      bgColor: 'bg-yellow-600',
+      description: 'Search your indexed documents semantically. Enter search query.',
+    },
+    terminal_history: {
+      icon: '📜',
+      color: 'text-orange-400',
+      bgColor: 'bg-orange-600',
+      description: 'Query terminal conversation history. Enter search text or JSON query.',
+    },
   }
 
   const config = typeConfig[cell.type]
@@ -189,6 +207,12 @@ export function NotebookCell({
         return 'Condition description (e.g., "contains question mark")'
       case 'web_fetch':
         return 'URL (or use {{input}} to use previous cell output as URL)'
+      case 'vector_index':
+        return 'File path to index (e.g., documents/guide.pdf)'
+      case 'vector_search':
+        return 'Search query (e.g., "machine learning algorithms")'
+      case 'terminal_history':
+        return 'Search text or JSON query: {"search": "keyword", "types": ["user", "ai"], "limit": 10}'
       default:
         return 'Enter content...'
     }

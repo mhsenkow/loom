@@ -44,6 +44,7 @@ yarn-error.log*
 
 # Database / Data
 backend/data/chromadb/
+backend/data/loom.db
 *.sqlite3
 
 # Source maps (optional - uncomment to include)
@@ -51,3 +52,6 @@ backend/data/chromadb/
 
 # Electron
 out/
+
+# Runtime files
+.notebook.pids

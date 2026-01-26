@@ -1,13 +1,13 @@
 import { useState, useEffect, useCallback } from 'react'
 import { CellData, ModelSlot, InputMode } from './CircuitBoard'
-import { loadSavedCircuits, deleteCircuit, SavedCircuit } from '../../hooks/useCircuitRunner'
+import { loadSavedCircuits, deleteCircuit, refreshCircuitsFromBackend, SavedCircuit } from '../../hooks/useCircuitRunner'
 
 export interface NotebookTemplate {
   id: string
   name: string
   description: string
   icon: string
-  category: 'thinking' | 'writing' | 'music' | 'data' | 'code' | 'scripts' | 'mine'
+  category: 'thinking' | 'writing' | 'music' | 'data' | 'knowledge' | 'code' | 'scripts' | 'mine'
   cells: Omit<CellData, 'id' | 'status'>[]
 }
 
@@ -17,6 +17,7 @@ const CATEGORIES = [
   { id: 'writing', label: 'WRITE', icon: '✍️' },
   { id: 'music', label: 'MUSIC', icon: '🎵' },
   { id: 'data', label: 'DATA', icon: '📁' },
+  { id: 'knowledge', label: 'KNOW', icon: '📚' },
   { id: 'code', label: 'CODE', icon: '💻' },
   { id: 'scripts', label: 'SCRIPT', icon: '⚙️' },
 ] as const
@@ -96,6 +97,42 @@ const imageGen = (
   type: 'image_gen',
   label,
   content: negativePrompt,
+  output: '',
+  inputMode,
+})
+
+const vectorIndex = (
+  label: string,
+  filePath: string = '',
+  inputMode: InputMode = 'none'
+): Omit<CellData, 'id' | 'status'> => ({
+  type: 'vector_index',
+  label,
+  content: filePath,
+  output: '',
+  inputMode,
+})
+
+const vectorSearch = (
+  label: string,
+  query: string = '',
+  inputMode: InputMode = 'none'
+): Omit<CellData, 'id' | 'status'> => ({
+  type: 'vector_search',
+  label,
+  content: query,
+  output: '',
+  inputMode,
+})
+
+const terminalHistory = (
+  label: string,
+  query: string = '',
+  inputMode: InputMode = 'none'
+): Omit<CellData, 'id' | 'status'> => ({
+  type: 'terminal_history',
+  label,
+  content: query,
   output: '',
   inputMode,
 })
@@ -309,6 +346,23 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
     ]
   },
   {
+    id: 'fetch-index-red-team',
+    name: 'Fetch, Index & Red Team',
+    description: 'Fetch URL, index it, then attack the claim',
+    icon: '🌐',
+    category: 'knowledge',
+    cells: [
+      input('URL', 'https://example.com/op-ed-or-article'),
+      webFetch('FETCH', '{{input}}', 'GET'),
+      vectorIndex('INDEX', '{{input}}', 'previous'),
+      ai('CLAIM', 'Extract the main argument or claim from this text in one sentence.', 'B', 'previous'),
+      vectorSearch('SEARCH', '{{input}}', 'previous'),
+      ai('DESTROY', 'You\'re the opposition. Tear this claim apart. Use the search results to find weaknesses.', 'B', 'all'),
+      ai('DEFEND', 'Address each attack. Strengthen or admit the limitation.', 'A', 'all'),
+      output('BATTLE-TESTED'),
+    ]
+  },
+  {
     id: 'idea-visual',
     name: 'Idea → Visual',
     description: 'One visual metaphor for your idea, then generate the image',
@@ -491,6 +545,23 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
       ai('VOICE', 'Analyze: sentence length, rhythm, word choice, tone, structure. What makes it distinctive? One short rubric.', 'B'),
       input('DRAFT', 'Your draft to rewrite in that voice...'),
       ai('REWRITE', 'Rewrite the DRAFT to match the VOICE. Keep the same content, change the sound.', 'A', 'all'),
+      output('REWRITE'),
+    ]
+  },
+  {
+    id: 'fetch-index-mimic',
+    name: 'Fetch, Index & Mimic',
+    description: 'Fetch URL, index it, search for voice patterns, rewrite',
+    icon: '📚',
+    category: 'knowledge',
+    cells: [
+      input('URL', 'https://example.com/article-you-love'),
+      webFetch('FETCH', '{{input}}', 'GET'),
+      vectorIndex('INDEX', '{{input}}', 'previous'),
+      vectorSearch('VOICE PATTERNS', 'writing style tone voice', 'none'),
+      ai('ANALYZE', 'From search results, extract the voice characteristics: sentence structure, word choice, tone.', 'B', 'previous'),
+      input('DRAFT', 'Your draft to rewrite...'),
+      ai('REWRITE', 'Rewrite DRAFT to match the analyzed voice. Use the voice patterns from search results.', 'A', 'all'),
       output('REWRITE'),
     ]
   },
@@ -751,6 +822,20 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
     ]
   },
   {
+    id: 'qa-alice-vector',
+    name: 'Ask Alice (Vector Search)',
+    description: 'Index document, then search semantically',
+    icon: '🔍',
+    category: 'knowledge',
+    cells: [
+      vectorIndex('INDEX', 'alice.pdf'),
+      input('QUESTION', 'What advice does the Cheshire Cat give Alice?'),
+      vectorSearch('SEARCH', '{{input}}', 'previous'),
+      ai('ANSWER', 'Based on the search results above, answer the question. Quote relevant passages.', 'A', 'previous'),
+      output('ANSWER'),
+    ]
+  },
+  {
     id: 'api-fetch-analyze',
     name: 'Fetch & Analyze API',
     description: 'Fetch from API, then analyze with AI',
@@ -799,6 +884,20 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
       data('STYLE', 'style-guide.pdf', 'summarize', 'none'),
       input('DRAFT', 'Your draft to rewrite in that voice...'),
       ai('REWRITE', 'Rewrite the DRAFT to match the STYLE guide. Voice, terms, structure, level of formality. Keep the substance.', 'A', 'all'),
+      output('REWRITE'),
+    ]
+  },
+  {
+    id: 'style-guide-vector',
+    name: 'Style Guide (Vector)',
+    description: 'Index style guide, search for examples, rewrite',
+    icon: '📚',
+    category: 'knowledge',
+    cells: [
+      vectorIndex('INDEX STYLE', 'style-guide.pdf'),
+      input('DRAFT', 'Your draft to rewrite...'),
+      vectorSearch('FIND EXAMPLES', '{{input}}', 'previous'),
+      ai('REWRITE', 'Using the style guide examples from search results, rewrite the draft to match the voice and style.', 'A', 'all'),
       output('REWRITE'),
     ]
   },
@@ -900,6 +999,183 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
       ),
       ai('HEADLINE', 'Write 5 headlines that make people want to click.', 'A'),
       output('ARTICLE'),
+    ]
+  },
+
+  // ============================================
+  // KNOWLEDGE - Vector store & semantic search
+  // ============================================
+  {
+    id: 'knowledge-base',
+    name: 'Knowledge Base Builder',
+    description: 'Index multiple files for search',
+    icon: '📚',
+    category: 'knowledge',
+    cells: [
+      input('FILE 1', 'documents/guide.pdf'),
+      vectorIndex('INDEX 1', '{{input}}', 'previous'),
+      input('FILE 2', 'documents/research.txt'),
+      vectorIndex('INDEX 2', '{{input}}', 'previous'),
+      input('FILE 3', 'documents/notes.md'),
+      vectorIndex('INDEX 3', '{{input}}', 'previous'),
+      output('INDEXED'),
+    ]
+  },
+  {
+    id: 'rag-qa',
+    name: 'RAG Q&A',
+    description: 'Search indexed docs, answer with context',
+    icon: '💬',
+    category: 'knowledge',
+    cells: [
+      input('QUESTION', 'What are the main findings about machine learning?'),
+      vectorSearch('SEARCH', '{{input}}', 'previous'),
+      ai('ANSWER', 'Based on the search results above, provide a comprehensive answer. Include relevant quotes and citations.', 'A', 'previous'),
+      output('ANSWER'),
+    ]
+  },
+  {
+    id: 'document-research',
+    name: 'Document Research',
+    description: 'Index → search → analyze',
+    icon: '🔬',
+    category: 'knowledge',
+    cells: [
+      vectorIndex('INDEX', 'research-paper.pdf'),
+      input('TOPIC', 'neural network architectures'),
+      vectorSearch('SEARCH', '{{input}}', 'previous'),
+      ai('ANALYZE', 'Review the search results. What are the key insights? What patterns emerge?', 'A', 'previous'),
+      ai('SYNTHESIZE', 'Synthesize the findings into a coherent summary with main points and implications.', 'B', 'all'),
+      output('RESEARCH'),
+    ]
+  },
+  {
+    id: 'smart-research-assistant',
+    name: 'Smart Research Assistant',
+    description: 'Index directory, then answer questions',
+    icon: '🤖',
+    category: 'knowledge',
+    cells: [
+      input('DIRECTORY', 'documents/research/'),
+      vectorIndex('INDEX ALL', '{{input}}', 'previous'),
+      input('QUESTION', 'What are the common themes across these documents?'),
+      vectorSearch('SEARCH', '{{input}}', 'previous'),
+      ai('ANSWER', 'Based on the search results, provide a comprehensive answer. Reference specific documents.', 'A', 'previous'),
+      output('RESEARCH'),
+    ]
+  },
+  {
+    id: 'context-aware-writing',
+    name: 'Context-Aware Writing',
+    description: 'Search for context, then write',
+    icon: '✍️',
+    category: 'knowledge',
+    cells: [
+      input('TOPIC', 'Write about quantum computing applications'),
+      vectorSearch('CONTEXT', '{{input}}', 'previous'),
+      ai('DRAFT', 'Using the context above, write a well-informed article on the topic. Incorporate relevant information from the search results.', 'A', 'all'),
+      ai('REFINE', 'Polish the draft. Ensure it flows well and cites sources appropriately.', 'B', 'previous'),
+      output('ARTICLE'),
+    ]
+  },
+  {
+    id: 'multi-doc-comparison',
+    name: 'Multi-Doc Comparison',
+    description: 'Search across indexed docs, compare perspectives',
+    icon: '⚖️',
+    category: 'knowledge',
+    cells: [
+      input('TOPIC', 'climate change solutions'),
+      vectorSearch('SEARCH', '{{input}}', 'previous'),
+      ai('EXTRACT', 'From the search results, extract different perspectives or approaches mentioned.', 'B', 'previous'),
+      ai('COMPARE', 'Compare and contrast these perspectives. What are the similarities and differences?', 'A', 'previous'),
+      output('COMPARISON'),
+    ]
+  },
+  {
+    id: 'literature-review',
+    name: 'Literature Review',
+    description: 'Index papers, search, synthesize findings',
+    icon: '📖',
+    category: 'knowledge',
+    cells: [
+      vectorIndex('PAPER 1', 'papers/paper1.pdf'),
+      vectorIndex('PAPER 2', 'papers/paper2.pdf'),
+      vectorIndex('PAPER 3', 'papers/paper3.pdf'),
+      input('RESEARCH QUESTION', 'What are the current approaches to federated learning?'),
+      vectorSearch('SEARCH', '{{input}}', 'previous'),
+      ai('SYNTHESIZE', 'Synthesize the findings from the search results into a coherent literature review. Identify themes, gaps, and future directions.', 'A', 'previous'),
+      output('REVIEW'),
+    ]
+  },
+  {
+    id: 'fact-checker',
+    name: 'Fact Checker',
+    description: 'Search indexed sources to verify claims',
+    icon: '✅',
+    category: 'knowledge',
+    cells: [
+      input('CLAIM', 'Machine learning models require massive datasets to work'),
+      vectorSearch('SEARCH', '{{input}}', 'previous'),
+      ai('VERIFY', 'Based on the search results, verify the claim. Is it accurate? What do the sources say?', 'B', 'previous'),
+      ai('EVIDENCE', 'Provide specific evidence from the search results supporting or refuting the claim.', 'A', 'all'),
+      output('VERIFICATION'),
+    ]
+  },
+  {
+    id: 'index-and-summarize',
+    name: 'Index & Summarize',
+    description: 'Index a document, then get semantic summary',
+    icon: '📝',
+    category: 'knowledge',
+    cells: [
+      vectorIndex('INDEX', 'long-document.pdf'),
+      input('FOCUS', 'key findings and recommendations'),
+      vectorSearch('SEARCH', '{{input}}', 'previous'),
+      ai('SUMMARY', 'Based on the search results, create a concise summary focusing on the requested aspects.', 'A', 'previous'),
+      output('SUMMARY'),
+    ]
+  },
+  {
+    id: 'semantic-similarity',
+    name: 'Find Similar Content',
+    description: 'Search for semantically similar documents',
+    icon: '🔗',
+    category: 'knowledge',
+    cells: [
+      input('REFERENCE', 'documents/target-doc.pdf'),
+      data('LOAD', '{{input}}', 'summarize', 'previous'),
+      vectorSearch('FIND SIMILAR', '{{input}}', 'previous'),
+      ai('ANALYZE', 'Review the similar documents found. What makes them similar? What are the common themes?', 'A', 'previous'),
+      output('SIMILAR DOCS'),
+    ]
+  },
+  {
+    id: 'knowledge-graph',
+    name: 'Build Knowledge Graph',
+    description: 'Index docs, search for connections',
+    icon: '🕸️',
+    category: 'knowledge',
+    cells: [
+      vectorIndex('INDEX', 'documents/'),
+      input('CONCEPT', 'artificial intelligence'),
+      vectorSearch('SEARCH', '{{input}}', 'previous'),
+      ai('CONNECTIONS', 'From the search results, identify related concepts, people, and ideas. Map the connections.', 'A', 'previous'),
+      ai('GRAPH', 'Organize these connections into a knowledge graph structure showing relationships.', 'B', 'previous'),
+      output('GRAPH'),
+    ]
+  },
+  {
+    id: 'rag-enhanced-chat',
+    name: 'RAG-Enhanced Chat',
+    description: 'Chat with your documents as context',
+    icon: '💭',
+    category: 'knowledge',
+    cells: [
+      input('QUESTION', 'How do transformers work?'),
+      vectorSearch('CONTEXT', '{{input}}', 'previous'),
+      ai('CHAT', 'You have context from indexed documents. Answer the question using this context. If the context doesn\'t contain relevant information, say so.', 'A', 'all'),
+      output('RESPONSE'),
     ]
   },
 
@@ -1139,6 +1415,102 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
       output('PROMPT'),
     ]
   },
+
+  // ============================================
+  // TERMINAL HISTORY - Analyze past conversations
+  // ============================================
+  {
+    id: 'conversation-analysis',
+    name: 'Conversation Analysis',
+    description: 'Analyze terminal history to find patterns and insights',
+    icon: '📜',
+    category: 'knowledge',
+    cells: [
+      input('TOPIC', 'python programming'),
+      terminalHistory('HISTORY', '{{input}}', 'none'),
+      ai('PATTERNS', 'Analyze the conversation history. What topics come up repeatedly? What questions are asked? What patterns do you see?', 'B', 'previous'),
+      ai('INSIGHTS', 'Based on the patterns, what insights can you draw? What are the user\'s main interests or pain points?', 'A', 'all'),
+      output('ANALYSIS'),
+    ]
+  },
+  {
+    id: 'conversation-summary',
+    name: 'Conversation Summary',
+    description: 'Summarize recent terminal conversations',
+    icon: '📝',
+    category: 'knowledge',
+    cells: [
+      terminalHistory('RECENT', '{"limit": 20, "types": ["user", "ai"]}', 'none'),
+      ai('SUMMARY', 'Summarize these conversations. What were the main topics? What questions were asked and answered?', 'A', 'previous'),
+      output('SUMMARY'),
+    ]
+  },
+  {
+    id: 'question-extractor',
+    name: 'Question Extractor',
+    description: 'Extract all questions from terminal history',
+    icon: '❓',
+    category: 'knowledge',
+    cells: [
+      input('SEARCH', 'machine learning'),
+      terminalHistory('HISTORY', '{{input}}', 'none'),
+      ai('EXTRACT', 'Extract all questions from the history. List them clearly, grouped by topic if possible.', 'B', 'previous'),
+      ai('ANSWERS', 'For each question, provide a brief answer based on the conversation history.', 'A', 'all'),
+      output('Q&A'),
+    ]
+  },
+  {
+    id: 'conversation-context',
+    name: 'Conversation Context',
+    description: 'Get context from terminal history for a new question',
+    icon: '💭',
+    category: 'knowledge',
+    cells: [
+      input('QUESTION', 'How do I use the vector search feature?'),
+      terminalHistory('CONTEXT', '{{input}}', 'none'),
+      ai('ANSWER', 'Using the conversation history as context, answer the question. Reference relevant past conversations if helpful.', 'A', 'all'),
+      output('ANSWER'),
+    ]
+  },
+  {
+    id: 'topic-timeline',
+    name: 'Topic Timeline',
+    description: 'Create a timeline of topics from terminal history',
+    icon: '📅',
+    category: 'knowledge',
+    cells: [
+      terminalHistory('ALL', '{"limit": 50, "types": ["user"]}', 'none'),
+      ai('TIMELINE', 'Create a chronological timeline of topics discussed. Group by date/time periods. Show the evolution of interests.', 'A', 'previous'),
+      output('TIMELINE'),
+    ]
+  },
+  {
+    id: 'conversation-rag',
+    name: 'Conversation RAG',
+    description: 'Use terminal history as context for AI responses',
+    icon: '🔗',
+    category: 'knowledge',
+    cells: [
+      input('QUESTION', 'What have we discussed about this topic before?'),
+      terminalHistory('SEARCH', '{{input}}', 'none'),
+      ai('CONTEXT', 'Review the conversation history. What relevant context exists?', 'B', 'previous'),
+      ai('ANSWER', 'Answer the question using the conversation history as context. Reference specific past discussions.', 'A', 'all'),
+      output('ANSWER'),
+    ]
+  },
+  {
+    id: 'terminal-insights',
+    name: 'Terminal Insights',
+    description: 'Find insights from your terminal conversation patterns',
+    icon: '💡',
+    category: 'knowledge',
+    cells: [
+      terminalHistory('RECENT', '{"limit": 30}', 'none'),
+      ai('ANALYZE', 'What patterns emerge? What topics are discussed most? What questions repeat? What skills are being developed?', 'B', 'previous'),
+      ai('INSIGHTS', 'Based on the analysis, what insights can you provide? What recommendations?', 'A', 'previous'),
+      output('INSIGHTS'),
+    ]
+  },
 ]
 
 
@@ -1165,7 +1537,7 @@ export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircui
   }, [])
   
   useEffect(() => {
-    refreshSavedCircuits()
+    refreshCircuitsFromBackend().then(refreshSavedCircuits)
     // Refresh periodically to catch saves from other parts of the app
     const interval = setInterval(refreshSavedCircuits, 2000)
     return () => clearInterval(interval)
@@ -1199,7 +1571,7 @@ export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircui
   return (
     <div 
       className={`h-full bg-slate border-r border-terminal-border transition-all duration-200 flex flex-col ${
-        isCollapsed ? 'w-10' : 'w-56'
+        isCollapsed ? 'w-10' : 'w-64'
       }`}
     >
       {/* Header */}

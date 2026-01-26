@@ -29,6 +29,9 @@ export const ModuleNode = memo(({ data, selected }: NodeProps<ModuleNodeData>) =
     data_loader: '📁',
     conditional: '⚡',
     web_fetch: '🌐',
+    vector_index: '📚',
+    vector_search: '🔍',
+    terminal_history: '📜',
   }
 
   const headerColors: Record<ModuleType, string> = {
@@ -41,6 +44,9 @@ export const ModuleNode = memo(({ data, selected }: NodeProps<ModuleNodeData>) =
     data_loader: 'bg-cyan-600 text-white',
     conditional: 'bg-purple-600 text-white',
     web_fetch: 'bg-blue-600 text-white',
+    vector_index: 'bg-emerald-600 text-white',
+    vector_search: 'bg-indigo-600 text-white',
+    terminal_history: 'bg-orange-600 text-white',
   }
 
   return (

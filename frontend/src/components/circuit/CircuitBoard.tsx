@@ -21,6 +21,7 @@ import { useSocket } from '../../hooks/useSocket'
 import { useSystemStatus } from '../../hooks/useSystemStatus'
 import { useSendToTerminal } from '../../hooks/useTerminalOutput'
 import { saveCircuit, saveModelSlots, loadModelSlots, SavedCircuit } from '../../hooks/useCircuitRunner'
+import { loadModulesFromBackend, saveModuleToBackend, deleteModuleFromBackend } from '../../hooks/useModules'
 
 type ViewMode = 'linear' | 'canvas'
 
@@ -199,6 +200,61 @@ export function CircuitBoard() {
   useEffect(() => {
     saveModelSlots(modelSlots)
   }, [modelSlots])
+
+  // React Flow state (must be declared before useEffects that use setNodes/setEdges)
+  const [nodes, setNodes, onNodesChange] = useNodesState(cellsToNodes(initialCells))
+  const [edges, setEdges, onEdgesChange] = useEdgesState(generateEdges(initialCells))
+
+  // Load modules from backend on mount
+  useEffect(() => {
+    let mounted = true
+    loadModulesFromBackend().then((loadedModules) => {
+      if (mounted && loadedModules.length > 0) {
+        // Only load if we have modules from backend and current cells are just initial cells
+        const isInitialState = cells.length === initialCells.length && 
+          cells.every((cell, idx) => cell.id === initialCells[idx]?.id)
+        if (isInitialState) {
+          // Extract positions and clean up temporary _position field
+          const cleanedModules = loadedModules.map((cell: any) => {
+            const { _position, ...cleanCell } = cell
+            return cleanCell
+          })
+          setCells(cleanedModules)
+          if (viewMode === 'canvas') {
+            // Use positions from backend modules
+            const nodesWithPositions = loadedModules.map((cell: any, index: number) => {
+              const pos = cell._position || getNodePosition(index, cleanedModules)
+              return {
+                id: cell.id,
+                type: 'module' as const,
+                position: pos,
+                data: {
+                  label: cell.label,
+                  moduleType: cell.type,
+                  status: cell.status,
+                  content: cell.content,
+                },
+              }
+            })
+            setNodes(nodesWithPositions)
+            setEdges(generateEdges(cleanedModules))
+          }
+        }
+      }
+    })
+    return () => { mounted = false }
+  }, []) // Only run on mount
+
+  // Helper to get position for a cell (must be after nodes is initialized)
+  const getCellPosition = useCallback((cellId: string): { x: number; y: number } => {
+    const index = cells.findIndex(c => c.id === cellId)
+    if (index === -1) return { x: 0, y: 0 }
+    if (viewMode === 'canvas') {
+      const node = nodes.find(n => n.id === cellId)
+      if (node) return node.position
+    }
+    return getNodePosition(index, cells)
+  }, [cells, nodes, viewMode])
   
   // Save the current circuit
   const handleSaveCircuit = useCallback(() => {
@@ -233,10 +289,6 @@ export function CircuitBoard() {
     if (modelSlots.A) return modelSlots.A
     return status.activeModel || models[0] || 'llama3.1:8b'
   }, [modelSlots, status.activeModel, models])
-  
-  // React Flow state (synced from cells in canvas mode)
-  const [nodes, setNodes, onNodesChange] = useNodesState(cellsToNodes(initialCells))
-  const [edges, setEdges, onEdgesChange] = useEdgesState(generateEdges(initialCells))
 
   // Sync nodes and edges when cells change in canvas mode
   useEffect(() => {
@@ -323,6 +375,9 @@ export function CircuitBoard() {
       data_loader: 'DATA',
       conditional: 'GATE',
       web_fetch: 'FETCH',
+      vector_index: 'INDEX',
+      vector_search: 'SEARCH',
+      terminal_history: 'HISTORY',
     }
 
     const newCell: CellData = {
@@ -337,35 +392,50 @@ export function CircuitBoard() {
       fetchMethod: type === 'web_fetch' ? 'GET' : undefined,
     }
     
-    setCells((prev) => [...prev, newCell])
+    setCells((prev) => {
+      const updated = [...prev, newCell]
+      // Persist to backend (async, don't wait)
+      setTimeout(() => {
+        const pos = viewMode === 'canvas' 
+          ? getNodePosition(updated.length - 1, updated)
+          : { x: 0, y: 0 }
+        saveModuleToBackend(newCell, pos).catch(() => {
+          // Silently fail - backend might be offline
+        })
+      }, 0)
+      return updated
+    })
     
     if (viewMode === 'canvas') {
-      const newCells = [...cells, newCell]
-      const pos = getNodePosition(newCells.length - 1, newCells)
-      const newNode: Node = {
-        id: newCell.id,
-        type: 'module',
-        position: pos,
-        data: {
-          label: newCell.label,
-          moduleType: type,
-          status: 'idle',
-          content: '',
-        },
-      }
-      setNodes((prev) => [...prev, newNode])
-      
-      if (lastNode) {
-        setEdges((prev) => [
-          ...prev,
-          {
-            id: `e-${lastNode.id}-${newCell.id}`,
-            source: lastNode.id,
-            target: newCell.id,
-            ...defaultEdgeOptions,
+      setNodes((prev) => {
+        const newCells = [...cells, newCell]
+        const pos = getNodePosition(newCells.length - 1, newCells)
+        const newNode: Node = {
+          id: newCell.id,
+          type: 'module',
+          position: pos,
+          data: {
+            label: newCell.label,
+            moduleType: type,
+            status: 'idle',
+            content: '',
           },
-        ])
-      }
+        }
+        const updated = [...prev, newNode]
+        const lastNode = prev.length > 0 ? prev[prev.length - 1] : null
+        if (lastNode) {
+          setEdges((prevEdges) => [
+            ...prevEdges,
+            {
+              id: `e-${lastNode.id}-${newCell.id}`,
+              source: lastNode.id,
+              target: newCell.id,
+              ...defaultEdgeOptions,
+            },
+          ])
+        }
+        return updated
+      })
     }
   }
 
@@ -376,12 +446,38 @@ export function CircuitBoard() {
       if (viewMode === 'canvas' && updates.loopBackTo !== undefined) {
         setEdges(generateEdges(updated))
       }
+      // Persist updated cell to backend
+      const updatedCell = updated.find(c => c.id === id)
+      if (updatedCell) {
+        const pos = getCellPosition(id)
+        saveModuleToBackend(updatedCell, pos)
+          .then(success => {
+            if (!success) {
+              console.warn(`[LOOM] Failed to save cell ${id} to backend, but continuing...`)
+            }
+          })
+          .catch(error => {
+            console.error(`[LOOM] Error saving cell ${id} to backend:`, error)
+          })
+      }
       return updated
     })
-  }, [viewMode])
+  }, [viewMode, getCellPosition])
 
   const deleteCell = (id: string) => {
     setCells((prev) => prev.filter((cell) => cell.id !== id))
+    // Delete from backend
+    deleteModuleFromBackend(id)
+      .then(success => {
+        if (success) {
+          console.log(`[LOOM] ✓ Successfully deleted module ${id} from backend`)
+        } else {
+          console.warn(`[LOOM] ⚠ Failed to delete module ${id} from backend`)
+        }
+      })
+      .catch(error => {
+        console.error(`[LOOM] ✗ Error deleting module ${id} from backend:`, error)
+      })
   }
 
   const moveCell = (id: string, direction: 'up' | 'down') => {
@@ -766,6 +862,171 @@ export function CircuitBoard() {
           throw new Error(`Fetch error: ${e instanceof Error ? e.message : e}`)
         }
       
+      case 'vector_index':
+        // Index a file into the vector store
+        const filePathToIndex = (input || cell.content || '').trim()
+        if (!filePathToIndex) {
+          throw new Error('No file path specified. Enter a file path in the cell content or connect from previous cell.')
+        }
+        
+        updateCell(cell.id, { output: `Indexing ${filePathToIndex}...` })
+        
+        try {
+          const response = await fetch('http://localhost:8000/api/search/index/file', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              file_path: filePathToIndex,
+              chunk_strategy: 'sentence',
+            }),
+          })
+          
+          if (!response.ok) {
+            const errData = await response.json()
+            throw new Error(errData.detail || 'Failed to index file')
+          }
+          
+          const result = await response.json()
+          if (result.success) {
+            const chunkCount = result.chunk_count || 0
+            const fileId = result.file_id || ''
+            return `✅ Indexed '${filePathToIndex}'\n📄 ${chunkCount} chunks created\n🆔 ID: ${fileId}`
+          } else {
+            throw new Error(result.error || 'Indexing failed')
+          }
+        } catch (e) {
+          throw new Error(`Vector indexing failed: ${e instanceof Error ? e.message : e}`)
+        }
+      
+      case 'vector_search':
+        // Search the vector store
+        const searchQuery = (input || cell.content || '').trim()
+        if (!searchQuery) {
+          throw new Error('No search query specified. Enter a query in the cell content or connect from previous cell.')
+        }
+        
+        updateCell(cell.id, { output: `Searching: ${searchQuery}...` })
+        
+        try {
+          const response = await fetch('http://localhost:8000/api/search/search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              query: searchQuery,
+              n_results: 5,
+              collection: 'loom_files', // Default to files collection
+            }),
+          })
+          
+          if (!response.ok) {
+            const errData = await response.json()
+            throw new Error(errData.detail || 'Search failed')
+          }
+          
+          const result = await response.json()
+          const results = result.results || []
+          
+          if (results.length === 0) {
+            return `🔍 No results found for: '${searchQuery}'\n\nMake sure you have indexed some documents first using the INDEX cell.`
+          }
+          
+          // Format results nicely
+          const outputLines = [`🔍 Found ${results.length} results for: '${searchQuery}'\n`]
+          
+          for (let i = 0; i < results.length; i++) {
+            const r = results[i]
+            const similarity = r.similarity || 0
+            const contentPreview = (r.content || '').substring(0, 200)
+            const metadata = r.metadata || {}
+            const source = metadata.file_path || metadata.source || 'unknown'
+            
+            outputLines.push(`\n[${i + 1}] Similarity: ${(similarity * 100).toFixed(1)}%`)
+            outputLines.push(`📄 Source: ${source}`)
+            outputLines.push(`💬 Preview: ${contentPreview}...`)
+          }
+          
+          // Also include full content for RAG context
+          const fullContext = results.map((r: any, i: number) => 
+            `[${i + 1}] ${r.content || ''}`
+          ).join('\n\n---\n\n')
+          
+          return outputLines.join('\n') + '\n\n---\n\n' + fullContext
+        } catch (e) {
+          throw new Error(`Vector search failed: ${e instanceof Error ? e.message : e}`)
+        }
+      
+      case 'terminal_history':
+        // Query terminal conversation history
+        const { queryTerminalHistory } = await import('../../hooks/useTerminalOutput')
+        
+        updateCell(cell.id, { output: 'Querying terminal history...' })
+        
+        try {
+          let query: any = {}
+          const content = (input || cell.content || '').trim()
+          
+          if (content) {
+            // Try to parse as JSON query
+            try {
+              query = JSON.parse(content)
+            } catch {
+              // If not JSON, treat as simple text search
+              query = { search: content }
+            }
+          }
+          
+          // Parse query parameters from cell properties if available
+          const cellQuery: any = {
+            search: query.search || (cell as any).terminalHistorySearch,
+            types: query.types || (cell as any).terminalHistoryTypes,
+            limit: query.limit || (cell as any).terminalHistoryLimit || 20,
+            since: query.since || (cell as any).terminalHistorySince,
+            before: query.before || (cell as any).terminalHistoryBefore,
+            sessionName: query.sessionName || (cell as any).terminalHistorySession,
+          }
+          
+          // Clean up undefined values
+          Object.keys(cellQuery).forEach(key => {
+            if (cellQuery[key] === undefined) delete cellQuery[key]
+          })
+          
+          const entries = queryTerminalHistory(cellQuery)
+          
+          if (entries.length === 0) {
+            return `📜 No terminal history entries found matching query.\n\nQuery: ${JSON.stringify(cellQuery, null, 2)}`
+          }
+          
+          // Format entries nicely
+          const outputLines = [`📜 Found ${entries.length} terminal history entries:\n`]
+          
+          for (let i = 0; i < entries.length; i++) {
+            const entry = entries[i]
+            const time = new Date(entry.timestamp).toLocaleString()
+            const typeIcon = {
+              user: '👤',
+              ai: '🤖',
+              system: '⚙️',
+              error: '❌',
+            }[entry.type] || '○'
+            
+            const contentPreview = entry.content.length > 200 
+              ? entry.content.substring(0, 200) + '...'
+              : entry.content
+            
+            outputLines.push(`\n[${i + 1}] ${typeIcon} [${entry.type.toUpperCase()}] ${time}`)
+            outputLines.push(`${contentPreview}`)
+          }
+          
+          // Also include full content for processing
+          const fullContext = entries.map((e, i) => 
+            `[${i + 1}] [${e.type}] ${new Date(e.timestamp).toISOString()}\n${e.content}`
+          ).join('\n\n---\n\n')
+          
+          return outputLines.join('\n') + '\n\n---\n\nFull Context:\n\n' + fullContext
+        } catch (e) {
+          throw new Error(`Terminal history query failed: ${e instanceof Error ? e.message : e}`)
+        }
+      
       default:
         return input
     }
@@ -965,6 +1226,15 @@ export function CircuitBoard() {
             <button onClick={() => addCell('web_fetch')} className="btn-terminal text-xs" style={{ borderColor: '#60a5fa', color: '#60a5fa' }}>
               + FETCH
             </button>
+            <button onClick={() => addCell('vector_index')} className="btn-terminal text-xs" style={{ borderColor: '#4ade80', color: '#4ade80' }}>
+              + INDEX
+            </button>
+            <button onClick={() => addCell('vector_search')} className="btn-terminal text-xs" style={{ borderColor: '#facc15', color: '#facc15' }}>
+              + SEARCH
+            </button>
+            <button onClick={() => addCell('terminal_history')} className="btn-terminal text-xs" style={{ borderColor: '#fb923c', color: '#fb923c' }}>
+              + HISTORY
+            </button>
             <button onClick={() => addCell('markdown')} className="btn-terminal text-xs" style={{ borderColor: '#888', color: '#888' }}>
               + NOTE
             </button>
@@ -1028,17 +1298,25 @@ export function CircuitBoard() {
                     // Edges will regenerate via updateCell's effect
                   }
                 } else {
-                  // Regular edge update
-                  setEdges((eds) =>
-                    eds.map((edge) =>
-                      edge.id === oldEdge.id
-                        ? { ...edge, ...newConnection }
-                        : edge
+                  // Regular edge update - only update if source and target are valid
+                  if (newConnection.source && newConnection.target) {
+                    setEdges((eds) =>
+                      eds.map((edge) =>
+                        edge.id === oldEdge.id
+                          ? {
+                              ...edge,
+                              source: newConnection.source!,
+                              target: newConnection.target!,
+                              sourceHandle: newConnection.sourceHandle ?? edge.sourceHandle,
+                              targetHandle: newConnection.targetHandle ?? edge.targetHandle,
+                            }
+                          : edge
+                      )
                     )
-                  )
+                  }
                 }
               }}
-              onEdgeUpdateEnd={(oldEdge, newConnection) => {
+              onEdgeUpdateEnd={(oldEdge, _newConnection) => {
                 // After dragging ends, regenerate edges to ensure consistency
                 if (oldEdge.type === 'loopback') {
                   setEdges(generateEdges(cells))

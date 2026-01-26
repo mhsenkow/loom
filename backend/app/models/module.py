@@ -12,6 +12,13 @@ class ModuleType(str, Enum):
     AI_PROCESSOR = "ai_processor"
     SCRIPT_EXECUTION = "script_execution"
     DATA_INPUT = "data_input"
+    DATA_LOADER = "data_loader"
+    IMAGE_GEN = "image_gen"
+    MARKDOWN = "markdown"
+    CONDITIONAL = "conditional"
+    WEB_FETCH = "web_fetch"
+    VECTOR_INDEX = "vector_index"
+    VECTOR_SEARCH = "vector_search"
 
 
 class ModuleStatus(str, Enum):
@@ -46,6 +53,7 @@ class ModuleCreate(BaseModel):
     type: ModuleType
     content: str = ""
     position: Optional[Position] = None
+    id: Optional[str] = None  # Optional custom ID (for frontend cell IDs)
 
 
 class ModuleUpdate(BaseModel):
@@ -53,6 +61,11 @@ class ModuleUpdate(BaseModel):
     position: Optional[Position] = None
     status: Optional[ModuleStatus] = None
     metadata: Optional[dict[str, Any]] = None
+
+
+class ExecuteModuleRequest(BaseModel):
+    inputs: dict[str, Any] = {}
+    model: Optional[str] = None
 
 
 class ChatRequest(BaseModel):

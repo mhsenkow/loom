@@ -210,6 +210,71 @@ class OllamaClient:
         except Exception as e:
             raise RuntimeError(f"Ollama embed error: {e}")
     
+    async def pull_model(self, model_name: str) -> AsyncGenerator[dict, None]:
+        """
+        Pull/download a model from Ollama and stream progress updates
+        Yields progress dicts with status, completed, total, etc.
+        """
+        try:
+            print(f"[LOOM] Starting pull for model: {model_name}")
+            
+            # Try to get the pull stream - handle different API versions
+            pull_result = self.client.pull(model=model_name, stream=True)
+            
+            # Check if it's a coroutine (needs to be awaited first)
+            import inspect
+            if inspect.iscoroutine(pull_result):
+                pull_result = await pull_result
+            
+            # Now iterate over the async generator
+            async for progress in pull_result:
+                # Handle both dict and object responses
+                if isinstance(progress, dict):
+                    status = progress.get("status", "")
+                    completed = progress.get("completed")
+                    total = progress.get("total")
+                    digest = progress.get("digest", "")
+                    error = progress.get("error")
+                else:
+                    status = getattr(progress, 'status', '')
+                    completed = getattr(progress, 'completed', None)
+                    total = getattr(progress, 'total', None)
+                    digest = getattr(progress, 'digest', '')
+                    error = getattr(progress, 'error', None)
+                
+                # Ensure completed and total are integers, default to 0 if None
+                completed = int(completed) if completed is not None else 0
+                total = int(total) if total is not None else 0
+                
+                result = {
+                    "status": status,
+                    "completed": completed,
+                    "total": total,
+                    "digest": digest or "",
+                }
+                
+                # Include error if present
+                if error:
+                    result["error"] = str(error)
+                    print(f"[LOOM] Pull error in progress: {error}")
+                
+                yield result
+                
+        except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            print(f"[LOOM] Exception in pull_model for {model_name}: {e}")
+            print(f"[LOOM] Traceback: {error_details}")
+            yield {
+                "status": "error",
+                "error": str(e),
+                "message": f"Failed to pull model: {str(e)}",
+            }
+    
     def set_default_model(self, model: str):
         """Set the default model for operations"""
         self._default_model = model
+
+
+# Singleton for use by main, routers, and module executor
+ollama_client = OllamaClient()

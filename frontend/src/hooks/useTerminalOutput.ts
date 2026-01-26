@@ -117,3 +117,73 @@ export function useTerminalOutputListener(onReceive: (entry: LogEntry) => void) 
 export function getCircuitContext(): string {
   return terminalOutputBus.getContextSummary()
 }
+
+// Query terminal history for circuits
+export interface TerminalHistoryQuery {
+  types?: LogEntry['type'][]  // Filter by entry types
+  search?: string              // Text search in content
+  limit?: number               // Max entries to return
+  since?: number               // Timestamp: only entries after this
+  before?: number              // Timestamp: only entries before this
+  sessionName?: string         // Query specific session
+}
+
+export function queryTerminalHistory(query: TerminalHistoryQuery = {}): LogEntry[] {
+  const STORAGE_KEY = 'loom-terminal-history'
+  const SESSIONS_KEY = 'loom-terminal-sessions'
+  
+  try {
+    let entries: LogEntry[] = []
+    
+    // Load from current session or specific session
+    if (query.sessionName) {
+      const sessionData = localStorage.getItem(`${SESSIONS_KEY}:${query.sessionName}`)
+      if (sessionData) {
+        entries = JSON.parse(sessionData)
+      }
+    } else {
+      // Load current session
+      const stored = localStorage.getItem(STORAGE_KEY)
+      if (stored) {
+        entries = JSON.parse(stored)
+      }
+    }
+    
+    // Apply filters
+    let filtered = entries
+    
+    // Filter by type
+    if (query.types && query.types.length > 0) {
+      filtered = filtered.filter(e => query.types!.includes(e.type))
+    }
+    
+    // Filter by timestamp range
+    if (query.since !== undefined) {
+      filtered = filtered.filter(e => e.timestamp >= query.since!)
+    }
+    if (query.before !== undefined) {
+      filtered = filtered.filter(e => e.timestamp <= query.before!)
+    }
+    
+    // Text search
+    if (query.search) {
+      const searchLower = query.search.toLowerCase()
+      filtered = filtered.filter(e => 
+        e.content.toLowerCase().includes(searchLower)
+      )
+    }
+    
+    // Sort by timestamp (newest first)
+    filtered.sort((a, b) => b.timestamp - a.timestamp)
+    
+    // Apply limit
+    if (query.limit !== undefined && query.limit > 0) {
+      filtered = filtered.slice(0, query.limit)
+    }
+    
+    return filtered
+  } catch (e) {
+    console.warn('[LOOM] Failed to query terminal history:', e)
+    return []
+  }
+}

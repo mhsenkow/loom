@@ -5,6 +5,7 @@ import { useSystemStatus } from './useSystemStatus'
 
 const CIRCUITS_KEY = 'loom-saved-circuits'
 const SLOTS_KEY = 'loom-model-slots'
+const API_BASE = 'http://localhost:8000'
 
 export interface SavedCircuit {
   name: string
@@ -51,7 +52,7 @@ export const circuitExecutionBus = {
   getCurrent: () => currentExecution,
 }
 
-// Load saved circuits
+// Load saved circuits (from localStorage; call refreshCircuitsFromBackend to sync from API)
 export function loadSavedCircuits(): Record<string, SavedCircuit> {
   try {
     const stored = localStorage.getItem(CIRCUITS_KEY)
@@ -64,12 +65,36 @@ export function loadSavedCircuits(): Record<string, SavedCircuit> {
   return {}
 }
 
-// Save a circuit
+// Fetch circuits from backend and merge into localStorage. Call on app/sidebar mount.
+export async function refreshCircuitsFromBackend(): Promise<void> {
+  try {
+    const r = await fetch(`${API_BASE}/api/circuits/`)
+    if (!r.ok) return
+    const fromApi = await r.json()
+    const local = loadSavedCircuits()
+    const merged = { ...local, ...fromApi }
+    localStorage.setItem(CIRCUITS_KEY, JSON.stringify(merged))
+  } catch {
+    // Backend unreachable; keep using localStorage
+  }
+}
+
+// Save a circuit (localStorage + backend when available)
 export function saveCircuit(circuit: SavedCircuit): boolean {
   try {
     const circuits = loadSavedCircuits()
     circuits[circuit.name] = circuit
     localStorage.setItem(CIRCUITS_KEY, JSON.stringify(circuits))
+    fetch(`${API_BASE}/api/circuits/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: circuit.name,
+        description: circuit.description,
+        cells: circuit.cells,
+        modelSlots: circuit.modelSlots,
+      }),
+    }).catch(() => {})
     return true
   } catch (e) {
     console.warn('[LOOM] Failed to save circuit:', e)
@@ -77,12 +102,13 @@ export function saveCircuit(circuit: SavedCircuit): boolean {
   }
 }
 
-// Delete a circuit
+// Delete a circuit (localStorage + backend when available)
 export function deleteCircuit(name: string): boolean {
   try {
     const circuits = loadSavedCircuits()
     delete circuits[name]
     localStorage.setItem(CIRCUITS_KEY, JSON.stringify(circuits))
+    fetch(`${API_BASE}/api/circuits/${encodeURIComponent(name)}`, { method: 'DELETE' }).catch(() => {})
     return true
   } catch (e) {
     console.warn('[LOOM] Failed to delete circuit:', e)
@@ -428,6 +454,173 @@ export function useCircuitRunner() {
             throw new Error(`Request timeout after ${timeout / 1000}s`)
           }
           throw new Error(`Fetch error: ${e instanceof Error ? e.message : e}`)
+        }
+      
+      case 'vector_index':
+        // Index a file into the vector store
+        const filePathToIndex = (input || cell.content || '').trim()
+        if (!filePathToIndex) {
+          throw new Error('No file path specified. Enter a file path in the cell content or connect from previous cell.')
+        }
+        
+        console.log(`[LOOM] Indexing file: ${filePathToIndex}`)
+        
+        try {
+          const response = await fetch('http://localhost:8000/api/search/index/file', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              file_path: filePathToIndex,
+              chunk_strategy: 'sentence',
+            }),
+          })
+          
+          if (!response.ok) {
+            const errData = await response.json()
+            throw new Error(errData.detail || 'Failed to index file')
+          }
+          
+          const result = await response.json()
+          if (result.success) {
+            const chunkCount = result.chunk_count || 0
+            const fileId = result.file_id || ''
+            return `✅ Indexed '${filePathToIndex}'\n📄 ${chunkCount} chunks created\n🆔 ID: ${fileId}`
+          } else {
+            throw new Error(result.error || 'Indexing failed')
+          }
+        } catch (e) {
+          throw new Error(`Vector indexing failed: ${e instanceof Error ? e.message : e}`)
+        }
+      
+      case 'vector_search':
+        // Search the vector store
+        const searchQuery = (input || cell.content || '').trim()
+        if (!searchQuery) {
+          throw new Error('No search query specified. Enter a query in the cell content or connect from previous cell.')
+        }
+        
+        console.log(`[LOOM] Searching vector store: ${searchQuery}`)
+        
+        try {
+          const response = await fetch('http://localhost:8000/api/search/search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              query: searchQuery,
+              n_results: 5,
+              collection: 'loom_files', // Default to files collection
+            }),
+          })
+          
+          if (!response.ok) {
+            const errData = await response.json()
+            throw new Error(errData.detail || 'Search failed')
+          }
+          
+          const result = await response.json()
+          const results = result.results || []
+          
+          if (results.length === 0) {
+            return `🔍 No results found for: '${searchQuery}'\n\nMake sure you have indexed some documents first using the INDEX cell.`
+          }
+          
+          // Format results nicely
+          const outputLines = [`🔍 Found ${results.length} results for: '${searchQuery}'\n`]
+          
+          for (let i = 0; i < results.length; i++) {
+            const r = results[i]
+            const similarity = r.similarity || 0
+            const contentPreview = (r.content || '').substring(0, 200)
+            const metadata = r.metadata || {}
+            const source = metadata.file_path || metadata.source || 'unknown'
+            
+            outputLines.push(`\n[${i + 1}] Similarity: ${(similarity * 100).toFixed(1)}%`)
+            outputLines.push(`📄 Source: ${source}`)
+            outputLines.push(`💬 Preview: ${contentPreview}...`)
+          }
+          
+          // Also include full content for RAG context
+          const fullContext = results.map((r: any, i: number) => 
+            `[${i + 1}] ${r.content || ''}`
+          ).join('\n\n---\n\n')
+          
+          return outputLines.join('\n') + '\n\n---\n\n' + fullContext
+        } catch (e) {
+          throw new Error(`Vector search failed: ${e instanceof Error ? e.message : e}`)
+        }
+      
+      case 'terminal_history':
+        // Query terminal conversation history
+        // Cell content can be JSON query or simple text search
+        // Format: JSON query like {"search": "keyword", "types": ["user", "ai"], "limit": 10}
+        // Or simple text: "keyword" (searches all entries)
+        const { queryTerminalHistory } = await import('./useTerminalOutput')
+        
+        try {
+          let query: any = {}
+          const content = (input || cell.content || '').trim()
+          
+          if (content) {
+            // Try to parse as JSON query
+            try {
+              query = JSON.parse(content)
+            } catch {
+              // If not JSON, treat as simple text search
+              query = { search: content }
+            }
+          }
+          
+          // Parse query parameters from cell properties if available
+          // Support: terminalHistoryTypes, terminalHistoryLimit, terminalHistorySince, terminalHistoryBefore
+          const cellQuery: any = {
+            search: query.search || (cell as any).terminalHistorySearch,
+            types: query.types || (cell as any).terminalHistoryTypes,
+            limit: query.limit || (cell as any).terminalHistoryLimit || 20,
+            since: query.since || (cell as any).terminalHistorySince,
+            before: query.before || (cell as any).terminalHistoryBefore,
+            sessionName: query.sessionName || (cell as any).terminalHistorySession,
+          }
+          
+          // Clean up undefined values
+          Object.keys(cellQuery).forEach(key => {
+            if (cellQuery[key] === undefined) delete cellQuery[key]
+          })
+          
+          const entries = queryTerminalHistory(cellQuery)
+          
+          if (entries.length === 0) {
+            return `📜 No terminal history entries found matching query.\n\nQuery: ${JSON.stringify(cellQuery, null, 2)}`
+          }
+          
+          // Format entries nicely
+          const outputLines = [`📜 Found ${entries.length} terminal history entries:\n`]
+          
+          for (let i = 0; i < entries.length; i++) {
+            const entry = entries[i]
+            const time = new Date(entry.timestamp).toLocaleString()
+            const typeIcon = {
+              user: '👤',
+              ai: '🤖',
+              system: '⚙️',
+              error: '❌',
+            }[entry.type] || '○'
+            
+            const contentPreview = entry.content.length > 200 
+              ? entry.content.substring(0, 200) + '...'
+              : entry.content
+            
+            outputLines.push(`\n[${i + 1}] ${typeIcon} [${entry.type.toUpperCase()}] ${time}`)
+            outputLines.push(`${contentPreview}`)
+          }
+          
+          // Also include full content for processing
+          const fullContext = entries.map((e, i) => 
+            `[${i + 1}] [${e.type}] ${new Date(e.timestamp).toISOString()}\n${e.content}`
+          ).join('\n\n---\n\n')
+          
+          return outputLines.join('\n') + '\n\n---\n\nFull Context:\n\n' + fullContext
+        } catch (e) {
+          throw new Error(`Terminal history query failed: ${e instanceof Error ? e.message : e}`)
         }
       
       default:

@@ -8,6 +8,9 @@ export type ModuleType =
   | 'data_loader'
   | 'conditional'
   | 'web_fetch'
+  | 'vector_index'
+  | 'vector_search'
+  | 'terminal_history'
 
 export type ModuleStatus = 'idle' | 'running' | 'success' | 'error'
 

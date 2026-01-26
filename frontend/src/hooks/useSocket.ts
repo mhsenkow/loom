@@ -27,73 +27,135 @@ type AIChunkHandler = (chunk: AIChunk) => void
 type AIStatusHandler = (status: AIStatus) => void
 type ModuleStatusHandler = (status: ModuleStatus) => void
 
-export function useSocket() {
-  const [state, setState] = useState<SocketState>({
-    connected: false,
-    error: null,
-  })
-  
-  const socketRef = useRef<Socket | null>(null)
-  const aiChunkHandlerRef = useRef<AIChunkHandler | null>(null)
-  const aiStatusHandlerRef = useRef<AIStatusHandler | null>(null)
-  const moduleStatusHandlerRef = useRef<ModuleStatusHandler | null>(null)
+// Singleton socket instance - shared across all components
+let globalSocket: Socket | null = null
+let socketState: SocketState = { connected: false, error: null }
+const stateListeners = new Set<(state: SocketState) => void>()
 
-  useEffect(() => {
-    // Create socket connection
-    const socket = io(BACKEND_URL, {
+// AI event handlers - multiple components can register handlers
+// Use a Map to track active handlers per request to prevent duplicates
+const activeChunkHandlers = new Map<symbol, AIChunkHandler>()
+const activeStatusHandlers = new Map<symbol, AIStatusHandler>()
+const moduleStatusHandlers = new Set<ModuleStatusHandler>()
+
+function getOrCreateSocket(): Socket {
+  if (!globalSocket) {
+    globalSocket = io(BACKEND_URL, {
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
+      autoConnect: true,
     })
-
-    socketRef.current = socket
 
     // Connection handlers
-    socket.on('connect', () => {
+    globalSocket.on('connect', () => {
       console.log('[LOOM] Connected to backend')
-      setState({ connected: true, error: null })
+      socketState = { connected: true, error: null }
+      stateListeners.forEach(listener => listener(socketState))
     })
 
-    socket.on('disconnect', () => {
-      console.log('[LOOM] Disconnected from backend')
-      setState({ connected: false, error: null })
+    globalSocket.on('disconnect', (reason) => {
+      console.log('[LOOM] Disconnected from backend:', reason)
+      socketState = { connected: false, error: null }
+      stateListeners.forEach(listener => listener(socketState))
     })
 
-    socket.on('connect_error', (error) => {
+    globalSocket.on('connect_error', (error) => {
       console.error('[LOOM] Connection error:', error)
-      setState({ connected: false, error: error.message })
+      socketState = { connected: false, error: error.message }
+      stateListeners.forEach(listener => listener(socketState))
     })
 
     // System messages
-    socket.on('system', (data) => {
+    globalSocket.on('system', (data) => {
       console.log('[LOOM] System message:', data)
     })
 
-    // AI response handlers
-    socket.on('ai_chunk', (data: AIChunk) => {
-      if (aiChunkHandlerRef.current) {
-        aiChunkHandlerRef.current(data)
-      }
+    // AI response handlers - broadcast to all active handlers
+    globalSocket.on('ai_chunk', (data: AIChunk) => {
+      activeChunkHandlers.forEach(handler => handler(data))
     })
 
-    socket.on('ai_status', (data: AIStatus) => {
-      if (aiStatusHandlerRef.current) {
-        aiStatusHandlerRef.current(data)
-      }
+    globalSocket.on('ai_status', (data: AIStatus) => {
+      // Collect request IDs to remove after iteration (avoid modifying during iteration)
+      const completedRequests: symbol[] = []
+      
+      activeStatusHandlers.forEach((handler, requestId) => {
+        handler(data)
+        // Mark for removal when request completes
+        if (data.status === 'success' || data.status === 'error') {
+          completedRequests.push(requestId)
+        }
+      })
+      
+      // Remove completed request handlers
+      completedRequests.forEach(requestId => {
+        activeStatusHandlers.delete(requestId)
+        activeChunkHandlers.delete(requestId)
+      })
     })
 
     // Module status handlers
-    socket.on('module_status', (data: ModuleStatus) => {
-      if (moduleStatusHandlerRef.current) {
-        moduleStatusHandlerRef.current(data)
-      }
+    globalSocket.on('module_status', (data: ModuleStatus) => {
+      moduleStatusHandlers.forEach(handler => handler(data))
     })
+
+    // Model pull status handlers
+    globalSocket.on('pull_status', (data: any) => {
+      // This will be handled by components that register pull handlers
+      console.log('[LOOM] Pull status:', data)
+    })
+
+    // Models updated event
+    globalSocket.on('models_updated', (data: any) => {
+      console.log('[LOOM] Models updated:', data)
+      // Trigger a custom event that components can listen to
+      window.dispatchEvent(new CustomEvent('loom:models_updated', { detail: data }))
+    })
+  }
+  
+  return globalSocket
+}
+
+export function useSocket() {
+  const [state, setState] = useState<SocketState>(socketState)
+  const currentRequestIdRef = useRef<symbol | null>(null)
+  const moduleStatusHandlerRef = useRef<ModuleStatusHandler | null>(null)
+
+  useEffect(() => {
+    // Get or create the singleton socket (ensures it's initialized)
+    getOrCreateSocket()
+
+    // Register state listener
+    const stateListener = (newState: SocketState) => {
+      setState(newState)
+    }
+    stateListeners.add(stateListener)
+    
+    // Set initial state
+    setState(socketState)
+
+    // Register module status handler
+    if (moduleStatusHandlerRef.current) {
+      moduleStatusHandlers.add(moduleStatusHandlerRef.current)
+    }
 
     // Cleanup on unmount
     return () => {
-      socket.disconnect()
-      socketRef.current = null
+      stateListeners.delete(stateListener)
+      
+      // Remove active request handlers
+      if (currentRequestIdRef.current) {
+        activeChunkHandlers.delete(currentRequestIdRef.current)
+        activeStatusHandlers.delete(currentRequestIdRef.current)
+        currentRequestIdRef.current = null
+      }
+      
+      // Remove module status handler
+      if (moduleStatusHandlerRef.current) {
+        moduleStatusHandlers.delete(moduleStatusHandlerRef.current)
+      }
     }
   }, [])
 
@@ -104,16 +166,32 @@ export function useSocket() {
     onChunk?: AIChunkHandler,
     onStatus?: AIStatusHandler,
   ) => {
-    if (!socketRef.current?.connected) {
+    const socket = getOrCreateSocket()
+    
+    if (!socket.connected) {
       console.warn('[LOOM] Cannot send chat: not connected')
       return false
     }
 
-    // Set handlers for this request
-    aiChunkHandlerRef.current = onChunk || null
-    aiStatusHandlerRef.current = onStatus || null
+    // Remove any existing handlers for this component
+    if (currentRequestIdRef.current) {
+      activeChunkHandlers.delete(currentRequestIdRef.current)
+      activeStatusHandlers.delete(currentRequestIdRef.current)
+    }
 
-    socketRef.current.emit('chat', { prompt, model })
+    // Create a unique request ID for this chat request
+    const requestId = Symbol('chat-request')
+    currentRequestIdRef.current = requestId
+    
+    // Register handlers with the request ID
+    if (onChunk) {
+      activeChunkHandlers.set(requestId, onChunk)
+    }
+    if (onStatus) {
+      activeStatusHandlers.set(requestId, onStatus)
+    }
+
+    socket.emit('chat', { prompt, model })
     return true
   }, [])
 
@@ -124,14 +202,20 @@ export function useSocket() {
     inputs: Record<string, unknown> = {},
     onStatus?: ModuleStatusHandler,
   ) => {
-    if (!socketRef.current?.connected) {
+    const socket = getOrCreateSocket()
+    
+    if (!socket.connected) {
       console.warn('[LOOM] Cannot execute module: not connected')
       return false
     }
 
     moduleStatusHandlerRef.current = onStatus || null
+    
+    if (onStatus) {
+      moduleStatusHandlers.add(onStatus)
+    }
 
-    socketRef.current.emit('execute_module', {
+    socket.emit('execute_module', {
       module_id: moduleId,
       type,
       inputs,
@@ -139,9 +223,41 @@ export function useSocket() {
     return true
   }, [])
 
+  // Pull/download an Ollama model
+  const pullModel = useCallback((
+    modelName: string,
+    onStatus?: (status: any) => void,
+  ) => {
+    const socket = getOrCreateSocket()
+    
+    if (!socket.connected) {
+      console.warn('[LOOM] Cannot pull model: not connected')
+      return false
+    }
+
+    // Register handler for pull status updates
+    if (onStatus) {
+      const handler = (data: any) => onStatus(data)
+      socket.on('pull_status', handler)
+      
+      // Clean up handler when pull completes
+      const cleanup = (data: any) => {
+        if (data.status === 'success' || data.status === 'error') {
+          socket.off('pull_status', handler)
+          socket.off('pull_status', cleanup)
+        }
+      }
+      socket.on('pull_status', cleanup)
+    }
+
+    socket.emit('pull_model', { model: modelName })
+    return true
+  }, [])
+
   return {
     ...state,
     sendChat,
     executeModule,
+    pullModel,
   }
 }

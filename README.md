@@ -27,7 +27,7 @@ Before you begin, ensure you have the following installed:
 - Download from [nodejs.org](https://nodejs.org/)
 - Verify installation: `node --version`
 
-### 2. Python (3.10 or higher)
+### 2. Python (3.9 or higher, 3.10+ recommended)
 - Download from [python.org](https://www.python.org/downloads/)
 - Verify installation: `python --version` or `python3 --version`
 
@@ -46,6 +46,70 @@ Before you begin, ensure you have the following installed:
 - Download from [git-scm.com](https://git-scm.com/)
 
 ## 🚀 Quick Start
+
+**💡 Tip:** Not sure what to do? Run `make help` or `./help` to see all available commands!
+
+### 🎯 One-Command Start (Recommended)
+
+After cloning the repository, you can open Notebook with a single command:
+
+```bash
+cd loom
+make notebook-open
+```
+
+Or using the direct script:
+
+```bash
+cd loom
+./start
+```
+
+This will:
+- ✅ Check prerequisites (Python, Node.js, Ollama)
+- ✅ Set up Python virtual environment automatically
+- ✅ Install all dependencies (backend + frontend)
+- ✅ Start both backend and frontend servers
+- ✅ Display URLs when ready
+
+**That's it!** Open http://localhost:5173 in your browser.
+
+### Closing Notebook
+
+To close Notebook, you can:
+
+- Press `Ctrl+C` in the terminal where it's running
+- Or run: `make notebook-close` in a new terminal
+- Or run: `./close` from the project root
+
+### All Available Commands
+
+```bash
+# Open Notebook (start all services)
+make notebook-open
+# or
+./start
+
+# Close Notebook (stop all services)
+make notebook-close
+# or
+./close
+
+# Install dependencies
+make install
+
+# Clean up (remove dependencies and build artifacts)
+make clean
+
+# Show help
+make help
+```
+
+---
+
+### Manual Setup (Alternative)
+
+If you prefer to set up manually or the one-command start doesn't work:
 
 ### Step 1: Clone the Repository
 
@@ -187,7 +251,7 @@ Once LOOM is running, you can use these commands in the terminal:
   Then update the frontend connection (check `frontend/src/hooks/useSocket.ts`)
 
 - **Python dependencies fail to install**: 
-  - Make sure you're using Python 3.10+
+  - Make sure you're using Python 3.9+ (3.10+ recommended)
   - Try upgrading pip: `pip install --upgrade pip`
   - On macOS, you may need: `pip3 install -r requirements.txt`
 
@@ -319,7 +383,7 @@ npm run electron:build
 - Socket.IO Client
 
 ### Backend
-- Python 3.10+
+- Python 3.9+ (3.10+ recommended)
 - FastAPI + Socket.IO
 - Ollama (Local LLMs)
 - ChromaDB (Vector store)

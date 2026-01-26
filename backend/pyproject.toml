@@ -4,7 +4,8 @@ version = "0.1.0"
 description = "Loom Personal Intelligence OS - Backend"
 requires-python = ">=3.10"
 dependencies = [
-    "fastapi>=0.109.0",
+    "fastapi>=0.109.1",
+    "python-multipart>=0.0.7",
     "uvicorn[standard]>=0.27.0",
     "python-socketio>=5.10.0",
     "ollama>=0.1.6",

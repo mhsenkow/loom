@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Simple entry point - close Notebook with one command
+exec "$(dirname "$0")/scripts/stop.sh"

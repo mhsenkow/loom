@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { CommandInput } from './CommandInput'
 import { SessionPanel, SaveSessionModal } from './SessionPanel'
 import { CircuitTrace } from './CircuitTrace'
+import { DownloadPanel } from './DownloadPanel'
 import { useSocket } from '../../hooks/useSocket'
 import { useSystemStatus } from '../../hooks/useSystemStatus'
 import { terminalOutputBus, getCircuitContext } from '../../hooks/useTerminalOutput'
@@ -16,6 +17,7 @@ import {
 import { NOTEBOOK_TEMPLATES } from '../circuit/TemplatesSidebar'
 import type { LogEntry } from '../../types/module'
 
+const BACKEND_URL = 'http://localhost:8000'
 const STORAGE_KEY = 'loom-terminal-history'
 const SESSIONS_KEY = 'loom-terminal-sessions'
 const BEFORE_CLEAR_KEY = 'loom-terminal-before-clear'
@@ -149,7 +151,7 @@ function loadEntries(): LogEntry[] {
 }
 
 export function TerminalFeed() {
-  const { connected, sendChat } = useSocket()
+  const { connected, sendChat, pullModel } = useSocket()
   const { status, models, fetchModels, setActiveModel } = useSystemStatus()
   const { runCircuit, getRequiredInputs } = useCircuitRunner()
   const circuitExecution = useCircuitExecution()
@@ -164,6 +166,15 @@ export function TerminalFeed() {
   })
   const [showSaveModal, setShowSaveModal] = useState(false)
   const [circuitInputState, setCircuitInputState] = useState<CircuitInputState | null>(null)
+  const [downloadProgress, setDownloadProgress] = useState<{
+    model: string
+    status: string
+    completed: number
+    total: number
+    percent?: number
+    message?: string
+    error?: string
+  } | null>(null)
   
   const feedRef = useRef<HTMLDivElement>(null)
   const currentAIEntryRef = useRef<string | null>(null)
@@ -197,7 +208,7 @@ export function TerminalFeed() {
     return () => clearTimeout(timeout)
   }, [entries])
 
-  // Show connection status on change
+  // Show connection status on change and fetch models when connected
   useEffect(() => {
     const timestamp = Date.now()
     if (connected) {
@@ -207,8 +218,38 @@ export function TerminalFeed() {
         content: '[BACKEND CONNECTED] Ready for AI processing.',
         timestamp,
       }])
+      // Fetch models when backend connects (with retry)
+      const fetchWithRetry = async (attempts = 3) => {
+        for (let i = 0; i < attempts; i++) {
+          const modelList = await fetchModels()
+          if (modelList.length > 0) {
+            console.log(`[LOOM] Loaded ${modelList.length} models on connect`)
+            return
+          }
+          if (i < attempts - 1) {
+            // Wait before retry
+            await new Promise(resolve => setTimeout(resolve, 2000))
+          }
+        }
+        // This is normal - models will load when available
+        console.debug('[LOOM] Models will load automatically when available')
+      }
+      fetchWithRetry()
     }
-  }, [connected])
+  }, [connected, fetchModels])
+
+  // Listen for models_updated event
+  useEffect(() => {
+    const handleModelsUpdated = () => {
+      console.log('[LOOM] Models updated, refreshing list...')
+      fetchModels()
+    }
+    
+    window.addEventListener('loom:models_updated', handleModelsUpdated)
+    return () => {
+      window.removeEventListener('loom:models_updated', handleModelsUpdated)
+    }
+  }, [fetchModels])
 
   // Listen for output from Circuit notebook
   useEffect(() => {
@@ -333,6 +374,7 @@ export function TerminalFeed() {
           '  /ai <prompt>   - Send prompt to AI processor',
           '  /model <name>  - Switch active model',
           '  /models        - List available Ollama models',
+          '  /pull <name>   - Download a new Ollama model',
           '',
           'CIRCUITS:',
           '  /circuits           - List saved circuits',
@@ -351,6 +393,7 @@ export function TerminalFeed() {
           '',
           'SYSTEM:',
           '  /status        - Show system status',
+          '  /suggest       - Get model suggestions for your system',
           '  /help          - Show this message',
           '',
           'Current session auto-saves. Use SAVE in the Sessions panel or /saveas to name it.',
@@ -372,7 +415,7 @@ export function TerminalFeed() {
       case 'restore': {
         const stashed = loadBeforeClear()
         if (stashed && stashed.length > 0) {
-          setEntries(prev => [{
+          setEntries(() => [{
             id: `system-${timestamp}`,
             type: 'system',
             content: 'Restored.',
@@ -516,7 +559,25 @@ export function TerminalFeed() {
               setActiveModel(match)
               addSystemEntry(`Model switched to: ${match}`, timestamp)
             } else {
-              addErrorEntry(`Model "${modelName}" not found.\nAvailable: ${models.slice(0, 5).join(', ')}${models.length > 5 ? '...' : ''}`, timestamp)
+              // If no models loaded, try fetching them first
+              if (models.length === 0) {
+                addSystemEntry('No models loaded. Fetching from backend...', timestamp)
+                fetchModels().then((fetchedModels) => {
+                  if (fetchedModels.length > 0) {
+                    const match = fetchedModels.find((m: string) => m.toLowerCase().includes(modelName.toLowerCase()))
+                    if (match) {
+                      setActiveModel(match)
+                      addSystemEntry(`Model switched to: ${match}`, Date.now())
+                    } else {
+                      addErrorEntry(`Model "${modelName}" not found.\nAvailable: ${fetchedModels.slice(0, 10).join(', ')}${fetchedModels.length > 10 ? '...' : ''}`, Date.now())
+                    }
+                  } else {
+                    addErrorEntry(`Model "${modelName}" not found.\nNo models available. Is Ollama running?`, Date.now())
+                  }
+                })
+              } else {
+                addErrorEntry(`Model "${modelName}" not found.\nAvailable: ${models.slice(0, 10).join(', ')}${models.length > 10 ? '...' : ''}`, timestamp)
+              }
             }
           }
         }
@@ -525,14 +586,209 @@ export function TerminalFeed() {
       case 'models':
         addSystemEntry('Fetching models from Ollama...', timestamp)
         fetchModels().then((modelList) => {
+          console.log('[LOOM] Fetched models list:', modelList)
           if (modelList.length > 0) {
             const activeModel = status.activeModel
             const currentMarker = (m: string): string => m === activeModel ? ' ← active' : ''
-            addSystemEntry(`Available models:\n  ${modelList.map((m: string) => m + currentMarker(m)).join('\n  ')}`, Date.now())
+            addSystemEntry(`Available models (${modelList.length}):\n  ${modelList.map((m: string) => m + currentMarker(m)).join('\n  ')}`, Date.now())
           } else {
-            addSystemEntry('No models found. Is Ollama running?', Date.now())
+            addSystemEntry('No models found. Is Ollama running? Try: ollama list', Date.now())
           }
+        }).catch((error) => {
+          console.error('[LOOM] Error fetching models:', error)
+          addErrorEntry(`Failed to fetch models: ${error.message}`, Date.now())
         })
+        break
+
+      case 'pull':
+        const modelToPull = args.join(' ').trim()
+        if (!modelToPull) {
+          // Fetch and show suggestions based on system specs
+          addSystemEntry('Analyzing your system and fetching model suggestions...', timestamp)
+          fetch(`${BACKEND_URL}/api/suggest-models`)
+            .then(res => res.json())
+            .then(data => {
+              if (data.error) {
+                addErrorEntry(`Failed to get suggestions: ${data.error}`, Date.now())
+                addSystemEntry('Usage: /pull <model-name>\nExample: /pull llama3.1:8b', Date.now())
+                return
+              }
+              
+              const system = data.system || {}
+              const suggestions = data.suggestions || []
+              
+              let message = 'MODEL SUGGESTIONS FOR YOUR SYSTEM:\n\n'
+              message += `System: ${system.platform || 'Unknown'} | ${system.ram_gb || '?'}GB RAM`
+              if (system.gpu_available) {
+                message += ` | ${system.gpu_type || 'GPU'}`
+              }
+              message += '\n\n'
+              
+              if (suggestions.length > 0) {
+                message += 'Recommended models:\n'
+                suggestions.slice(0, 8).forEach((sug: any, idx: number) => {
+                  message += `  ${idx + 1}. ${sug.model}\n`
+                  message += `     ${sug.description}\n`
+                  message += `     → ${sug.reason}\n\n`
+                })
+                message += 'Usage: /pull <model-name>\nExample: /pull llama3.1:8b'
+              } else {
+                message += 'No suitable models found for your system specs.\n'
+                message += 'Popular models to try:\n'
+                message += '  llama3.1:8b\n  mistral\n  phi3:mini\n  tinyllama'
+              }
+              
+              addSystemEntry(message, Date.now())
+            })
+            .catch(err => {
+              console.error('[LOOM] Error fetching suggestions:', err)
+              addSystemEntry('Usage: /pull <model-name>\nExample: /pull llama3.1:8b\n\nPopular models:\n  llama3.1:8b\n  llama3.1:70b\n  mistral\n  codellama\n  phi3', Date.now())
+            })
+        } else {
+          addSystemEntry(`Pulling model "${modelToPull}"...\nThis may take a while depending on model size.`, timestamp)
+          
+          // Initialize download progress
+          setDownloadProgress({
+            model: modelToPull,
+            status: 'starting',
+            completed: 0,
+            total: 0,
+            message: 'Initializing download...',
+          })
+          
+          // Track progress entry ID to update it
+          let progressEntryId: string | null = null
+          
+          pullModel(modelToPull, (progress: any) => {
+            const progressTimestamp = Date.now()
+            const status = progress.status || 'unknown'
+            const message = progress.message || status
+            const percent = progress.percent
+            const completed = progress.completed || 0
+            const total = progress.total || 0
+            
+            // Update download panel
+            setDownloadProgress({
+              model: modelToPull,
+              status: status,
+              completed: completed,
+              total: total,
+              percent: percent,
+              message: message,
+              error: progress.error,
+            })
+            
+            if (status === 'success') {
+              addSystemEntry(`✓ Model "${modelToPull}" downloaded successfully!`, progressTimestamp)
+              // Refresh models list
+              fetchModels()
+              // Auto-close panel after 5 seconds
+              setTimeout(() => {
+                setDownloadProgress(null)
+              }, 5000)
+            } else if (status === 'error') {
+              const errorMsg = progress.error || progress.message || 'Unknown error occurred'
+              let errorText = `✗ Failed to download model "${modelToPull}"\n\nError: ${errorMsg}`
+              
+              // Add helpful suggestions based on common errors
+              if (errorMsg.includes('connection') || errorMsg.includes('refused')) {
+                errorText += '\n\nTip: Make sure Ollama is running. Try: ollama list'
+              } else if (errorMsg.includes('not found') || errorMsg.includes('404')) {
+                errorText += '\n\nTip: Check the model name. Try: /suggest to see available models'
+              } else if (errorMsg.includes('permission') || errorMsg.includes('denied')) {
+                errorText += '\n\nTip: Check file permissions for Ollama model storage'
+              }
+              
+              addErrorEntry(errorText, progressTimestamp)
+              // Keep error visible, user can close manually
+            } else {
+              // Update progress in terminal (minimal, main info in panel)
+              let progressText = `${status}...`
+              if (percent !== null && percent !== undefined) {
+                progressText += ` ${percent}%`
+              } else if (total > 0) {
+                const mbCompleted = (completed / 1024 / 1024).toFixed(1)
+                const mbTotal = (total / 1024 / 1024).toFixed(1)
+                progressText += ` ${mbCompleted}MB / ${mbTotal}MB`
+              }
+              
+              // Update or create progress entry
+              if (progressEntryId) {
+                setEntries(prev => prev.map(entry => 
+                  entry.id === progressEntryId 
+                    ? { ...entry, content: `Downloading "${modelToPull}": ${progressText}` }
+                    : entry
+                ))
+              } else {
+                const newEntry: LogEntry = {
+                  id: `pull-${progressTimestamp}`,
+                  type: 'system',
+                  content: `Downloading "${modelToPull}": ${progressText}`,
+                  timestamp: progressTimestamp,
+                }
+                progressEntryId = newEntry.id
+                setEntries(prev => [...prev, newEntry])
+              }
+            }
+          })
+        }
+        break
+
+      case 'suggest':
+        addSystemEntry('Analyzing your system and fetching model suggestions...', timestamp)
+        fetch(`${BACKEND_URL}/api/suggest-models`)
+          .then(res => res.json())
+          .then(data => {
+            if (data.error) {
+              addErrorEntry(`Failed to get suggestions: ${data.error}`, Date.now())
+              return
+            }
+            
+            const system = data.system || {}
+            const suggestions = data.suggestions || []
+            
+            let message = '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
+            message += '  MODEL SUGGESTIONS FOR YOUR SYSTEM\n'
+            message += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n'
+            
+            message += 'SYSTEM SPECS:\n'
+            message += `  Platform: ${system.platform || 'Unknown'} ${system.architecture || ''}\n`
+            message += `  RAM: ${system.ram_gb || '?'}GB total, ${system.ram_available_gb || '?'}GB available\n`
+            message += `  CPU: ${system.cpu_cores || '?'} cores (${system.cpu_count || '?'} threads)\n`
+            if (system.gpu_available) {
+              message += `  GPU: ${system.gpu_type || 'Available'}\n`
+              if (system.gpu_memory_gb) {
+                message += `  GPU Memory: ${system.gpu_memory_gb}GB\n`
+              }
+            } else {
+              message += `  GPU: Not available (CPU-only mode)\n`
+            }
+            message += '\n'
+            
+            if (suggestions.length > 0) {
+              message += 'RECOMMENDED MODELS:\n\n'
+              suggestions.forEach((sug: any, idx: number) => {
+                message += `  ${idx + 1}. ${sug.model}\n`
+                message += `     ${sug.description}\n`
+                message += `     → ${sug.reason}\n\n`
+              })
+              message += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
+              message += 'To download a model, use: /pull <model-name>\n'
+              message += 'Example: /pull llama3.1:8b'
+            } else {
+              message += 'No suitable models found for your system specs.\n\n'
+              message += 'You may want to try lightweight models:\n'
+              message += '  /pull tinyllama\n'
+              message += '  /pull phi3:mini\n'
+              message += '  /pull gemma:2b'
+            }
+            
+            addSystemEntry(message, Date.now())
+          })
+          .catch(err => {
+            console.error('[LOOM] Error fetching suggestions:', err)
+            addErrorEntry(`Failed to fetch suggestions: ${err.message}`, Date.now())
+          })
         break
 
       case 'status':
@@ -869,6 +1125,14 @@ export function TerminalFeed() {
       
       {/* Circuit Execution Trace */}
       {circuitExecution && <CircuitTrace />}
+      
+      {/* Download Panel */}
+      {downloadProgress && (
+        <DownloadPanel 
+          progress={downloadProgress} 
+          onClose={() => setDownloadProgress(null)}
+        />
+      )}
       
       {/* Save Session Modal */}
       <SaveSessionModal

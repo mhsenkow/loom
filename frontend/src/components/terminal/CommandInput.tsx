@@ -22,6 +22,11 @@ export function CommandInput({ onSubmit, placeholder }: CommandInputProps) {
   const [showContextMenu, setShowContextMenu] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   
+  // Terminal history
+  const [history, setHistory] = useState<string[]>([])
+  const [historyIndex, setHistoryIndex] = useState(-1)
+  const currentInputRef = useRef<string>('')
+  
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -61,6 +66,14 @@ export function CommandInput({ onSubmit, placeholder }: CommandInputProps) {
     
     const content = editor.getText().trim()
     if (content) {
+      // Add to history (avoid duplicates, keep last 100)
+      setHistory(prev => {
+        const newHistory = [content, ...prev.filter(h => h !== content)].slice(0, 100)
+        return newHistory
+      })
+      setHistoryIndex(-1)
+      currentInputRef.current = ''
+      
       onSubmit(content, contextMode)
       editor.commands.clearContent()
     }
@@ -70,6 +83,52 @@ export function CommandInput({ onSubmit, placeholder }: CommandInputProps) {
     if (!editor) return
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      // Handle history navigation
+      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+        if (history.length === 0) return
+        
+        event.preventDefault()
+        
+        let newIndex = historyIndex
+        
+        if (event.key === 'ArrowUp') {
+          // Save current input if we're at the bottom
+          if (historyIndex === -1) {
+            currentInputRef.current = editor.getText()
+          }
+          // Move up in history
+          newIndex = historyIndex === -1 
+            ? 0 
+            : Math.min(historyIndex + 1, history.length - 1)
+        } else if (event.key === 'ArrowDown') {
+          // Move down in history
+          if (historyIndex === -1) return // Already at bottom
+          newIndex = historyIndex - 1
+          if (newIndex < 0) {
+            // Restore original input
+            newIndex = -1
+            editor.commands.setContent(currentInputRef.current)
+            setHistoryIndex(-1)
+            return
+          }
+        }
+        
+        setHistoryIndex(newIndex)
+        if (newIndex >= 0) {
+          editor.commands.setContent(history[newIndex])
+        }
+        return
+      }
+      
+      // Reset history index when user types (but not for navigation keys)
+      if (!['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].includes(event.key)) {
+        if (historyIndex !== -1) {
+          setHistoryIndex(-1)
+          currentInputRef.current = editor.getText()
+        }
+      }
+      
+      // Handle Enter
       if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault()
         handleSubmit()
@@ -80,7 +139,7 @@ export function CommandInput({ onSubmit, placeholder }: CommandInputProps) {
     return () => {
       editor.view.dom.removeEventListener('keydown', handleKeyDown)
     }
-  }, [editor, handleSubmit])
+  }, [editor, handleSubmit, history, historyIndex])
 
   const isInputMode = placeholder !== undefined
   const currentModeConfig = CONTEXT_MODES.find(c => c.mode === contextMode) || CONTEXT_MODES[0]

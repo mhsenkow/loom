@@ -1,0 +1,262 @@
+"""
+Persistent storage for modules and circuits using SQLite.
+"""
+
+import json
+import sqlite3
+from pathlib import Path
+from typing import Any, Optional
+
+# DB path: project root / data / loom.db
+def _db_path() -> Path:
+    base = Path(__file__).resolve().parent.parent.parent
+    data_dir = base / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return data_dir / "loom.db"
+
+
+def _get_conn() -> sqlite3.Connection:
+    path = str(_db_path())
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db() -> None:
+    """Create tables if they don't exist."""
+    conn = _get_conn()
+    try:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS modules (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL,
+                content TEXT DEFAULT '',
+                position_x REAL DEFAULT 0,
+                position_y REAL DEFAULT 0,
+                status TEXT DEFAULT 'idle',
+                metadata TEXT DEFAULT '{}',
+                created_at REAL,
+                updated_at REAL
+            );
+            CREATE TABLE IF NOT EXISTS circuits (
+                name TEXT PRIMARY KEY,
+                description TEXT,
+                cells TEXT NOT NULL,
+                model_slots TEXT NOT NULL,
+                saved_at REAL NOT NULL
+            );
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# --- Modules ---
+
+def get_modules() -> list[dict[str, Any]]:
+    init_db()
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, type, content, position_x, position_y, status, metadata FROM modules"
+        ).fetchall()
+        return [_row_to_module(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_module(module_id: str) -> Optional[dict[str, Any]]:
+    init_db()
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id, type, content, position_x, position_y, status, metadata FROM modules WHERE id = ?",
+            (module_id,),
+        ).fetchone()
+        return _row_to_module(row) if row else None
+    finally:
+        conn.close()
+
+
+def _row_to_module(row: sqlite3.Row) -> dict[str, Any]:
+    import time
+    meta = row["metadata"]
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta) if meta else {}
+        except json.JSONDecodeError:
+            meta = {}
+    return {
+        "id": row["id"],
+        "type": row["type"],
+        "content": row["content"] or "",
+        "position": {"x": float(row["position_x"] or 0), "y": float(row["position_y"] or 0)},
+        "status": row["status"] or "idle",
+        "metadata": meta,
+    }
+
+
+def create_module(module_id: str, type: str, content: str = "", position: Optional[dict] = None) -> dict[str, Any]:
+    import time
+    init_db()
+    pos = position or {"x": 0, "y": 0}
+    now = time.time()
+    conn = _get_conn()
+    try:
+        # Check if module already exists
+        existing = get_module(module_id)
+        if existing:
+            # Module exists - update it instead of failing
+            updates = {
+                "content": content,
+                "position": pos,
+            }
+            update_module(module_id, updates)
+            return get_module(module_id) or {}
+        
+        # Module doesn't exist - create it
+        conn.execute(
+            """INSERT INTO modules (id, type, content, position_x, position_y, status, metadata, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, 'idle', '{}', ?, ?)""",
+            (module_id, type, content, pos.get("x", 0), pos.get("y", 0), now, now),
+        )
+        conn.commit()
+        return get_module(module_id) or {}
+    finally:
+        conn.close()
+
+
+def update_module(module_id: str, updates: dict[str, Any]) -> Optional[dict[str, Any]]:
+    import time
+    init_db()
+    conn = _get_conn()
+    try:
+        allowed = {"content", "position", "status", "metadata"}
+        sets = []
+        args = []
+        for k, v in updates.items():
+            if k not in allowed:
+                continue
+            if k == "position":
+                sets.append("position_x = ?")
+                args.append(v.get("x", 0) if isinstance(v, dict) else 0)
+                sets.append("position_y = ?")
+                args.append(v.get("y", 0) if isinstance(v, dict) else 0)
+            elif k == "metadata":
+                sets.append("metadata = ?")
+                args.append(json.dumps(v) if isinstance(v, dict) else "{}")
+            else:
+                sets.append(f"{k} = ?")
+                args.append(v)
+        if not sets:
+            return get_module(module_id)
+        sets.append("updated_at = ?")
+        args.append(time.time())
+        args.append(module_id)
+        conn.execute(
+            f"UPDATE modules SET {', '.join(sets)} WHERE id = ?",
+            args,
+        )
+        conn.commit()
+        return get_module(module_id)
+    finally:
+        conn.close()
+
+
+def delete_module(module_id: str) -> bool:
+    init_db()
+    conn = _get_conn()
+    try:
+        cur = conn.execute("DELETE FROM modules WHERE id = ?", (module_id,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+# --- Circuits ---
+
+def get_circuits() -> dict[str, dict[str, Any]]:
+    """Return { name: circuit }."""
+    init_db()
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT name, description, cells, model_slots, saved_at FROM circuits"
+        ).fetchall()
+        out = {}
+        for r in rows:
+            try:
+                cells = json.loads(r["cells"]) if r["cells"] else []
+                slots = json.loads(r["model_slots"]) if r["model_slots"] else {"A": "", "B": "", "C": ""}
+            except json.JSONDecodeError:
+                cells = []
+                slots = {"A": "", "B": "", "C": ""}
+            out[r["name"]] = {
+                "name": r["name"],
+                "description": r["description"] or None,
+                "cells": cells,
+                "modelSlots": slots,
+                "savedAt": float(r["saved_at"]),
+            }
+        return out
+    finally:
+        conn.close()
+
+
+def get_circuit(name: str) -> Optional[dict[str, Any]]:
+    init_db()
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT name, description, cells, model_slots, saved_at FROM circuits WHERE name = ?",
+            (name,),
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            cells = json.loads(row["cells"]) if row["cells"] else []
+            slots = json.loads(row["model_slots"]) if row["model_slots"] else {"A": "", "B": "", "C": ""}
+        except json.JSONDecodeError:
+            cells = []
+            slots = {"A": "", "B": "", "C": ""}
+        return {
+            "name": row["name"],
+            "description": row["description"] or None,
+            "cells": cells,
+            "modelSlots": slots,
+            "savedAt": float(row["saved_at"]),
+        }
+    finally:
+        conn.close()
+
+
+def save_circuit(name: str, description: Optional[str], cells: list, model_slots: dict, saved_at: float) -> dict[str, Any]:
+    init_db()
+    conn = _get_conn()
+    try:
+        conn.execute(
+            """INSERT INTO circuits (name, description, cells, model_slots, saved_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(name) DO UPDATE SET
+                 description = excluded.description,
+                 cells = excluded.cells,
+                 model_slots = excluded.model_slots,
+                 saved_at = excluded.saved_at""",
+            (name, description or "", json.dumps(cells), json.dumps(model_slots), saved_at),
+        )
+        conn.commit()
+        return get_circuit(name) or {}
+    finally:
+        conn.close()
+
+
+def delete_circuit(name: str) -> bool:
+    init_db()
+    conn = _get_conn()
+    try:
+        cur = conn.execute("DELETE FROM circuits WHERE name = ?", (name,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()

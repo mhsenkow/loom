@@ -12,6 +12,31 @@
   <body>
     <script>
       (function(){try{var s=localStorage.getItem('loom-settings');if(s){var j=JSON.parse(s);if(j.theme&&/^(phosphor|ruby|sapphire|diamond|ebony)$/.test(j.theme))document.documentElement.dataset.theme=j.theme;}}catch(e){})();
+      
+      // Suppress service worker errors for chrome-extension:// URLs (common in Electron)
+      if ('serviceWorker' in navigator) {
+        // Unregister any existing service workers
+        navigator.serviceWorker.getRegistrations().then(function(registrations) {
+          for (var i = 0; i < registrations.length; i++) {
+            registrations[i].unregister();
+          }
+        });
+        
+        // Suppress service worker cache errors
+        const originalPut = Cache.prototype.put;
+        Cache.prototype.put = function(request, response) {
+          if (request instanceof Request && request.url.startsWith('chrome-extension://')) {
+            return Promise.resolve();
+          }
+          return originalPut.call(this, request, response).catch(function(error) {
+            if (error.message && error.message.includes('chrome-extension')) {
+              // Silently ignore chrome-extension caching errors
+              return;
+            }
+            throw error;
+          });
+        };
+      }
     </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>

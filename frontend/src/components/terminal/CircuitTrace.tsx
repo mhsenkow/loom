@@ -10,6 +10,9 @@ const CELL_TYPE_ICONS: Record<string, string> = {
   data_loader: '▤',
   conditional: '⚡',
   web_fetch: '🌐',
+  vector_index: '📚',
+  vector_search: '🔍',
+  terminal_history: '📜',
 }
 
 export function CircuitTrace() {

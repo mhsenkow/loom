@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Help command for Notebook
+cat << 'EOF'
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Notebook - Personal Intelligence OS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📖 Quick Start:
+  make notebook-open    Open Notebook (start all services)
+  make notebook-close   Close Notebook (stop all services)
+
+🚀 Alternative Commands:
+  ./start               Open Notebook (same as make notebook-open)
+  ./close               Close Notebook (same as make notebook-close)
+
+🔧 Utility Commands:
+  make install          Install all dependencies
+  make clean            Clean up dependencies and build artifacts
+  make help             Show this help message (or just run: ./help)
+
+💡 Examples:
+  # Start Notebook
+  make notebook-open
+
+  # Stop Notebook (from another terminal)
+  make notebook-close
+
+  # Or use the scripts
+  ./start
+  ./close
+
+🌐 Once Notebook is open:
+  Frontend:  http://localhost:5173
+  Backend:   http://localhost:8000
+  API docs:  http://localhost:8000/docs
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EOF
