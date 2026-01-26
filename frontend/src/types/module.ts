@@ -33,10 +33,12 @@ export interface Module {
 
 export interface LogEntry {
   id: string
-  type: 'user' | 'system' | 'ai' | 'error'
+  type: 'user' | 'system' | 'ai' | 'error' | 'image'
   content: string
   timestamp: number
   status?: ModuleStatus
+  imageUrl?: string
+  imageAnalysis?: string
 }
 
 export interface SystemStatus {

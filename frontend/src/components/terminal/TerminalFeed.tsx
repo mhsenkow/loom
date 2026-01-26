@@ -3,6 +3,7 @@ import { CommandInput } from './CommandInput'
 import { SessionPanel, SaveSessionModal } from './SessionPanel'
 import { CircuitTrace } from './CircuitTrace'
 import { DownloadPanel } from './DownloadPanel'
+import { ImageAnalysisPanel } from './ImageAnalysisPanel'
 import { useSocket } from '../../hooks/useSocket'
 import { useSystemStatus } from '../../hooks/useSystemStatus'
 import { terminalOutputBus, getCircuitContext } from '../../hooks/useTerminalOutput'
@@ -175,9 +176,19 @@ export function TerminalFeed() {
     message?: string
     error?: string
   } | null>(null)
+  const [imageAnalysis, setImageAnalysis] = useState<{
+    imageUrl: string
+    analysis: string
+    model: string
+    status: 'analyzing' | 'success' | 'error' | 'no-model'
+    error?: string
+    availableVisionModels?: string[]
+    recommendedModels?: Array<{ name: string; description: string; size: string }>
+  } | null>(null)
   
   const feedRef = useRef<HTMLDivElement>(null)
   const currentAIEntryRef = useRef<string | null>(null)
+  const pendingImageUrlRef = useRef<string | null>(null)
   
   // Persist panel state
   useEffect(() => {
@@ -328,14 +339,25 @@ export function TerminalFeed() {
         : prompt
     } else {
       // Full or Key: include conversation history (entries not yet including this user message)
-      const relevant = entries.filter(e => e.type === 'user' || e.type === 'ai').slice(-16)
+      // Also include image entries with their analysis
+      const relevant = entries.filter(e => 
+        e.type === 'user' || e.type === 'ai' || e.type === 'image'
+      ).slice(-16)
+      
       const historyBlock = relevant.map(e => {
-        if (e.type === 'user') return `User: ${e.content}`
-        const text = e.content || ''
-        if (contextMode === 'key') {
-          return `Assistant: ${text.slice(0, 120)}${text.length > 120 ? '...' : ''}`
+        if (e.type === 'user') {
+          return `User: ${e.content}`
+        } else if (e.type === 'image') {
+          // Include image analysis in context
+          const analysis = e.imageAnalysis || 'Image added to conversation'
+          return `[Image Context]\n${analysis}`
+        } else {
+          const text = e.content || ''
+          if (contextMode === 'key') {
+            return `Assistant: ${text.slice(0, 120)}${text.length > 120 ? '...' : ''}`
+          }
+          return `Assistant: ${text}`
         }
-        return `Assistant: ${text}`
       }).join('\n\n')
       
       const withHistory = historyBlock
@@ -376,6 +398,10 @@ export function TerminalFeed() {
           '  /models        - List available Ollama models',
           '  /pull <name>   - Download a new Ollama model',
           '',
+          'IMAGES:',
+          '  /image          - Upload and analyze an image (or use 📷 button)',
+          '  Click 📷 button - Upload image for vision analysis',
+          '',
           'CIRCUITS:',
           '  /circuits           - List saved circuits',
           '  /run <name>         - Run a saved circuit',
@@ -394,10 +420,22 @@ export function TerminalFeed() {
           'SYSTEM:',
           '  /status        - Show system status',
           '  /suggest       - Get model suggestions for your system',
+          '  /image         - Upload and analyze an image (or click 📷 button)',
           '  /help          - Show this message',
           '',
           'Current session auto-saves. Use SAVE in the Sessions panel or /saveas to name it.',
         ].join('\n'), timestamp)
+        break
+
+      case 'image':
+        addSystemEntry('Click the 📷 button next to the input field to upload and analyze an image.', timestamp)
+        // Trigger file input click via a small delay to ensure UI is ready
+        setTimeout(() => {
+          const fileInput = document.querySelector('input[type="file"][accept="image/*"]') as HTMLInputElement
+          if (fileInput) {
+            fileInput.click()
+          }
+        }, 100)
         break
         
       case 'clear': {
@@ -1074,6 +1112,92 @@ export function TerminalFeed() {
     }])
   }, [])
 
+  // Handle image upload and analysis
+  const handleImageUpload = useCallback(async (imageBase64: string) => {
+    const imageUrl = imageBase64 // Store for display
+    pendingImageUrlRef.current = imageUrl // Store for retry after model install
+    
+    // Set analyzing state
+    setImageAnalysis({
+      imageUrl,
+      analysis: '',
+      model: 'auto-detecting',
+      status: 'analyzing',
+    })
+
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/images/analyze`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            image_base64: imageBase64,
+            prompt: "Describe this image in detail. What do you see? List the key elements, objects, text, colors, composition, and any notable features. Be specific and thorough.",
+          }),
+        })
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ detail: response.statusText }))
+          throw new Error(errorData.detail || errorData.error || `Analysis failed: ${response.statusText}`)
+        }
+
+        const data = await response.json()
+        
+        if (data.success) {
+          setImageAnalysis({
+            imageUrl,
+            analysis: data.analysis,
+            model: data.model || 'auto-detected',
+            status: 'success',
+            availableVisionModels: data.available_vision_models || [],
+          })
+          
+          // Also add to terminal as a log entry
+          const timestamp = Date.now()
+          setEntries(prev => [...prev, {
+            id: `image-analysis-${timestamp}`,
+            type: 'system',
+            content: `Image analyzed: ${data.analysis.substring(0, 100)}...`,
+            timestamp,
+          }])
+        } else if (data.status === 'no-model') {
+          // No vision model available - show recommendations
+          setImageAnalysis({
+            imageUrl,
+            analysis: '',
+            model: '',
+            status: 'no-model',
+            error: data.error,
+            availableVisionModels: data.available_vision_models || [],
+            recommendedModels: data.recommended_models || [],
+          })
+        } else {
+          throw new Error(data.detail || data.error || 'Analysis failed')
+        }
+    } catch (error) {
+      let errorMessage = 'Failed to analyze image'
+      if (error instanceof Error) {
+        errorMessage = error.message
+        // Check if it's a response error with detail
+        if (error.message.includes('detail')) {
+          try {
+            const match = error.message.match(/detail[:\s]+(.+)/i)
+            if (match) errorMessage = match[1]
+          } catch {}
+        }
+      }
+      
+      setImageAnalysis({
+        imageUrl,
+        analysis: '',
+        model: '',
+        status: 'error',
+        error: errorMessage,
+      })
+    }
+  }, [])
+
   const formatTimestamp = (ts: number) => {
     const date = new Date(ts)
     return date.toISOString().slice(0, 19).replace('T', ' ')
@@ -1118,6 +1242,7 @@ export function TerminalFeed() {
                 ? `Enter value for [${circuitInputState.requiredInputs[circuitInputState.currentInputIndex]}]...`
                 : undefined
               }
+              onImageUpload={handleImageUpload}
             />
           </div>
         </div>
@@ -1131,6 +1256,104 @@ export function TerminalFeed() {
         <DownloadPanel 
           progress={downloadProgress} 
           onClose={() => setDownloadProgress(null)}
+        />
+      )}
+      
+      {/* Image Analysis Panel */}
+      {imageAnalysis && (
+        <ImageAnalysisPanel 
+          analysis={imageAnalysis}
+          onClose={() => setImageAnalysis(null)}
+          allModels={models}
+          onRetryAnalysis={(imageUrl, modelName) => {
+            // Retry analysis with different model
+            setImageAnalysis({
+              imageUrl,
+              analysis: '',
+              model: modelName,
+              status: 'analyzing',
+            })
+            
+            // Re-analyze with the selected model
+            fetch(`${BACKEND_URL}/api/images/analyze`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                image_base64: imageUrl,
+                prompt: "Describe this image in detail. What do you see? List the key elements, objects, text, colors, composition, and any notable features. Be specific and thorough.",
+                model: modelName,
+              }),
+            })
+              .then(res => res.json())
+              .then(data => {
+                if (data.success) {
+                  setImageAnalysis({
+                    imageUrl,
+                    analysis: data.analysis,
+                    model: data.model || modelName,
+                    status: 'success',
+                    availableVisionModels: data.available_vision_models || [],
+                  })
+                } else {
+                  throw new Error(data.detail || data.error || 'Analysis failed')
+                }
+              })
+              .catch(error => {
+                setImageAnalysis({
+                  imageUrl,
+                  analysis: '',
+                  model: modelName,
+                  status: 'error',
+                  error: error instanceof Error ? error.message : 'Failed to analyze image',
+                })
+              })
+          }}
+          onApproveToChat={(imageUrl, analysis) => {
+            // Add image entry to chat
+            const timestamp = Date.now()
+            setEntries(prev => [...prev, {
+              id: `image-${timestamp}`,
+              type: 'image',
+              content: 'Image added to chat context',
+              timestamp,
+              imageUrl,
+              imageAnalysis: analysis,
+            }])
+          }}
+          onPullModel={(modelName) => {
+            // Start download
+            pullModel(modelName, (progress: any) => {
+              const status = progress.status || 'unknown'
+              const completed = progress.completed || 0
+              const total = progress.total || 0
+              
+              setDownloadProgress({
+                model: modelName,
+                status: status,
+                completed: completed,
+                total: total,
+                percent: progress.percent,
+                message: progress.message,
+                error: progress.error,
+              })
+              
+              // On success, refresh models and retry analysis
+              if (status === 'success') {
+                fetchModels()
+                // Retry image analysis after a short delay
+                setTimeout(() => {
+                  const pendingImage = pendingImageUrlRef.current
+                  if (pendingImage) {
+                    // Create a new analysis request
+                    handleImageUpload(pendingImage)
+                  }
+                }, 2000)
+              }
+            })
+          }}
+          downloadProgress={downloadProgress}
         />
       )}
       
@@ -1155,6 +1378,7 @@ function LogEntryBlock({ entry, formatTimestamp }: LogEntryBlockProps) {
     system: 'border-terminal-gray',
     ai: 'border-phosphor shadow-glow-sm',
     error: 'border-red-500',
+    image: 'border-cyan-500',
   }
 
   const typeLabels = {
@@ -1162,6 +1386,7 @@ function LogEntryBlock({ entry, formatTimestamp }: LogEntryBlockProps) {
     system: 'SYS',
     ai: 'AI',
     error: 'ERR',
+    image: 'IMAGE',
   }
 
   const textColors = {
@@ -1169,6 +1394,7 @@ function LogEntryBlock({ entry, formatTimestamp }: LogEntryBlockProps) {
     system: 'text-terminal-muted',
     ai: 'text-phosphor',
     error: 'text-red-400',
+    image: 'text-cyan-400',
   }
 
   return (
@@ -1195,7 +1421,28 @@ function LogEntryBlock({ entry, formatTimestamp }: LogEntryBlockProps) {
       
       {/* Content */}
       <div className={`${textColors[entry.type]} whitespace-pre-wrap font-mono text-sm`}>
-        {entry.content || (entry.status === 'running' ? '...' : '')}
+        {entry.type === 'image' && entry.imageUrl ? (
+          <div className="space-y-3">
+            <div className="border border-terminal-border bg-void p-3">
+              <img 
+                src={entry.imageUrl} 
+                alt="Chat image"
+                className="max-w-full h-auto max-h-64 border border-terminal-border"
+              />
+            </div>
+            {entry.imageAnalysis && (
+              <div className="text-terminal-muted text-sm border-l-2 border-cyan-500/50 pl-3">
+                <div className="text-[10px] text-terminal-muted tracking-widest mb-1">ANALYSIS</div>
+                {entry.imageAnalysis}
+              </div>
+            )}
+            {entry.content && (
+              <div className="mt-2">{entry.content}</div>
+            )}
+          </div>
+        ) : (
+          entry.content || (entry.status === 'running' ? '...' : '')
+        )}
       </div>
     </div>
   )

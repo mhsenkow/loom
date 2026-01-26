@@ -11,12 +11,15 @@ A local-first, desktop-class Personal Intelligence OS with a "Cassette Futurism"
 
 ## ✨ Features
 
-- **Terminal Feed**: A linear notebook interface styled as a data feed/log
-- **Circuit Board**: A node-graph for building AI processing pipelines
+- **Terminal Feed**: A linear notebook interface styled as a data feed/log with session management
+- **Circuit Board**: A node-graph for building AI processing pipelines with templates
 - **Local AI**: Powered by Ollama for fully local LLM inference
-- **Vector Memory**: ChromaDB for semantic search and context
-- **File Processing**: Load and process PDFs, text files, and more
+- **Vector Memory**: ChromaDB for semantic search, RAG, and document indexing
+- **Image Analysis**: Vision model integration for analyzing images (LLaVA, BakLLaVA, Moondream)
+- **File Processing**: Load and process PDFs, text files, and other documents
 - **Image Generation**: Local image generation capabilities
+- **Session Management**: Save, load, and restore sessions
+- **Circuit Persistence**: Save and load complete circuit configurations
 - **Retro Aesthetics**: CRT scanlines, phosphor green, monospace everything
 
 ## 📋 Prerequisites
@@ -224,8 +227,9 @@ Once LOOM is running, you can use these commands in the terminal:
 | `/saveas <name>` | Save current session to a named slot |
 | `/load <name>` | Load a saved session (replaces current) |
 | `/sessions` | List saved sessions |
+| `/image` | Upload and analyze an image with vision models |
 
-**Tip:** You can also just type naturally - any non-command input is automatically sent to the AI.
+**Tip:** You can also just type naturally - any non-command input is automatically sent to the AI. Click the 📷 button to upload and analyze images.
 
 ### Circuit Board
 
@@ -234,11 +238,28 @@ Once LOOM is running, you can use these commands in the terminal:
 - Use the templates sidebar to quickly add common module types
 - Right-click modules for options
 
-### File Processing
+### File Processing & Vector Store
 
 - Use the file picker to load PDFs, text files, and other documents
 - Files are automatically processed and indexed for semantic search
+- Use INDEX and SEARCH cell types for vector store operations
 - Access processed files through the circuit board modules
+- Build knowledge bases with automatic document indexing
+
+### Image Analysis
+
+- Upload images using the 📷 button or `/image` command
+- Analyze images with vision models (LLaVA, BakLLaVA, Moondream)
+- Vision models are automatically detected and recommended
+- Analysis results can be sent to chat for further discussion
+- Install vision models with: `ollama pull llava:7b` or `ollama pull bakllava`
+
+### Circuit Templates
+
+- Pre-built templates for common workflows (RAG, research, analysis)
+- Templates sidebar for quick access
+- Save and load complete circuit configurations
+- Share circuits by name
 
 ## 🔧 Troubleshooting
 
@@ -286,23 +307,35 @@ loom/
 │   ├── src/
 │   │   ├── components/
 │   │   │   ├── shell/        # CRT effects, title bar, settings
-│   │   │   ├── terminal/     # Tiptap notebook
-│   │   │   └── circuit/      # React Flow graph, modules
-│   │   ├── hooks/            # Socket, status hooks
+│   │   │   ├── terminal/     # Tiptap notebook, image analysis, sessions
+│   │   │   └── circuit/      # React Flow graph, modules, templates
+│   │   ├── hooks/            # Socket, status, circuit runner hooks
 │   │   ├── styles/           # Tailwind + CRT CSS
 │   │   └── types/            # TypeScript interfaces
 │   └── package.json
 │
 ├── backend/                  # Python FastAPI server
 │   ├── app/
-│   │   ├── routers/          # REST endpoints (modules, files, images)
-│   │   ├── services/         # Ollama, ChromaDB, file processing
+│   │   ├── routers/          # REST endpoints (modules, files, images, circuits, search)
+│   │   ├── services/         # Ollama, ChromaDB, file processing, storage
 │   │   └── models/           # Pydantic schemas
-│   ├── data/                 # Local data storage (ChromaDB)
+│   ├── data/                 # Local data storage (ChromaDB, SQLite)
+│   ├── scripts/              # Template extraction and testing scripts
 │   └── requirements.txt
 │
+├── scripts/                  # Startup/shutdown scripts
+├── Makefile                  # Convenience commands
+├── start, close, help        # Executable scripts
 └── README.md
 ```
+
+## 📚 Additional Documentation
+
+- **[CHROMADB_INTEGRATION.md](./CHROMADB_INTEGRATION.md)** - Complete guide to vector store and RAG
+- **[VECTOR_CELLS_GUIDE.md](./VECTOR_CELLS_GUIDE.md)** - Simple guide to INDEX and SEARCH cells
+- **[TEMPLATE_UPDATES.md](./TEMPLATE_UPDATES.md)** - Available circuit templates
+- **[MODULE_PERSISTENCE_IMPLEMENTATION.md](./MODULE_PERSISTENCE_IMPLEMENTATION.md)** - How module storage works
+- **[STORAGE_ANALYSIS.md](./STORAGE_ANALYSIS.md)** - Storage architecture details
 
 ## 🎨 Design Philosophy
 
@@ -326,6 +359,12 @@ loom/
 - `GET /api/files` - List processed files
 - `POST /api/files/upload` - Upload and process a file
 - `POST /api/images/generate` - Generate an image
+- `POST /api/images/analyze` - Analyze an image with vision models
+- `GET /api/images/check-vision-models` - Check available vision models
+- `GET /api/circuits` - List saved circuits
+- `POST /api/circuits` - Save a circuit
+- `GET /api/circuits/{name}` - Get a saved circuit
+- `GET /api/search` - Semantic search across indexed documents
 
 ### Socket.IO Events
 
@@ -385,10 +424,36 @@ npm run electron:build
 ### Backend
 - Python 3.9+ (3.10+ recommended)
 - FastAPI + Socket.IO
-- Ollama (Local LLMs)
-- ChromaDB (Vector store)
+- Ollama (Local LLMs + Vision models)
+- ChromaDB (Vector store for RAG)
+- SQLite (Circuit and session persistence)
 - PyMuPDF (PDF processing)
 - Diffusers (Image generation)
+- Transformers (Local ML models)
+
+## 🎯 Current Status
+
+**✅ Fully Working:**
+- Terminal feed with session management
+- Circuit board with node-based workflows
+- AI chat with Ollama integration
+- Vector store with ChromaDB (INDEX/SEARCH cells)
+- File processing and indexing
+- Image analysis with vision models
+- Circuit templates and persistence
+- Session save/load/restore
+
+**🚧 In Development:**
+- Enhanced RAG workflows
+- More circuit templates
+- Advanced image generation features
+- Performance optimizations
+
+**📋 Planned:**
+- Multi-user support
+- Cloud sync (optional)
+- Plugin system
+- Advanced visualization tools
 
 ## 📄 License
 

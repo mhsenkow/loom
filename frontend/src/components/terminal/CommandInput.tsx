@@ -6,8 +6,9 @@ import { useCallback, useEffect, useState, useRef } from 'react'
 export type ExecContextMode = 'input' | 'key' | 'full'
 
 interface CommandInputProps {
-  onSubmit: (content: string, contextMode?: ExecContextMode) => void
+  onSubmit: (command: string, contextMode?: ExecContextMode) => void
   placeholder?: string
+  onImageUpload?: (imageBase64: string) => void
 }
 
 const CONTEXT_MODES: { mode: ExecContextMode; label: string; icon: string; title: string }[] = [
@@ -16,11 +17,12 @@ const CONTEXT_MODES: { mode: ExecContextMode; label: string; icon: string; title
   { mode: 'full', label: 'Full context', icon: '●', title: 'Full conversation history' },
 ]
 
-export function CommandInput({ onSubmit, placeholder }: CommandInputProps) {
+export function CommandInput({ onSubmit, placeholder, onImageUpload }: CommandInputProps) {
   const defaultPlaceholder = 'Enter command or message... (try /help)'
-  const [contextMode, setContextMode] = useState<ExecContextMode>('input')
+  const [contextMode, setContextMode] = useState<ExecContextMode>('full')
   const [showContextMenu, setShowContextMenu] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   
   // Terminal history
   const [history, setHistory] = useState<string[]>([])
@@ -141,6 +143,39 @@ export function CommandInput({ onSubmit, placeholder }: CommandInputProps) {
     }
   }, [editor, handleSubmit, history, historyIndex])
 
+  const handleImageUpload = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    // Check if it's an image
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file')
+      return
+    }
+
+    // Read as base64
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const base64 = e.target?.result as string
+      if (base64 && onImageUpload) {
+        onImageUpload(base64)
+      }
+    }
+    reader.onerror = () => {
+      alert('Failed to read image file')
+    }
+    reader.readAsDataURL(file)
+
+    // Reset input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }, [onImageUpload])
+
+  const handleImageButtonClick = useCallback(() => {
+    fileInputRef.current?.click()
+  }, [])
+
   const isInputMode = placeholder !== undefined
   const currentModeConfig = CONTEXT_MODES.find(c => c.mode === contextMode) || CONTEXT_MODES[0]
 
@@ -161,6 +196,26 @@ export function CommandInput({ onSubmit, placeholder }: CommandInputProps) {
           className={isInputMode ? 'text-amber-400' : 'text-phosphor'}
         />
       </div>
+
+      {/* Image upload button */}
+      {!isInputMode && onImageUpload && (
+        <>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handleImageUpload}
+            className="hidden"
+          />
+          <button
+            onClick={handleImageButtonClick}
+            className="text-terminal-muted hover:text-phosphor text-xs px-2 py-1 border border-terminal-border"
+            title="Upload image for analysis"
+          >
+            📷
+          </button>
+        </>
+      )}
 
       {/* Exec + context dropdown */}
       <div className="flex shrink-0 border border-terminal-border">

@@ -274,6 +274,78 @@ class OllamaClient:
     def set_default_model(self, model: str):
         """Set the default model for operations"""
         self._default_model = model
+    
+    async def analyze_image(
+        self,
+        image_base64: str,
+        prompt: str = "Describe this image in detail. What do you see?",
+        model: Optional[str] = None,
+    ) -> str:
+        """
+        Analyze an image using a vision model
+        image_base64: Base64-encoded image data (with or without data URL prefix)
+        prompt: The question/prompt about the image
+        model: Vision model to use (defaults to first available vision model)
+        """
+        # Remove data URL prefix if present
+        if image_base64.startswith('data:image'):
+            image_base64 = image_base64.split(',')[1]
+        
+        # Validate base64 length (should be substantial for an image)
+        if len(image_base64) < 100:
+            raise ValueError("Image data too short - may be invalid base64")
+        
+        # Try to find a vision model if not specified
+        if not model:
+            models = await self.list_models()
+            # Look for common vision model names
+            vision_models = ['llava', 'bakllava', 'moondream', 'llama-vision']
+            for m in models:
+                name = m.get("name", "").lower()
+                if any(vm in name for vm in vision_models):
+                    model = m.get("name")
+                    print(f"[LOOM] Using vision model: {model}")
+                    break
+            
+            # Fallback to default if no vision model found
+            if not model:
+                print(f"[LOOM] Warning: No vision model found, using default: {self._default_model}")
+                print(f"[LOOM] Available models: {[m.get('name') for m in models]}")
+                model = self._default_model
+        
+        # Ollama Python client format: images should be in the message content
+        # Format according to Ollama docs: messages with images array in the message
+        messages = [{
+            "role": "user",
+            "content": prompt,
+            "images": [image_base64],  # Images go in the message object
+        }]
+        
+        try:
+            print(f"[LOOM] Analyzing image with model: {model}, image size: {len(image_base64)} chars")
+            response = await self.client.chat(
+                model=model,
+                messages=messages,
+            )
+            # Handle both dict and object responses
+            if isinstance(response, dict):
+                content = response.get("message", {}).get("content", "")
+            else:
+                message = getattr(response, 'message', None)
+                if message:
+                    content = getattr(message, 'content', '') if not isinstance(message, dict) else message.get('content', '')
+                else:
+                    content = ""
+            
+            if not content:
+                raise RuntimeError("Empty response from vision model - model may not support vision")
+            
+            print(f"[LOOM] Vision analysis complete, response length: {len(content)}")
+            return content
+        except Exception as e:
+            error_msg = f"Ollama vision analysis error: {e}"
+            print(f"[LOOM] {error_msg}")
+            raise RuntimeError(error_msg)
 
 
 # Singleton for use by main, routers, and module executor
