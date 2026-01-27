@@ -21,7 +21,24 @@ function App() {
   }, [])
   
   const { connected: socketConnected } = useSocket()
-  const { status } = useSystemStatus()
+  const { status, models, setImageGenModel } = useSystemStatus()
+
+  // Format RAM display - show RAM usage only, not model name
+  const formatRamDisplay = () => {
+    if (status.ramTotalGb && status.ramAvailableForModelsGb !== undefined) {
+      const total = status.ramTotalGb
+      const modelUsed = status.ramModelUsedGb || 0
+      const availableForModels = status.ramAvailableForModelsGb || 0
+      
+      // Show: "X.XGB used | X.XGB free" or just "X.XGB free" if no model loaded
+      if (modelUsed > 0) {
+        return `${modelUsed.toFixed(1)}GB used | ${availableForModels.toFixed(1)}GB free`
+      } else {
+        return `${availableForModels.toFixed(1)}GB free / ${total.toFixed(1)}GB`
+      }
+    }
+    return null
+  }
 
   return (
     <CRTContainer enabled={crtEnabled}>
@@ -65,6 +82,30 @@ function App() {
               <span className={`led ${status.connected ? 'led-success' : 'led-idle'}`}></span>
               {status.connected ? 'OLLAMA READY' : 'OLLAMA STANDBY'}
             </span>
+            {status.activeModel && (
+              <span className="flex items-center gap-1.5 text-phosphor/80" title="Chat model">
+                <span className="text-terminal-muted">CHAT:</span>
+                <span className="font-mono text-[10px]">{status.activeModel.length > 15 ? status.activeModel.substring(0, 15) + '...' : status.activeModel}</span>
+              </span>
+            )}
+            {status.visionModel && (
+              <span className="flex items-center gap-1.5 text-cyan-400/80" title="Vision/image analysis model">
+                <span className="text-terminal-muted">VISION:</span>
+                <span className="font-mono text-[10px]">{status.visionModel.length > 15 ? status.visionModel.substring(0, 15) + '...' : status.visionModel}</span>
+              </span>
+            )}
+            {status.imageGenModel && (
+              <span className="flex items-center gap-1.5 text-pink-400/80" title="Image generation model">
+                <span className="text-terminal-muted">GEN:</span>
+                <span className="font-mono text-[10px]">{status.imageGenModel.length > 15 ? status.imageGenModel.substring(0, 15) + '...' : status.imageGenModel}</span>
+              </span>
+            )}
+            {formatRamDisplay() && (
+              <span className="flex items-center gap-1.5 text-amber-400/80" title="System RAM usage (used / total)">
+                <span className="text-terminal-muted">RAM:</span>
+                <span className="font-mono text-[10px]">{formatRamDisplay()}</span>
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-4">
             <span>LOOM v0.1.0</span>

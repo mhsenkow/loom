@@ -4,6 +4,7 @@ Ollama client service for AI processing
 
 from typing import AsyncGenerator, Optional
 from ollama import AsyncClient
+import json
 
 
 class OllamaClient:
@@ -58,6 +59,47 @@ class OllamaClient:
             return result
         except Exception as e:
             print(f"[LOOM] Error listing models: {e}")
+            return []
+    
+    async def get_running_models(self) -> list[dict]:
+        """Get currently loaded/running models and their memory usage"""
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(f"{self.host}/api/ps")
+                if response.status_code == 200:
+                    data = response.json()
+                    models = data.get("models", []) if isinstance(data, dict) else []
+                    result = []
+                    for model in models:
+                        if isinstance(model, dict):
+                            # Try to get name from various possible fields
+                            model_name = (
+                                model.get("name") or 
+                                model.get("model") or 
+                                model.get("model_name") or
+                                "unknown"
+                            )
+                            result.append({
+                                "name": model_name,
+                                "size": model.get("size", 0) or model.get("size_vram", 0),  # Size in bytes
+                                "memory": model.get("memory", {}),  # Memory allocation info
+                            })
+                        else:
+                            model_name = (
+                                getattr(model, 'name', None) or 
+                                getattr(model, 'model', None) or
+                                'unknown'
+                            )
+                            result.append({
+                                "name": model_name,
+                                "size": getattr(model, 'size', 0) or getattr(model, 'size_vram', 0),
+                                "memory": getattr(model, 'memory', {}),
+                            })
+                    return result
+            return []
+        except Exception as e:
+            print(f"[LOOM] Error getting running models: {e}")
             return []
     
     async def get_first_available_model(self) -> Optional[str]:
@@ -274,6 +316,130 @@ class OllamaClient:
     def set_default_model(self, model: str):
         """Set the default model for operations"""
         self._default_model = model
+    
+    async def generate_image(
+        self,
+        prompt: str,
+        model: Optional[str] = None,
+        input_image: Optional[str] = None,
+    ) -> str:
+        """
+        Generate an image using an Ollama image generation model (like flux2-klein)
+        If input_image is provided, performs image-to-image editing
+        Returns base64-encoded image data
+        """
+        # Try to find an image generation model if not specified
+        if not model:
+            models = await self.list_models()
+            # Look for image generation models
+            image_gen_models = ['flux', 'flux2', 'stable-diffusion']
+            for m in models:
+                name = m.get("name", "").lower()
+                if any(img_model in name for img_model in image_gen_models):
+                    model = m.get("name")
+                    print(f"[LOOM] Using image generation model: {model}")
+                    break
+            
+            # Fallback to flux2-klein if available
+            if not model:
+                # Check if flux2-klein is available
+                for m in models:
+                    if 'flux2-klein' in m.get("name", "").lower():
+                        model = m.get("name")
+                        print(f"[LOOM] Using image generation model: {model}")
+                        break
+        
+        if not model:
+            raise RuntimeError("No image generation model found. Install one with: /pull x/flux2-klein")
+        
+        try:
+            # Use direct HTTP call to Ollama's generate endpoint for image models
+            # Ollama image generation models work through the generate endpoint
+            import httpx
+            
+            async with httpx.AsyncClient(timeout=180.0) as client:
+                # Prepare request payload
+                payload = {
+                    "model": model,
+                    "prompt": prompt,
+                }
+                
+                # Add input image for image-to-image editing
+                if input_image:
+                    # Remove data URL prefix if present
+                    image_data = input_image
+                    if image_data.startswith("data:image"):
+                        image_data = image_data.split(",", 1)[1]
+                    payload["images"] = [image_data]
+                
+                # Stream the response
+                async with client.stream(
+                    'POST',
+                    f"{self.host}/api/generate",
+                    json=payload,
+                ) as response:
+                    if response.status_code != 200:
+                        error_text = await response.aread()
+                        try:
+                            error_data = json.loads(error_text)
+                            error_text = error_data.get("error", error_text.decode())
+                        except:
+                            error_text = error_text.decode() if isinstance(error_text, bytes) else str(error_text)
+                        raise RuntimeError(f"Ollama API error: {error_text}")
+                    
+                    # Collect all chunks from streaming response
+                    # For image generation models, Ollama may return the image differently
+                    # Try to collect the full response first
+                    full_response = ""
+                    image_data = ""
+                    
+                    async for line in response.aiter_lines():
+                        if line:
+                            try:
+                                chunk = json.loads(line)
+                                # Check for image data in various possible fields
+                                if 'response' in chunk:
+                                    chunk_response = chunk['response']
+                                    # If it looks like base64 image data (long string)
+                                    if isinstance(chunk_response, str) and len(chunk_response) > 100:
+                                        image_data += chunk_response
+                                    else:
+                                        full_response += chunk_response
+                                
+                                # Some models might return image in a different field
+                                if 'image' in chunk:
+                                    image_data = chunk['image']
+                                
+                                # Check if done
+                                if chunk.get('done', False):
+                                    break
+                            except json.JSONDecodeError:
+                                # If line is not JSON, it might be raw base64
+                                if len(line) > 100:
+                                    image_data += line
+                                continue
+                    
+                    # If we collected image data, format it as data URL
+                    if image_data and len(image_data) > 100:
+                        # Ensure it has the data URL prefix
+                        if not image_data.startswith("data:image"):
+                            image_data = f"data:image/png;base64,{image_data}"
+                        print(f"[LOOM] Successfully received image data, length: {len(image_data)}")
+                        return image_data
+                    elif full_response:
+                        # If we got text response, the model might not be an image generation model
+                        print(f"[LOOM] Received text response instead of image: {full_response[:200]}")
+                        raise RuntimeError(f"Model returned text instead of image. Response: {full_response[:100]}...")
+                    else:
+                        print(f"[LOOM] No image data received from Ollama")
+                        raise RuntimeError("No image data received from Ollama - model may not be an image generation model or response format is unexpected")
+        
+        except Exception as e:
+            error_msg = f"Ollama image generation error: {e}"
+            print(f"[LOOM] {error_msg}")
+            import traceback
+            traceback.print_exc()
+            raise RuntimeError(error_msg)
     
     async def analyze_image(
         self,

@@ -81,14 +81,97 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [settings, setSettings] = useState<Settings>(loadSettings)
   const [saved, setSaved] = useState(false)
   const [dataFolderStatus, setDataFolderStatus] = useState<'idle' | 'checking' | 'valid' | 'invalid'>('idle')
+  const [imageModels, setImageModels] = useState<Array<{ name: string; type: string; vram?: string }>>([])
+  const [downloadingModel, setDownloadingModel] = useState<string | null>(null)
+  const [downloadProgress, setDownloadProgress] = useState<{ model: string; status: string; message?: string } | null>(null)
 
   useEffect(() => {
     if (isOpen) {
       setSettings(loadSettings())
       setSaved(false)
       setDataFolderStatus('idle')
+      fetchImageModels()
     }
   }, [isOpen])
+
+  const fetchImageModels = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/images/models')
+      if (response.ok) {
+        const data = await response.json()
+        const availableModels = data.local || []
+        setImageModels(availableModels.map((m: any) => ({
+          name: typeof m === 'string' ? m : (m.name || m),
+          type: m.type || 'unknown',
+          vram: m.vram,
+        })))
+      }
+    } catch (error) {
+      console.error('[LOOM] Failed to fetch image models:', error)
+    }
+  }
+
+  const handleDownloadModel = async (modelName: string) => {
+    setDownloadingModel(modelName)
+    setDownloadProgress({ model: modelName, status: 'starting', message: 'Preparing download...' })
+    
+    try {
+      // Check if it's an Ollama model
+      if (modelName.includes('flux') || modelName.includes('flux2') || modelName.startsWith('x/')) {
+        // Use socket to pull via Ollama
+        const { io } = await import('socket.io-client')
+        const socket = io('http://localhost:8000')
+        
+        socket.on('pull_image_status', (data: any) => {
+          if (data.model === modelName) {
+            setDownloadProgress({
+              model: modelName,
+              status: data.status,
+              message: data.message,
+            })
+            
+            if (data.status === 'success' || data.status === 'error') {
+              setDownloadingModel(null)
+              setTimeout(() => {
+                setDownloadProgress(null)
+                fetchImageModels() // Refresh list
+                socket.disconnect()
+              }, 2000)
+            }
+          }
+        })
+        
+        socket.emit('pull_image_model', { model: modelName })
+      } else {
+        // Local diffusers model - trigger download by loading
+        setDownloadProgress({ model: modelName, status: 'downloading', message: 'Downloading model files...' })
+        const response = await fetch(`http://localhost:8000/api/images/models/load?model=${encodeURIComponent(modelName)}`, {
+          method: 'POST',
+        })
+        
+        if (response.ok) {
+          setDownloadProgress({ model: modelName, status: 'success', message: 'Model downloaded!' })
+          setTimeout(() => {
+            setDownloadingModel(null)
+            setDownloadProgress(null)
+            fetchImageModels()
+          }, 2000)
+        } else {
+          throw new Error('Failed to download model')
+        }
+      }
+    } catch (error) {
+      setDownloadProgress({ 
+        model: modelName, 
+        status: 'error', 
+        message: error instanceof Error ? error.message : 'Download failed' 
+      })
+      setTimeout(() => {
+        setDownloadingModel(null)
+        setDownloadProgress(null)
+      }, 3000)
+    }
+  }
 
   const handleSave = async () => {
     // Configure data folder on backend if set
@@ -248,27 +331,90 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           {/* Local Image Generation Section */}
           <section>
             <h3 className="text-pink-400 font-bold text-sm tracking-wider mb-3">
-              LOCAL IMAGE GENERATION
+              IMAGE GENERATION MODELS
             </h3>
             <p className="text-terminal-muted text-xs mb-3">
-              Runs on Apple Silicon (MPS). Models download on first use.
+              {imageModels.length > 0 
+                ? `${imageModels.length} model${imageModels.length !== 1 ? 's' : ''} downloaded`
+                : 'No models downloaded yet'}
             </p>
 
             <div className="space-y-3 text-xs">
+              {/* Downloaded Models */}
+              {imageModels.length > 0 ? (
+                <div className="bg-void p-3 border border-terminal-border">
+                  <div className="text-phosphor font-bold mb-2">Downloaded Models:</div>
+                  <div className="space-y-1">
+                    {imageModels.map((model) => (
+                      <div key={model.name} className="flex items-center justify-between py-1 border-b border-terminal-border/30 last:border-0">
+                        <div>
+                          <span className="text-phosphor">{model.name}</span>
+                          {model.vram && model.vram !== 'varies' && (
+                            <span className="text-terminal-muted ml-2">({model.vram})</span>
+                          )}
+                          <span className="text-terminal-muted ml-2 text-[10px]">
+                            [{model.type === 'ollama' ? 'Ollama' : 'Local'}]
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-void p-3 border border-terminal-border">
+                  <div className="text-terminal-muted text-center py-2">
+                    No models downloaded. Use download buttons below or download via Ollama.
+                  </div>
+                </div>
+              )}
+
+              {/* Downloadable Models - Only Ollama models */}
               <div className="bg-void p-3 border border-terminal-border">
-                <div className="text-phosphor font-bold mb-2">Available Models:</div>
-                <div className="grid grid-cols-2 gap-1 text-terminal-muted">
-                  <p>• SDXL (8GB)</p>
-                  <p>• SDXL Turbo (8GB)</p>
-                  <p>• SD 3 (16GB)</p>
-                  <p>• FLUX Schnell (32GB)</p>
-                  <p>• FLUX Dev (32GB)</p>
-                  <p>• SD 1.5 (4GB)</p>
+                <div className="text-phosphor font-bold mb-2">Download from Ollama:</div>
+                <div className="space-y-2">
+                  <div className="text-[10px] text-terminal-muted mb-2">
+                    Available image generation models from Ollama:
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {['x/flux2-klein:9b', 'x/flux2-klein:4b', 'x/flux2-klein'].map((modelName) => {
+                      const isDownloaded = imageModels.some(m => m.name.includes('flux2-klein'))
+                      const isDownloading = downloadingModel === modelName
+                      const shortName = modelName.includes(':9b') ? 'FLUX.2 Klein 9B' : 
+                                      modelName.includes(':4b') ? 'FLUX.2 Klein 4B' : 
+                                      'FLUX.2 Klein'
+                      return (
+                        <button
+                          key={modelName}
+                          onClick={() => handleDownloadModel(modelName)}
+                          disabled={downloadingModel !== null || isDownloaded}
+                          className="px-2 py-1 text-[10px] border border-terminal-border hover:border-phosphor disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {isDownloading ? 'Downloading...' : isDownloaded ? `${shortName} ✓` : shortName}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <div className="text-[9px] text-terminal-muted mt-2">
+                    Note: Only Ollama image models are shown. Local diffusers models (SDXL, etc.) are not available via Ollama.
+                  </div>
                 </div>
               </div>
+
+              {/* Download Progress */}
+              {downloadProgress && (
+                <div className="bg-void p-2 border border-phosphor/50">
+                  <div className="text-[10px] text-phosphor">
+                    {downloadProgress.status === 'downloading' && '⬇ '}
+                    {downloadProgress.status === 'success' && '✓ '}
+                    {downloadProgress.status === 'error' && '✗ '}
+                    {downloadProgress.message || downloadProgress.status}
+                  </div>
+                </div>
+              )}
               
-              <div className="text-terminal-muted">
-                <p>Models stored in: <code className="text-phosphor">backend/models/</code></p>
+              <div className="text-terminal-muted text-[10px]">
+                <p>Ollama models stored in: <code className="text-phosphor">~/.ollama/models/</code></p>
+                <p className="mt-1">Download via: <code className="text-phosphor">ollama pull x/flux2-klein:9b</code></p>
               </div>
             </div>
           </section>

@@ -40,7 +40,13 @@ async def run_module(
         return inp
 
     if module_type == "ai_processor":
-        prompt = f"{content}\n\n---\n\n{inp}" if content.strip() else inp
+        # Support {{input}} placeholder for explicit input insertion
+        if content and "{{input}}" in content:
+            prompt = content.replace("{{input}}", inp)
+        elif content.strip():
+            prompt = f"{content}\n\n---\n\n{inp}"
+        else:
+            prompt = inp
         return await ollama.chat(prompt, model=model)
 
     if module_type == "script_execution":

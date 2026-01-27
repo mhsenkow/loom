@@ -9,6 +9,7 @@ export function useSystemStatus() {
     memoryUsage: 0,
     tokenSpeed: 0,
     activeModel: undefined,
+    visionModel: undefined,
   })
 
   const [models, setModels] = useState<string[]>([])
@@ -29,6 +30,13 @@ export function useSystemStatus() {
         setStatus((prev) => ({
           ...prev,
           connected: true,
+          ramTotalGb: data.memory?.ram_total_gb,
+          ramAvailableGb: data.memory?.ram_available_gb,
+          ramSystemUsedGb: data.memory?.ram_system_used_gb,
+          ramModelUsedGb: data.memory?.ram_model_used_gb,
+          ramAvailableForModelsGb: data.memory?.ram_available_for_models_gb,
+          ramUsedPercent: data.memory?.ram_used_percent,
+          loadedModelName: data.memory?.loaded_model_name,
         }))
         return data
       } else {
@@ -104,11 +112,42 @@ export function useSystemStatus() {
       
       // Set first non-embedding model as active if not set
       if (modelNames.length > 0) {
-        const chatModel = modelNames.find((n: string) => !n.includes('embed'))
+        // Find chat model (non-embedding, non-vision)
+        const chatModel = modelNames.find((n: string) => 
+          !n.includes('embed') && 
+          !n.toLowerCase().includes('llava') && 
+          !n.toLowerCase().includes('bakllava') && 
+          !n.toLowerCase().includes('moondream') &&
+          !n.toLowerCase().includes('vision')
+        )
         if (chatModel) {
           setStatus((prev) => ({
             ...prev,
             activeModel: prev.activeModel || chatModel,
+          }))
+        }
+        
+        // Find vision model (llava, bakllava, moondream, etc.)
+        const visionKeywords = ['llava', 'bakllava', 'moondream', 'vision']
+        const visionModel = modelNames.find((n: string) => 
+          visionKeywords.some(keyword => n.toLowerCase().includes(keyword))
+        )
+        if (visionModel) {
+          setStatus((prev) => ({
+            ...prev,
+            visionModel: prev.visionModel || visionModel,
+          }))
+        }
+        
+        // Find image generation model (flux, flux2, stable-diffusion)
+        const imageGenKeywords = ['flux', 'flux2', 'stable-diffusion']
+        const imageGenModel = modelNames.find((n: string) => 
+          imageGenKeywords.some(keyword => n.toLowerCase().includes(keyword))
+        )
+        if (imageGenModel) {
+          setStatus((prev) => ({
+            ...prev,
+            imageGenModel: prev.imageGenModel || imageGenModel,
           }))
         }
       }
@@ -126,11 +165,27 @@ export function useSystemStatus() {
     }
   }, [checkHealth])
 
-  // Set active model
+  // Set active model (chat)
   const setActiveModel = useCallback((model: string) => {
     setStatus((prev) => ({
       ...prev,
       activeModel: model,
+    }))
+  }, [])
+
+  // Set vision model
+  const setVisionModel = useCallback((model: string) => {
+    setStatus((prev) => ({
+      ...prev,
+      visionModel: model,
+    }))
+  }, [])
+
+  // Set image generation model
+  const setImageGenModel = useCallback((model: string) => {
+    setStatus((prev) => ({
+      ...prev,
+      imageGenModel: model,
     }))
   }, [])
 
@@ -174,7 +229,7 @@ export function useSystemStatus() {
         // Retry fetching models if we don't have any yet
         await fetchModels()
       }
-    }, 10000) // Check every 10s
+    }, 5000) // Check every 5s for memory updates
     return () => clearInterval(interval)
   }, [checkHealth, fetchModels, models.length])
 
@@ -184,5 +239,7 @@ export function useSystemStatus() {
     checkHealth,
     fetchModels,
     setActiveModel,
+    setVisionModel,
+    setImageGenModel,
   }
 }

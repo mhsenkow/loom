@@ -45,5 +45,14 @@ export interface SystemStatus {
   connected: boolean
   memoryUsage?: number
   tokenSpeed?: number
-  activeModel?: string
+  activeModel?: string  // Chat model (preferred/selected)
+  visionModel?: string  // Vision/image analysis model (preferred/selected)
+  imageGenModel?: string  // Image generation model (preferred/selected)
+  ramTotalGb?: number
+  ramAvailableGb?: number
+  ramSystemUsedGb?: number
+  ramModelUsedGb?: number
+  ramAvailableForModelsGb?: number
+  ramUsedPercent?: number
+  loadedModelName?: string  // Currently loaded model in memory
 }

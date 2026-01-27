@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { ImageModal } from './ImageModal'
 
 interface ImageAnalysis {
   imageUrl: string
@@ -40,9 +41,9 @@ const RECOMMENDED_VISION_MODELS = [
 
 export function ImageAnalysisPanel({ analysis, onClose, onPullModel, onApproveToChat, onRetryAnalysis, allModels = [], downloadProgress }: ImageAnalysisPanelProps) {
   const [frameIndex, setFrameIndex] = useState(0)
-  const [checkingModels, setCheckingModels] = useState(false)
   const [selectedModel, setSelectedModel] = useState<string>('')
   const [showModelSelector, setShowModelSelector] = useState(false)
+  const [showImageModal, setShowImageModal] = useState(false)
 
   // Filter to only vision models
   const visionKeywords = ['llava', 'bakllava', 'moondream', 'llama-vision']
@@ -78,32 +79,16 @@ export function ImageAnalysisPanel({ analysis, onClose, onPullModel, onApproveTo
     return () => clearInterval(interval)
   }, [analysis?.status, downloadProgress?.status])
 
-  // Check for vision models when panel opens with no-model status
-  useEffect(() => {
-    if (analysis?.status === 'no-model' && !analysis.recommendedModels) {
-      setCheckingModels(true)
-      fetch('http://localhost:8000/api/images/check-vision-models')
-        .then(res => res.json())
-        .then(data => {
-          // Update analysis with recommendations
-          if (onClose) {
-            // We can't directly update analysis state here, but we can trigger a re-check
-            // The parent component should handle this
-          }
-        })
-        .catch(err => {
-          console.warn('[LOOM] Failed to check vision models:', err)
-        })
-        .finally(() => {
-          setCheckingModels(false)
-        })
-    }
-  }, [analysis?.status])
+  // Note: Vision model checking is handled by the backend when analysis is requested
 
   if (!analysis) return null
 
-  const isDownloading = downloadProgress && downloadProgress.model && 
-    downloadProgress.status !== 'success' && downloadProgress.status !== 'error'
+  const isDownloading = Boolean(
+    downloadProgress && 
+    downloadProgress.model && 
+    downloadProgress.status !== 'success' && 
+    downloadProgress.status !== 'error'
+  )
 
   return (
     <div 
@@ -147,7 +132,9 @@ export function ImageAnalysisPanel({ analysis, onClose, onPullModel, onApproveTo
             <img 
               src={analysis.imageUrl} 
               alt="Analysis target"
-              className="max-w-full h-auto border border-terminal-border"
+              className="max-w-full h-auto border border-terminal-border cursor-pointer hover:opacity-80 transition-opacity"
+              onClick={() => setShowImageModal(true)}
+              title="Click to view full screen"
             />
           </div>
 
@@ -266,19 +253,19 @@ export function ImageAnalysisPanel({ analysis, onClose, onPullModel, onApproveTo
                 No vision models detected. Install one to analyze images.
               </div>
               
-              {isDownloading && downloadProgress && (
+              {isDownloading && downloadProgress ? (
                 <div className="mb-4 p-3 bg-void border border-terminal-border">
                   <div className="text-[10px] text-terminal-muted mb-2">DOWNLOADING</div>
                   <div className="text-phosphor text-xs">
                     {ASCII_FRAMES[frameIndex]} Installing {downloadProgress.model}...
                   </div>
-                  {downloadProgress.total > 0 && (
+                  {downloadProgress.total > 0 ? (
                     <div className="text-terminal-muted text-[10px] mt-1">
                       {Math.round((downloadProgress.completed / downloadProgress.total) * 100)}% complete
                     </div>
-                  )}
+                  ) : null}
                 </div>
-              )}
+              ) : null}
               
               <div className="space-y-2">
                 <div className="text-[10px] text-terminal-muted tracking-widest mb-2">RECOMMENDED MODELS</div>
@@ -438,6 +425,22 @@ export function ImageAnalysisPanel({ analysis, onClose, onPullModel, onApproveTo
           )}
         </div>
       </div>
+
+      {/* Image Modal */}
+      {analysis && analysis.imageUrl && (
+        <ImageModal
+          isOpen={showImageModal}
+          onClose={() => setShowImageModal(false)}
+          imageUrl={analysis.imageUrl}
+          metadata={{
+            model: analysis.model,
+            timestamp: Date.now(),
+            analysis: analysis.analysis,
+            provider: 'vision-analysis',
+          }}
+          canEdit={false}
+        />
+      )}
     </div>
   )
 }

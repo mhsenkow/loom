@@ -4,6 +4,8 @@ import { SessionPanel, SaveSessionModal } from './SessionPanel'
 import { CircuitTrace } from './CircuitTrace'
 import { DownloadPanel } from './DownloadPanel'
 import { ImageAnalysisPanel } from './ImageAnalysisPanel'
+import { ImageGenerationPanel } from './ImageGenerationPanel'
+import { ImageModal } from './ImageModal'
 import { useSocket } from '../../hooks/useSocket'
 import { useSystemStatus } from '../../hooks/useSystemStatus'
 import { terminalOutputBus, getCircuitContext } from '../../hooks/useTerminalOutput'
@@ -153,7 +155,7 @@ function loadEntries(): LogEntry[] {
 
 export function TerminalFeed() {
   const { connected, sendChat, pullModel } = useSocket()
-  const { status, models, fetchModels, setActiveModel } = useSystemStatus()
+  const { status, models, fetchModels, setActiveModel, setVisionModel, setImageGenModel } = useSystemStatus()
   const { runCircuit, getRequiredInputs } = useCircuitRunner()
   const circuitExecution = useCircuitExecution()
   
@@ -184,6 +186,28 @@ export function TerminalFeed() {
     error?: string
     availableVisionModels?: string[]
     recommendedModels?: Array<{ name: string; description: string; size: string }>
+  } | null>(null)
+  const [imageGeneration, setImageGeneration] = useState<{
+    prompt: string
+    imageUrl?: string
+    model: string
+    status: 'generating' | 'success' | 'error' | 'no-model'
+    error?: string
+    progress?: number
+    message?: string
+    availableModels?: string[]
+    recommendedModels?: Array<{ name: string; description: string; size: string }>
+  } | null>(null)
+  const [selectedImageModal, setSelectedImageModal] = useState<{
+    imageUrl: string
+    metadata: {
+      prompt?: string
+      model?: string
+      timestamp?: number
+      provider?: string
+      analysis?: string
+    }
+    canEdit?: boolean
   } | null>(null)
   
   const feedRef = useRef<HTMLDivElement>(null)
@@ -327,7 +351,48 @@ export function TerminalFeed() {
       }
     }
 
-    const modelToUse = status.activeModel || models[0] || 'llama3.1:8b'
+    // Ensure we use a chat model, not image generation or vision models
+    const getChatModel = () => {
+      const imageGenKeywords = ['flux', 'flux2', 'stable-diffusion', 'sdxl']
+      const visionKeywords = ['llava', 'bakllava', 'moondream', 'vision']
+      
+      // Check if current activeModel is actually a chat model
+      if (status.activeModel) {
+        const lower = status.activeModel.toLowerCase()
+        const isImageGen = imageGenKeywords.some(k => lower.includes(k))
+        const isVision = visionKeywords.some(k => lower.includes(k))
+        
+        // If activeModel is a chat model, use it
+        if (!isImageGen && !isVision) {
+          return status.activeModel
+        }
+        // Otherwise, it's incorrectly set to an image gen or vision model, so we need to find a chat model
+      }
+      
+      // Filter out image generation and vision models from fallback
+      const chatModels = models.filter(m => {
+        const lower = m.toLowerCase()
+        return !imageGenKeywords.some(k => lower.includes(k)) &&
+               !visionKeywords.some(k => lower.includes(k))
+      })
+      
+      // If we found a chat model, use it and optionally update activeModel
+      const chatModel = chatModels[0] || models[0] || 'llama3.1:8b'
+      
+      // If activeModel was incorrectly set to a non-chat model, update it
+      if (status.activeModel && chatModel !== status.activeModel) {
+        const lowerActive = status.activeModel.toLowerCase()
+        if (imageGenKeywords.some(k => lowerActive.includes(k)) || 
+            visionKeywords.some(k => lowerActive.includes(k))) {
+          // Silently switch to a proper chat model
+          setActiveModel(chatModel)
+        }
+      }
+      
+      return chatModel
+    }
+    
+    const modelToUse = getChatModel()
     const circuitContext = getCircuitContext()
     
     // Build prompt based on context mode
@@ -394,12 +459,21 @@ export function TerminalFeed() {
           '',
           'CHAT:',
           '  /ai <prompt>   - Send prompt to AI processor',
-          '  /model <name>  - Switch active model',
+          '  /model <name>  - Switch chat model',
+          '  /vision <name> - Switch vision/image analysis model',
+          '  /gen <name>    - Switch image generation model',
           '  /models        - List available Ollama models',
           '  /pull <name>   - Download a new Ollama model',
           '',
           'IMAGES:',
+          '  /image-models  - List available image generation models',
+          '  /pull-image <name> - Download image model (Flux, SDXL, etc.)',
+          '  /set-hf-token <token> - Set HuggingFace token (needed for Flux)',
+          '',
+          'IMAGES:',
           '  /image          - Upload and analyze an image (or use 📷 button)',
+          '  /imagine <prompt> - Generate an image using Ollama (flux2-klein)',
+          '  /dream <prompt>   - Alias for /imagine',
           '  Click 📷 button - Upload image for vision analysis',
           '',
           'CIRCUITS:',
@@ -421,6 +495,8 @@ export function TerminalFeed() {
           '  /status        - Show system status',
           '  /suggest       - Get model suggestions for your system',
           '  /image         - Upload and analyze an image (or click 📷 button)',
+          '  /imagine <prompt> - Generate an image (uses Ollama flux2-klein)',
+          '  /dream <prompt>   - Alias for /imagine',
           '  /help          - Show this message',
           '',
           'Current session auto-saves. Use SAVE in the Sessions panel or /saveas to name it.',
@@ -436,6 +512,212 @@ export function TerminalFeed() {
             fileInput.click()
           }
         }, 100)
+        break
+
+      case 'imagine':
+      case 'dream':
+        const imagePrompt = args.join(' ')
+        if (!imagePrompt) {
+          // Check for available image generation models
+          fetch(`${BACKEND_URL}/api/images/check-image-gen-models`)
+            .then(res => res.json())
+            .then(data => {
+              const available = data.available || []
+              const recommendations = data.recommendations || []
+              
+              let message = 'Usage: /imagine <your prompt>\n'
+              message += 'Example: /imagine a cat holding a sign that says hello world\n\n'
+              
+              if (available.length > 0) {
+                message += `Available models: ${available.join(', ')}\n`
+                message += `Current: ${status.imageGenModel || 'auto-detect'}\n\n`
+              } else {
+                message += 'No image generation models found.\n\n'
+                message += 'Recommended models:\n'
+                recommendations.forEach((rec: any) => {
+                  message += `  ${rec.name} - ${rec.description} (${rec.size})\n`
+                })
+                message += '\nInstall with: /pull x/flux2-klein\n'
+              }
+              
+              addSystemEntry(message, timestamp)
+            })
+            .catch(() => {
+              addSystemEntry('Usage: /imagine <your prompt>\nExample: /imagine a cat holding a sign that says hello world\n\nUses Ollama image generation (flux2-klein). Install with: /pull x/flux2-klein', timestamp)
+            })
+        } else {
+          console.log('[LOOM] Starting image generation for:', imagePrompt)
+          addSystemEntry('⏳ Generating image... Opening panel. This may take 1–2 minutes.', timestamp)
+          // Show generation panel
+          setImageGeneration({
+            prompt: imagePrompt,
+            model: status.imageGenModel || 'auto-detecting',
+            status: 'generating',
+            progress: 0,
+            message: 'Starting...',
+          })
+          console.log('[LOOM] Image generation panel state set')
+          
+          // First check if we have image generation models
+          fetch(`${BACKEND_URL}/api/images/check-image-gen-models`)
+            .then(res => res.json())
+            .then(async (checkData) => {
+              console.log('[LOOM] Image gen models check:', checkData)
+              const available = checkData.available || []
+              
+              if (available.length === 0 && !status.imageGenModel) {
+                // No models available - show recommendations in panel
+                const recommendations = checkData.recommendations || []
+                console.log('[LOOM] No models found, showing recommendations')
+                setImageGeneration({
+                  prompt: imagePrompt,
+                  model: 'none',
+                  status: 'no-model',
+                  availableModels: available,
+                  recommendedModels: recommendations,
+                })
+                return
+              }
+              
+              console.log('[LOOM] Models available, proceeding with generation')
+              setImageGeneration(prev => prev ? { ...prev, message: 'Rendering…' } : null)
+              // Try Ollama first (flux2-klein), fallback to local
+              fetch(`${BACKEND_URL}/api/images/generate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  prompt: imagePrompt,
+                  provider: 'ollama',
+                  model: status.imageGenModel || undefined, // Use selected or auto-detect
+                }),
+              })
+                .then(async res => {
+                  const data = await res.json()
+                  console.log('[LOOM] Image generation response:', { status: res.status, data: { ...data, image: data.image ? `${data.image.substring(0, 50)}...` : 'none' } })
+                  
+                  if (res.ok && data.status === 'success' && data.image) {
+                    // Update image gen model in status if it was auto-detected
+                    if (data.model && data.model !== status.imageGenModel) {
+                      setImageGenModel(data.model)
+                    }
+                    
+                    // Show in panel
+                    setImageGeneration({
+                      prompt: imagePrompt,
+                      imageUrl: data.image,
+                      model: data.model || 'Ollama',
+                      status: 'success',
+                    })
+                  } else {
+                    // Try fallback to local generation
+                    const errorMsg = data.error || data.message || data.detail || 'Ollama generation failed, trying local...'
+                    console.log('[LOOM] Ollama generation failed:', errorMsg)
+                    throw new Error(errorMsg)
+                  }
+                })
+                .catch(async (err) => {
+                  console.log('[LOOM] Ollama generation failed, trying local:', err)
+                  // Fallback to local generation
+                  try {
+                    const res = await fetch(`${BACKEND_URL}/api/images/generate`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        prompt: imagePrompt,
+                        provider: 'local',
+                        model: 'sdxl',
+                      }),
+                    })
+                    const data = await res.json()
+                    if (res.ok && data.status === 'success' && data.image) {
+                      setImageGeneration({
+                        prompt: imagePrompt,
+                        imageUrl: data.image,
+                        model: 'local SDXL',
+                        status: 'success',
+                      })
+                    } else {
+                      throw new Error(data.error || data.message || 'Image generation failed')
+                    }
+                  } catch (fallbackErr) {
+                    const errorMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)
+                    setImageGeneration({
+                      prompt: imagePrompt,
+                      model: status.imageGenModel || 'unknown',
+                      status: 'error',
+                      error: errorMsg,
+                    })
+                  }
+                })
+            })
+            .catch((err) => {
+              console.error('[LOOM] Error checking image gen models:', err)
+              // If check fails, try anyway
+              setImageGeneration({
+                prompt: imagePrompt,
+                model: 'checking...',
+                status: 'generating',
+                progress: 0,
+              })
+              
+              // Try generation anyway
+              fetch(`${BACKEND_URL}/api/images/generate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  prompt: imagePrompt,
+                  provider: 'ollama',
+                  model: status.imageGenModel || undefined,
+                }),
+              })
+                .then(async res => {
+                  const data = await res.json()
+                  if (res.ok && data.status === 'success' && data.image) {
+                    setImageGeneration({
+                      prompt: imagePrompt,
+                      imageUrl: data.image,
+                      model: data.model || 'Ollama',
+                      status: 'success',
+                    })
+                  } else {
+                    // Try local fallback
+                    throw new Error(data.error || data.message || 'Generation failed')
+                  }
+                })
+                .catch(async (fallbackErr) => {
+                  // Try local
+                  try {
+                    const res = await fetch(`${BACKEND_URL}/api/images/generate`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        prompt: imagePrompt,
+                        provider: 'local',
+                        model: 'sdxl',
+                      }),
+                    })
+                    const data = await res.json()
+                    if (res.ok && data.status === 'success' && data.image) {
+                      setImageGeneration({
+                        prompt: imagePrompt,
+                        imageUrl: data.image,
+                        model: 'local SDXL',
+                        status: 'success',
+                      })
+                    } else {
+                      throw new Error(data.error || data.message || 'Generation failed')
+                    }
+                  } catch (localErr) {
+                    setImageGeneration({
+                      prompt: imagePrompt,
+                      model: 'unknown',
+                      status: 'error',
+                      error: localErr instanceof Error ? localErr.message : String(localErr),
+                    })
+                  }
+                })
+            })
+        }
         break
         
       case 'clear': {
@@ -584,18 +866,30 @@ export function TerminalFeed() {
       case 'model':
         const modelName = args.join(' ').trim()
         if (!modelName) {
-          addSystemEntry(`Current model: ${status.activeModel || 'not set'}\n\nUsage: /model <name>\nExample: /model llama3.1:8b`, timestamp)
+          const modelInfo = [
+            `Current chat model: ${status.activeModel || 'not set'}`,
+            `Current vision model: ${status.visionModel || 'not set'}`,
+            `Current image gen model: ${status.imageGenModel || 'not set'}`,
+            '',
+            'Usage: /model <name> - Set chat model',
+            '       /vision <name> - Set vision model',
+            '       /gen <name> - Set image generation model',
+            'Example: /model llama3.1:8b',
+            'Example: /vision llava:7b',
+            'Example: /gen x/flux2-klein',
+          ].join('\n')
+          addSystemEntry(modelInfo, timestamp)
         } else {
           // Check if model exists
           if (models.includes(modelName)) {
             setActiveModel(modelName)
-            addSystemEntry(`Model switched to: ${modelName}`, timestamp)
+            addSystemEntry(`Chat model switched to: ${modelName}`, timestamp)
           } else {
             // Try partial match
             const match = models.find(m => m.toLowerCase().includes(modelName.toLowerCase()))
             if (match) {
               setActiveModel(match)
-              addSystemEntry(`Model switched to: ${match}`, timestamp)
+              addSystemEntry(`Chat model switched to: ${match}`, timestamp)
             } else {
               // If no models loaded, try fetching them first
               if (models.length === 0) {
@@ -605,7 +899,7 @@ export function TerminalFeed() {
                     const match = fetchedModels.find((m: string) => m.toLowerCase().includes(modelName.toLowerCase()))
                     if (match) {
                       setActiveModel(match)
-                      addSystemEntry(`Model switched to: ${match}`, Date.now())
+                      addSystemEntry(`Chat model switched to: ${match}`, Date.now())
                     } else {
                       addErrorEntry(`Model "${modelName}" not found.\nAvailable: ${fetchedModels.slice(0, 10).join(', ')}${fetchedModels.length > 10 ? '...' : ''}`, Date.now())
                     }
@@ -621,14 +915,115 @@ export function TerminalFeed() {
         }
         break
 
+      case 'vision':
+        const visionModelName = args.join(' ').trim()
+        if (!visionModelName) {
+          addSystemEntry(`Current vision model: ${status.visionModel || 'not set'}\n\nUsage: /vision <name>\nExample: /vision llava:7b`, timestamp)
+        } else {
+          // Check if model exists
+          if (models.includes(visionModelName)) {
+            setVisionModel(visionModelName)
+            addSystemEntry(`Vision model switched to: ${visionModelName}`, timestamp)
+          } else {
+            // Try partial match
+            const match = models.find(m => m.toLowerCase().includes(visionModelName.toLowerCase()))
+            if (match) {
+              setVisionModel(match)
+              addSystemEntry(`Vision model switched to: ${match}`, timestamp)
+            } else {
+              // If no models loaded, try fetching them first
+              if (models.length === 0) {
+                addSystemEntry('No models loaded. Fetching from backend...', timestamp)
+                fetchModels().then((fetchedModels) => {
+                  if (fetchedModels.length > 0) {
+                    const match = fetchedModels.find((m: string) => m.toLowerCase().includes(visionModelName.toLowerCase()))
+                    if (match) {
+                      setVisionModel(match)
+                      addSystemEntry(`Vision model switched to: ${match}`, Date.now())
+                    } else {
+                      addErrorEntry(`Vision model "${visionModelName}" not found.\nAvailable: ${fetchedModels.slice(0, 10).join(', ')}${fetchedModels.length > 10 ? '...' : ''}`, Date.now())
+                    }
+                  } else {
+                    addErrorEntry('No models available. Is Ollama running?', Date.now())
+                  }
+                })
+              } else {
+                addErrorEntry(`Vision model "${visionModelName}" not found.\nAvailable: ${models.slice(0, 10).join(', ')}${models.length > 10 ? '...' : ''}`, timestamp)
+              }
+            }
+          }
+        }
+        break
+
+      case 'gen':
+      case 'image-gen':
+        const imageGenModelName = args.join(' ').trim()
+        if (!imageGenModelName) {
+          addSystemEntry(`Current image generation model: ${status.imageGenModel || 'not set'}\n\nUsage: /gen <name> or /image-gen <name>\nExample: /gen x/flux2-klein`, timestamp)
+        } else {
+          // Check if model exists
+          if (models.includes(imageGenModelName)) {
+            setImageGenModel(imageGenModelName)
+            addSystemEntry(`Image generation model switched to: ${imageGenModelName}`, timestamp)
+          } else {
+            // Try partial match
+            const match = models.find(m => m.toLowerCase().includes(imageGenModelName.toLowerCase()))
+            if (match) {
+              setImageGenModel(match)
+              addSystemEntry(`Image generation model switched to: ${match}`, timestamp)
+            } else {
+              // If no models loaded, try fetching them first
+              if (models.length === 0) {
+                addSystemEntry('No models loaded. Fetching from backend...', timestamp)
+                fetchModels().then((fetchedModels) => {
+                  if (fetchedModels.length > 0) {
+                    const match = fetchedModels.find((m: string) => m.toLowerCase().includes(imageGenModelName.toLowerCase()))
+                    if (match) {
+                      setImageGenModel(match)
+                      addSystemEntry(`Image generation model switched to: ${match}`, Date.now())
+                    } else {
+                      addErrorEntry(`Image generation model "${imageGenModelName}" not found.\nAvailable: ${fetchedModels.slice(0, 10).join(', ')}${fetchedModels.length > 10 ? '...' : ''}\n\nInstall with: /pull ${imageGenModelName}`, Date.now())
+                    }
+                  } else {
+                    addErrorEntry('No models available. Is Ollama running?', Date.now())
+                  }
+                })
+              } else {
+                addErrorEntry(`Image generation model "${imageGenModelName}" not found.\nAvailable: ${models.slice(0, 10).join(', ')}${models.length > 10 ? '...' : ''}\n\nInstall with: /pull ${imageGenModelName}`, timestamp)
+              }
+            }
+          }
+        }
+        break
+
       case 'models':
         addSystemEntry('Fetching models from Ollama...', timestamp)
         fetchModels().then((modelList) => {
           console.log('[LOOM] Fetched models list:', modelList)
           if (modelList.length > 0) {
             const activeModel = status.activeModel
-            const currentMarker = (m: string): string => m === activeModel ? ' ← active' : ''
-            addSystemEntry(`Available models (${modelList.length}):\n  ${modelList.map((m: string) => m + currentMarker(m)).join('\n  ')}`, Date.now())
+            const visionModel = status.visionModel
+            const imageGenModel = status.imageGenModel
+            
+            // Categorize models
+            const visionKeywords = ['llava', 'bakllava', 'moondream', 'vision']
+            const imageGenKeywords = ['flux', 'flux2', 'stable-diffusion']
+            
+            const currentMarker = (m: string): string => {
+              if (m === activeModel) return ' ← chat'
+              if (m === visionModel) return ' ← vision'
+              if (m === imageGenModel) return ' ← image-gen'
+              return ''
+            }
+            
+            const typeMarker = (m: string): string => {
+              const lower = m.toLowerCase()
+              if (visionKeywords.some(k => lower.includes(k))) return ' [vision]'
+              if (imageGenKeywords.some(k => lower.includes(k))) return ' [image-gen]'
+              return ' [chat]'
+            }
+            
+            addSystemEntry(`Available models (${modelList.length}):\n  ${modelList.map((m: string) => m + typeMarker(m) + currentMarker(m)).join('\n  ')}`, Date.now())
           } else {
             addSystemEntry('No models found. Is Ollama running? Try: ollama list', Date.now())
           }
@@ -719,7 +1114,25 @@ export function TerminalFeed() {
             if (status === 'success') {
               addSystemEntry(`✓ Model "${modelToPull}" downloaded successfully!`, progressTimestamp)
               // Refresh models list
-              fetchModels()
+              fetchModels().then(() => {
+                // Check if this is a vision model and set it
+                const visionKeywords = ['llava', 'bakllava', 'moondream', 'vision']
+                const isVisionModel = visionKeywords.some(keyword => 
+                  modelToPull.toLowerCase().includes(keyword)
+                )
+                if (isVisionModel && !status.visionModel) {
+                  setVisionModel(modelToPull)
+                }
+                
+                // Check if this is an image generation model and set it
+                const imageGenKeywords = ['flux', 'flux2', 'stable-diffusion']
+                const isImageGenModel = imageGenKeywords.some(keyword => 
+                  modelToPull.toLowerCase().includes(keyword)
+                )
+                if (isImageGenModel && !status.imageGenModel) {
+                  setImageGenModel(modelToPull)
+                }
+              })
               // Auto-close panel after 5 seconds
               setTimeout(() => {
                 setDownloadProgress(null)
@@ -829,14 +1242,157 @@ export function TerminalFeed() {
           })
         break
 
+      case 'image-models':
+        addSystemEntry('Fetching image generation models...', timestamp)
+        fetch(`${BACKEND_URL}/api/images/models`)
+          .then(res => res.json())
+          .then(data => {
+            const localModels = data.local || []
+            const hfModels = data.hf_models || data.huggingface || []
+            const device = data.device || 'unknown'
+            const current = data.current_model || 'none'
+            
+            let message = `IMAGE GENERATION MODELS:\n\n`
+            message += `Device: ${device.toUpperCase()}\n`
+            message += `Current: ${current}\n\n`
+            
+            if (localModels.length > 0) {
+              message += 'LOCAL MODELS:\n'
+              localModels.forEach((m: any) => {
+                const name = m.name || 'unknown'
+                const vram = m.vram || '?'
+                const repo = m.repo || ''
+                message += `  ${name} (${vram} VRAM)`
+                if (repo) message += `\n    → ${repo}`
+                message += '\n'
+              })
+              message += '\n'
+            }
+            
+            if (hfModels.length > 0) {
+              message += 'HUGGINGFACE API MODELS:\n'
+              hfModels.forEach((name: string) => {
+                message += `  ${name}\n`
+              })
+              message += '\n'
+            }
+            
+            message += 'To download a model:\n'
+            message += '  /pull-image <name>\n'
+            message += 'Examples:\n'
+            message += '  /pull-image flux-schnell  (fast, requires HF token)\n'
+            message += '  /pull-image sdxl          (good quality, no token needed)\n'
+            message += '  /pull-image sd-1.5        (small, fast, no token needed)\n\n'
+            message += 'Note: Flux models require HuggingFace token.\n'
+            message += 'Get token: https://huggingface.co/settings/tokens\n'
+            message += 'Set it: /set-hf-token <your-token>'
+            
+            addSystemEntry(message, Date.now())
+          })
+          .catch(err => {
+            console.error('[LOOM] Error fetching image models:', err)
+            addErrorEntry(`Failed to fetch image models: ${err.message}`, Date.now())
+          })
+        break
+
+      case 'pull-image':
+        const imageModelToPull = args.join(' ').trim()
+        if (!imageModelToPull) {
+          addSystemEntry('Usage: /pull-image <model-name>\n\nAvailable models:\n  flux-schnell (fast, needs HF token)\n  flux-dev (best quality, needs HF token)\n  sdxl (good quality, no token)\n  sdxl-turbo (very fast, no token)\n  sd-1.5 (small, fast, no token)\n\nGet HF token: https://huggingface.co/settings/tokens', timestamp)
+        } else {
+          addSystemEntry(`Preparing image model "${imageModelToPull}"...\nThis will download the model on first use.`, timestamp)
+          
+          // Use socket to pull image model
+          if (connected) {
+            const socket = (window as any).loomSocket
+            if (socket) {
+              socket.emit('pull_image_model', { model: imageModelToPull })
+              
+              // Listen for status updates
+              const handler = (data: any) => {
+                if (data.model === imageModelToPull) {
+                  const status = data.status || 'unknown'
+                  const message = data.message || status
+                  
+                  if (status === 'success') {
+                    addSystemEntry(`✓ Image model "${imageModelToPull}" is ready!`, Date.now())
+                    socket.off('pull_image_status', handler)
+                  } else if (status === 'error') {
+                    const errorMsg = data.error || data.message || 'Unknown error'
+                    let errorText = `✗ Failed to prepare model "${imageModelToPull}"\n\nError: ${errorMsg}`
+                    
+                    if (errorMsg.includes('token') || errorMsg.includes('authentication')) {
+                      errorText += '\n\nThis model requires a HuggingFace token.\n'
+                      errorText += 'Get one at: https://huggingface.co/settings/tokens\n'
+                      errorText += 'Then set it with: /set-hf-token <your-token>'
+                    }
+                    
+                    addErrorEntry(errorText, Date.now())
+                    socket.off('pull_image_status', handler)
+                  } else {
+                    // Update status
+                    addSystemEntry(`[${status}] ${message}`, Date.now())
+                  }
+                }
+              }
+              
+              socket.on('pull_image_status', handler)
+              
+              // Cleanup after 5 minutes
+              setTimeout(() => {
+                socket.off('pull_image_status', handler)
+              }, 300000)
+            } else {
+              addErrorEntry('Not connected to backend. Please wait for connection.', timestamp)
+            }
+          } else {
+            addErrorEntry('Not connected to backend. Please wait for connection.', timestamp)
+          }
+        }
+        break
+
+      case 'set-hf-token':
+        const token = args.join(' ').trim()
+        if (!token) {
+          addSystemEntry('Usage: /set-hf-token <your-huggingface-token>\n\nGet a token from: https://huggingface.co/settings/tokens\n\nThis token is needed for Flux models and other gated models.', timestamp)
+        } else {
+          fetch(`${BACKEND_URL}/api/images/config/huggingface`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token }),
+          })
+            .then(res => res.json())
+            .then(data => {
+              if (data.status === 'ok') {
+                addSystemEntry('✓ HuggingFace token set! You can now use Flux models.\n\nTry: /pull-image flux-schnell', Date.now())
+              } else {
+                addErrorEntry(`Failed to set token: ${data.message || 'Unknown error'}`, Date.now())
+              }
+            })
+            .catch(err => {
+              addErrorEntry(`Failed to set token: ${err.message}`, Date.now())
+            })
+        }
+        break
+
       case 'status':
-        addSystemEntry([
+        const statusLines = [
           'SYSTEM STATUS:',
           `  Backend: ${connected ? 'CONNECTED' : 'DISCONNECTED'}`,
           `  Ollama:  ${status.connected ? 'ONLINE' : 'STANDBY'}`,
           `  Models:  ${models.length} available`,
           `  Circuits: ${getCircuitNames().length} saved`,
-        ].join('\n'), timestamp)
+        ]
+        if (status.activeModel) {
+          statusLines.push(`  Chat Model: ${status.activeModel}`)
+        }
+        if (status.visionModel) {
+          statusLines.push(`  Vision Model: ${status.visionModel}`)
+        }
+        if (status.imageGenModel) {
+          statusLines.push(`  Image Gen Model: ${status.imageGenModel}`)
+        }
+        addSystemEntry(statusLines.join('\n'), timestamp)
         break
 
       case 'circuits': {
@@ -1131,10 +1687,11 @@ export function TerminalFeed() {
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({
-            image_base64: imageBase64,
-            prompt: "Describe this image in detail. What do you see? List the key elements, objects, text, colors, composition, and any notable features. Be specific and thorough.",
-          }),
+        body: JSON.stringify({
+          image_base64: imageBase64,
+          prompt: "Describe this image in detail. What do you see? List the key elements, objects, text, colors, composition, and any notable features. Be specific and thorough.",
+          model: status.visionModel || undefined, // Use vision model if set, otherwise auto-detect
+        }),
         })
 
         if (!response.ok) {
@@ -1145,13 +1702,21 @@ export function TerminalFeed() {
         const data = await response.json()
         
         if (data.success) {
+          const usedModel = data.model || 'auto-detected'
           setImageAnalysis({
             imageUrl,
             analysis: data.analysis,
-            model: data.model || 'auto-detected',
+            model: usedModel,
             status: 'success',
             availableVisionModels: data.available_vision_models || [],
           })
+          
+          // Update vision model in status if it was auto-detected or explicitly set
+          if (usedModel !== 'auto-detected' && !status.visionModel) {
+            setVisionModel(usedModel)
+          } else if (usedModel !== 'auto-detected') {
+            setVisionModel(usedModel)
+          }
           
           // Also add to terminal as a log entry
           const timestamp = Date.now()
@@ -1204,7 +1769,7 @@ export function TerminalFeed() {
   }
 
   return (
-    <div className="h-full flex">
+    <div className="h-full flex relative">
       {/* Session Panel */}
       <SessionPanel
         isCollapsed={panelCollapsed}
@@ -1216,7 +1781,7 @@ export function TerminalFeed() {
       />
       
       {/* Main Terminal Area */}
-      <div className="flex-1 flex flex-col">
+      <div className={`flex-1 flex flex-col transition-all duration-200 ${imageGeneration ? 'mr-96' : ''}`}>
         {/* Terminal Feed */}
         <div 
           ref={feedRef}
@@ -1228,6 +1793,9 @@ export function TerminalFeed() {
                 key={entry.id} 
                 entry={entry} 
                 formatTimestamp={formatTimestamp}
+                onImageClick={(imageUrl, metadata, canEdit) => {
+                  setSelectedImageModal({ imageUrl, metadata, canEdit })
+                }}
               />
             ))}
           </div>
@@ -1289,13 +1857,16 @@ export function TerminalFeed() {
               .then(res => res.json())
               .then(data => {
                 if (data.success) {
+                  const usedModel = data.model || modelName
                   setImageAnalysis({
                     imageUrl,
                     analysis: data.analysis,
-                    model: data.model || modelName,
+                    model: usedModel,
                     status: 'success',
                     availableVisionModels: data.available_vision_models || [],
                   })
+                  // Update vision model in status
+                  setVisionModel(usedModel)
                 } else {
                   throw new Error(data.detail || data.error || 'Analysis failed')
                 }
@@ -1341,7 +1912,16 @@ export function TerminalFeed() {
               
               // On success, refresh models and retry analysis
               if (status === 'success') {
-                fetchModels()
+                fetchModels().then(() => {
+                  // Set as vision model if it's a vision model
+                  const visionKeywords = ['llava', 'bakllava', 'moondream', 'vision']
+                  const isVisionModel = visionKeywords.some(keyword => 
+                    modelName.toLowerCase().includes(keyword)
+                  )
+                  if (isVisionModel) {
+                    setVisionModel(modelName)
+                  }
+                })
                 // Retry image analysis after a short delay
                 setTimeout(() => {
                   const pendingImage = pendingImageUrlRef.current
@@ -1356,6 +1936,203 @@ export function TerminalFeed() {
           downloadProgress={downloadProgress}
         />
       )}
+
+      {/* Image Generation Panel */}
+      {imageGeneration && (
+        <ImageGenerationPanel
+          generation={imageGeneration}
+          onClose={() => setImageGeneration(null)}
+          onEditImage={(imageUrl, editPrompt) => {
+            // Perform image-to-image editing
+            if (!imageGeneration) return
+            
+            setImageGeneration({
+              prompt: editPrompt,
+              model: imageGeneration.model || status.imageGenModel || 'auto-detecting',
+              status: 'generating',
+              progress: 0,
+            })
+            
+            // Call backend with input_image for img2img
+            fetch(`${BACKEND_URL}/api/images/generate`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                prompt: editPrompt,
+                provider: 'ollama',
+                model: imageGeneration.model || status.imageGenModel || undefined,
+                input_image: imageUrl, // Pass the original image for editing
+              }),
+            })
+              .then(async res => {
+                const data = await res.json()
+                if (res.ok && data.status === 'success' && data.image) {
+                  setImageGeneration({
+                    prompt: editPrompt,
+                    imageUrl: data.image,
+                    model: data.model || imageGeneration.model || 'Ollama',
+                    status: 'success',
+                  })
+                } else {
+                  throw new Error(data.error || data.message || 'Image editing failed')
+                }
+              })
+              .catch((err) => {
+                setImageGeneration({
+                  prompt: editPrompt,
+                  model: imageGeneration.model || 'unknown',
+                  status: 'error',
+                  error: err instanceof Error ? err.message : String(err),
+                })
+              })
+          }}
+          onApproveToChat={(imageUrl, prompt) => {
+            const timestamp = Date.now()
+            // Store prompt in content for easy retrieval, and model info in imageAnalysis
+            setEntries(prev => [...prev, {
+              id: `image-gen-${timestamp}`,
+              type: 'image',
+              content: prompt, // Store the actual prompt, not "Generated: {prompt}"
+              timestamp,
+              imageUrl,
+              imageAnalysis: `Generated using ${imageGeneration.model}`, // Model info here
+            }])
+            setImageGeneration(null)
+          }}
+          onRetryGeneration={(prompt, modelName) => {
+            // Retry generation with specific model
+            setImageGeneration({
+              prompt,
+              model: modelName,
+              status: 'generating',
+              progress: 0,
+            })
+            
+            fetch(`${BACKEND_URL}/api/images/generate`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                prompt,
+                provider: 'ollama',
+                model: modelName,
+              }),
+            })
+              .then(async res => {
+                const data = await res.json()
+                if (res.ok && data.status === 'success' && data.image) {
+                  setImageGeneration({
+                    prompt,
+                    imageUrl: data.image,
+                    model: data.model || modelName,
+                    status: 'success',
+                  })
+                  // Update image gen model in status
+                  if (data.model) {
+                    setImageGenModel(data.model)
+                  }
+                } else {
+                  // Try fallback to local
+                  throw new Error(data.error || data.message || 'Generation failed')
+                }
+              })
+              .catch(async (err) => {
+                // Try local fallback
+                try {
+                  const res = await fetch(`${BACKEND_URL}/api/images/generate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      prompt,
+                      provider: 'local',
+                      model: 'sdxl',
+                    }),
+                  })
+                  const data = await res.json()
+                  if (res.ok && data.status === 'success' && data.image) {
+                    setImageGeneration({
+                      prompt,
+                      imageUrl: data.image,
+                      model: 'local SDXL',
+                      status: 'success',
+                    })
+                  } else {
+                    throw new Error(data.error || data.message || 'Generation failed')
+                  }
+                } catch (fallbackErr) {
+                  setImageGeneration({
+                    prompt,
+                    model: modelName,
+                    status: 'error',
+                    error: fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr),
+                  })
+                }
+              })
+          }}
+          onPullModel={(modelName) => {
+            // Start download
+            pullModel(modelName, (progress: any) => {
+              const status = progress.status || 'unknown'
+              const completed = progress.completed || 0
+              const total = progress.total || 0
+              
+              setDownloadProgress({
+                model: modelName,
+                status: status,
+                completed: completed,
+                total: total,
+                percent: progress.percent,
+                message: progress.message,
+                error: progress.error,
+              })
+              
+              // On success, refresh models and retry generation
+              if (status === 'success') {
+                fetchModels().then(() => {
+                  // Set as image gen model if it's an image gen model
+                  const imageGenKeywords = ['flux', 'flux2', 'stable-diffusion']
+                  const isImageGenModel = imageGenKeywords.some(keyword => 
+                    modelName.toLowerCase().includes(keyword)
+                  )
+                  if (isImageGenModel) {
+                    setImageGenModel(modelName)
+                  }
+                })
+                // Retry generation after a short delay
+                if (imageGeneration) {
+                  setTimeout(() => {
+                    const prompt = imageGeneration.prompt
+                    fetch(`${BACKEND_URL}/api/images/generate`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        prompt,
+                        provider: 'ollama',
+                        model: modelName,
+                      }),
+                    })
+                      .then(async res => {
+                        const data = await res.json()
+                        if (res.ok && data.status === 'success' && data.image) {
+                          setImageGeneration({
+                            prompt,
+                            imageUrl: data.image,
+                            model: data.model || modelName,
+                            status: 'success',
+                          })
+                        }
+                      })
+                      .catch(() => {
+                        // Ignore errors on retry
+                      })
+                  }, 2000)
+                }
+              }
+            })
+          }}
+          downloadProgress={downloadProgress}
+          allModels={models}
+        />
+      )}
       
       {/* Save Session Modal */}
       <SaveSessionModal
@@ -1363,6 +2140,61 @@ export function TerminalFeed() {
         onClose={() => setShowSaveModal(false)}
         onSave={handleSaveSession}
       />
+
+      {/* Image Modal for viewing/editing images in feed */}
+      {selectedImageModal && (
+        <ImageModal
+          isOpen={!!selectedImageModal}
+          onClose={() => setSelectedImageModal(null)}
+          imageUrl={selectedImageModal.imageUrl}
+          metadata={selectedImageModal.metadata}
+          canEdit={selectedImageModal.canEdit}
+          onEdit={(imageUrl, editPrompt) => {
+            // Close modal and open image generation panel with edit
+            setSelectedImageModal(null)
+            setImageGeneration({
+              prompt: editPrompt,
+              model: selectedImageModal.metadata.model || status.imageGenModel || 'auto-detecting',
+              status: 'generating',
+              progress: 0,
+              message: 'Editing image...',
+            })
+            
+            // Call backend with input_image for img2img
+            fetch(`${BACKEND_URL}/api/images/generate`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                prompt: editPrompt,
+                provider: 'ollama',
+                model: selectedImageModal.metadata.model || status.imageGenModel || undefined,
+                input_image: imageUrl, // Pass the original image for editing
+              }),
+            })
+              .then(async res => {
+                const data = await res.json()
+                if (res.ok && data.status === 'success' && data.image) {
+                  setImageGeneration({
+                    prompt: editPrompt,
+                    imageUrl: data.image,
+                    model: data.model || selectedImageModal.metadata.model || 'Ollama',
+                    status: 'success',
+                  })
+                } else {
+                  throw new Error(data.error || data.message || 'Image editing failed')
+                }
+              })
+              .catch((err) => {
+                setImageGeneration({
+                  prompt: editPrompt,
+                  model: selectedImageModal.metadata.model || 'unknown',
+                  status: 'error',
+                  error: err instanceof Error ? err.message : String(err),
+                })
+              })
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -1370,9 +2202,10 @@ export function TerminalFeed() {
 interface LogEntryBlockProps {
   entry: LogEntry
   formatTimestamp: (ts: number) => string
+  onImageClick?: (imageUrl: string, metadata: { prompt?: string; model?: string; timestamp?: number; provider?: string; analysis?: string }, canEdit: boolean) => void
 }
 
-function LogEntryBlock({ entry, formatTimestamp }: LogEntryBlockProps) {
+function LogEntryBlock({ entry, formatTimestamp, onImageClick }: LogEntryBlockProps) {
   const typeStyles = {
     user: 'border-phosphor',
     system: 'border-terminal-gray',
@@ -1427,7 +2260,29 @@ function LogEntryBlock({ entry, formatTimestamp }: LogEntryBlockProps) {
               <img 
                 src={entry.imageUrl} 
                 alt="Chat image"
-                className="max-w-full h-auto max-h-64 border border-terminal-border"
+                className="max-w-full h-auto max-h-64 border border-terminal-border cursor-pointer hover:opacity-80 transition-opacity"
+                onClick={() => {
+                  if (!onImageClick || !entry.imageUrl) return
+                  
+                  // Extract prompt and model from entry
+                  const prompt = entry.content || 'Generated image'
+                  const modelMatch = entry.imageAnalysis?.match(/Generated using (.+)/)
+                  const model = modelMatch ? modelMatch[1] : undefined
+                  
+                  // Check if this was generated (has model info) - enable editing for generated images
+                  // Enable editing if it has a model and is from a supported provider (flux, ollama, or local SDXL)
+                  const canEdit = !!model && (model.toLowerCase().includes('flux') || model.toLowerCase().includes('ollama') || model.toLowerCase().includes('sdxl'))
+                  
+                  // Open modal with metadata
+                  onImageClick(entry.imageUrl, {
+                    prompt,
+                    model,
+                    timestamp: entry.timestamp,
+                    provider: model?.toLowerCase().includes('sdxl') ? 'local' : 'ollama',
+                    analysis: entry.imageAnalysis,
+                  }, canEdit)
+                }}
+                title="Click to view full screen and edit"
               />
             </div>
             {entry.imageAnalysis && (

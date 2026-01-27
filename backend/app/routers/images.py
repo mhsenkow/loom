@@ -23,7 +23,8 @@ class ImageGenRequest(BaseModel):
     steps: int = 30
     guidance_scale: float = 7.5
     seed: Optional[int] = None
-    provider: str = "local"  # "local", "huggingface", or "comfyui"
+    provider: str = "local"  # "local", "huggingface", "comfyui", or "ollama"
+    input_image: Optional[str] = None  # Base64 image data for image-to-image editing
 
 
 class SetTokenRequest(BaseModel):
@@ -43,7 +44,21 @@ class DownloadModelRequest(BaseModel):
 async def generate_image(request: ImageGenRequest):
     """Generate an image from a text prompt"""
     try:
-        if request.provider == "local":
+        if request.provider == "ollama":
+            # Use Ollama image generation models (like flux2-klein)
+            from app.services.ollama_client import ollama_client
+            image_data = await ollama_client.generate_image(
+                prompt=request.prompt,
+                model=request.model,
+                input_image=request.input_image,  # For image-to-image editing
+            )
+            return {
+                "status": "success",
+                "image": image_data,
+                "model": request.model or "auto-detected",
+                "provider": "ollama",
+            }
+        elif request.provider == "local":
             # Use local diffusers with MPS/CUDA
             result = await local_image_gen.generate(
                 prompt=request.prompt,
@@ -88,11 +103,73 @@ async def generate_image(request: ImageGenRequest):
 
 @router.get("/models")
 async def list_models():
-    """List available image models"""
+    """List available image models - only actually downloaded/available ones"""
+    from app.services.ollama_client import ollama_client
+    
+    # Get Ollama image generation models (actually downloaded)
+    ollama_image_models = []
+    try:
+        ollama_models = await ollama_client.list_models()
+        image_gen_keywords = ['flux', 'flux2', 'stable-diffusion']
+        for m in ollama_models:
+            name = m.get("name", "").lower()
+            if any(keyword in name for keyword in image_gen_keywords):
+                ollama_image_models.append({
+                    "name": m.get("name"),
+                    "type": "ollama",
+                    "vram": "varies",
+                })
+    except Exception as e:
+        print(f"[LOOM] Error fetching Ollama image models: {e}")
+    
+    # Get local diffusers models (only if actually downloaded/cached)
+    local_models = []
+    try:
+        from pathlib import Path
+        models_dir = local_image_gen.models_dir
+        
+        # Check for local .safetensors files
+        for f in models_dir.glob("**/*.safetensors"):
+            local_models.append({
+                "name": f.stem,
+                "path": str(f),
+                "type": "local",
+                "vram": "varies",
+            })
+        
+        # For predefined models, check if they're actually cached
+        # Only include if they exist in HuggingFace cache
+        from app.services.local_image_gen import MODELS
+        cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
+        
+        for name, info in MODELS.items():
+            repo_id = info["repo"].replace("/", "--")
+            cache_path = cache_dir / f"models--{repo_id}"
+            # Check if model files exist in cache
+            if cache_path.exists():
+                # Look for model files (safetensors, bin, etc.)
+                has_model_files = any(cache_path.rglob("*.safetensors")) or any(cache_path.rglob("*.bin"))
+                if has_model_files:
+                    local_models.append({
+                        "name": name,
+                        "repo": info["repo"],
+                        "type": info["type"],
+                        "vram": info["vram"],
+                    })
+    except Exception as e:
+        print(f"[LOOM] Error checking local models: {e}")
+    
+    # Combine both sources - Ollama models first (they're actually downloaded)
+    all_models = ollama_image_models + local_models
+    
     return {
-        "local": local_image_gen.list_models(),
+        "local": all_models,  # All actually available models
+        "ollama": ollama_image_models,
+        "diffusers": local_models,
         "huggingface": list(image_gen_service.MODELS.keys()),
+        "hf_models": list(image_gen_service.MODELS.keys()),  # Alias for frontend
         "device": local_image_gen.device,
+        "current_model": local_image_gen.current_model,
     }
 
 
@@ -194,6 +271,42 @@ async def check_vision_models():
             "available": [],
             "recommendations": [],
             "has_vision_model": False,
+            "error": str(e),
+        }
+
+
+@router.get("/check-image-gen-models")
+async def check_image_gen_models():
+    """Check for available image generation models and return recommendations"""
+    from app.services.ollama_client import ollama_client
+    
+    try:
+        models = await ollama_client.list_models()
+        image_gen_keywords = ['flux', 'flux2', 'stable-diffusion']
+        
+        available = []
+        for m in models:
+            name = m.get("name", "").lower()
+            if any(keyword in name for keyword in image_gen_keywords):
+                available.append(m.get("name"))
+        
+        # Recommended models if none available
+        recommendations = [
+            {"name": "x/flux2-klein", "description": "FLUX.2 Klein - Fast, great text rendering, macOS only", "size": "~5.7GB (4B) or ~12GB (9B)"},
+            {"name": "x/flux2-klein:4b", "description": "FLUX.2 Klein 4B - Smaller, faster version", "size": "~5.7GB"},
+            {"name": "x/flux2-klein:9b", "description": "FLUX.2 Klein 9B - Higher quality version", "size": "~12GB"},
+        ]
+        
+        return {
+            "available": available,
+            "recommendations": recommendations,
+            "has_image_gen_model": len(available) > 0,
+        }
+    except Exception as e:
+        return {
+            "available": [],
+            "recommendations": [],
+            "has_image_gen_model": False,
             "error": str(e),
         }
 

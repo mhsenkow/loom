@@ -6,6 +6,7 @@ Personal Intelligence OS
 import socketio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, FileResponse
 import uvicorn
 import sys
 import os
@@ -16,7 +17,7 @@ backend_dir = Path(__file__).parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-from app.routers import modules, images, files, circuits, search
+from app.routers import modules, images, files, circuits, search, remote
 from app.services.ollama_client import ollama_client
 from app.services.vector_store import VectorStore
 from app.services.storage import get_module as storage_get_module, init_db as storage_init_db
@@ -37,24 +38,16 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# CORS middleware for Electron renderer
-# Allow all localhost origins for local development
-import re
-def is_localhost_origin(origin: str) -> bool:
-    """Check if origin is localhost or 127.0.0.1 on any port"""
-    if not origin:
-        return False
-    pattern = r'^https?://(localhost|127\.0\.0\.1)(:\d+)?$'
-    return bool(re.match(pattern, origin))
-
+# CORS middleware - Allow all origins for network access (mobile, Vite dev, etc.)
+# Reverted to original: ["*"] so localhost loads. If you see CORS errors from :5173, we can add explicit origins next.
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r'https?://(localhost|127\.0\.0\.1)(:\d+)?',  # Allow any localhost port
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
     expose_headers=["*"],
-    max_age=0,  # Disable preflight caching to avoid browser cache issues
+    max_age=0,
 )
 
 # Initialize services
@@ -73,6 +66,7 @@ app.include_router(images.router, prefix="/api/images", tags=["images"])
 app.include_router(files.router, prefix="/api/files", tags=["files"])
 app.include_router(circuits.router, prefix="/api/circuits", tags=["circuits"])
 app.include_router(search.router, prefix="/api/search", tags=["search"])
+app.include_router(remote.router, prefix="/api/remote", tags=["remote"])
 
 # Initialize database on startup
 @app.on_event("startup")
@@ -109,13 +103,217 @@ async def root():
     }
 
 
+@app.get("/network-info")
+async def network_info():
+    """Get local network IP address for easy mobile access"""
+    import socket
+    try:
+        # Connect to a remote address to determine local IP
+        # This doesn't actually send data, just determines the route
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0)
+        try:
+            # Try to connect to a non-routable address
+            s.connect(('10.254.254.254', 1))
+            ip = s.getsockname()[0]
+        except Exception:
+            ip = '127.0.0.1'
+        finally:
+            s.close()
+        
+        return {
+            "local_ip": ip,
+            "port": 8000,
+            "chat_url": f"http://{ip}:8000/chat",
+            "api_url": f"http://{ip}:8000",
+        }
+    except Exception as e:
+        return {
+            "local_ip": "unknown",
+            "port": 8000,
+            "error": str(e),
+        }
+
+
+@app.get("/favicon.ico")
+async def favicon():
+    """Return empty favicon to avoid 404"""
+    from fastapi.responses import Response
+    return Response(content="", media_type="image/x-icon")
+
+
+@app.get("/test")
+async def test_endpoint():
+    """Simple test endpoint to verify connectivity"""
+    return {
+        "status": "ok",
+        "message": "Backend is reachable",
+        "timestamp": __import__('time').time()
+    }
+
+
+@app.get("/diagnostics", response_class=HTMLResponse)
+async def diagnostics_page():
+    """Serve diagnostics page for troubleshooting"""
+    diagnostics_path = Path(__file__).parent / "diagnostics.html"
+    if diagnostics_path.exists():
+        return FileResponse(diagnostics_path)
+    else:
+        return HTMLResponse(content="<h1>Diagnostics page not found</h1>")
+
+
+@app.get("/chat", response_class=HTMLResponse)
+async def chat_page():
+    """Serve mobile-friendly chat interface"""
+    # Try multiple possible paths
+    possible_paths = [
+        Path(__file__).parent / "chat.html",  # backend/chat.html
+        Path(__file__).parent.parent / "chat.html",  # loom/chat.html
+    ]
+    
+    for chat_html_path in possible_paths:
+        if chat_html_path.exists():
+            return FileResponse(chat_html_path)
+    
+    # If file doesn't exist, return inline HTML
+    else:
+        # Return a simple inline HTML if file doesn't exist yet
+        return HTMLResponse(content="""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Loom Chat</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <style>
+                body { font-family: system-ui; margin: 0; padding: 0; background: #0a0a0a; color: #00ff00; }
+                .container { max-width: 100%; height: 100vh; display: flex; flex-direction: column; }
+                .messages { flex: 1; overflow-y: auto; padding: 1rem; }
+                .input-area { padding: 1rem; border-top: 1px solid #333; }
+                input { width: 100%; padding: 0.75rem; background: #1a1a1a; border: 1px solid #333; color: #00ff00; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="messages" id="messages"></div>
+                <div class="input-area">
+                    <input type="text" id="input" placeholder="Type your message..." />
+                </div>
+            </div>
+            <script src="/socket.io/socket.io.js"></script>
+            <script>
+                const socket = io();
+                const messages = document.getElementById('messages');
+                const input = document.getElementById('input');
+                
+                socket.on('connect', () => {
+                    addMessage('Connected to Loom', 'system');
+                });
+                
+                input.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') {
+                        const msg = input.value;
+                        if (msg) {
+                            addMessage(msg, 'user');
+                            socket.emit('chat', { prompt: msg, model: 'llama3.1:8b' });
+                            input.value = '';
+                        }
+                    }
+                });
+                
+                socket.on('ai_chunk', (data) => {
+                    addMessage(data.content, 'ai', true);
+                });
+                
+                function addMessage(text, type, append = false) {
+                    const div = document.createElement('div');
+                    div.textContent = text;
+                    div.style.marginBottom = '0.5rem';
+                    div.style.color = type === 'user' ? '#00ff00' : type === 'ai' ? '#00aaff' : '#888';
+                    if (append && messages.lastChild && messages.lastChild.classList.contains('ai')) {
+                        messages.lastChild.textContent += text;
+                    } else {
+                        div.classList.add(type);
+                        messages.appendChild(div);
+                    }
+                    messages.scrollTop = messages.scrollHeight;
+                }
+            </script>
+        </body>
+        </html>
+        """)
+
+
 @app.get("/health")
 async def health_check():
     ollama_status = await ollama_client.check_connection()
+    
+    # Include system memory info and model memory usage
+    try:
+        from app.services.system_info import get_system_info
+        system_info = get_system_info()
+        ram_total = system_info.get("ram_gb", 0)
+        ram_available = system_info.get("ram_available_gb", 0)
+        ram_system_used = round(ram_total - ram_available, 2)
+        
+        # Get running models - Ollama only loads one model at a time
+        running_models = await ollama_client.get_running_models()
+        model_memory_gb = 0
+        loaded_model_name = None
+        
+        # Ollama typically only has one model loaded at a time
+        if running_models and len(running_models) > 0:
+            # Get the first (and usually only) loaded model
+            loaded_model = running_models[0]
+            size_bytes = loaded_model.get("size", 0)
+            if size_bytes:
+                model_memory_gb = round(size_bytes / (1024**3), 2)
+            
+            # Get model name - try different possible keys
+            loaded_model_name = (
+                loaded_model.get("name") or 
+                loaded_model.get("model") or 
+                loaded_model.get("model_name") or
+                None
+            )
+            
+            # If still None, try to get from memory info
+            if not loaded_model_name:
+                memory_info = loaded_model.get("memory", {})
+                if isinstance(memory_info, dict):
+                    loaded_model_name = memory_info.get("model") or memory_info.get("name")
+            
+            # Final fallback
+            if not loaded_model_name:
+                loaded_model_name = "unknown"
+        
+        # Calculate available RAM for more models
+        ram_available_for_models = max(0, round(ram_available - model_memory_gb, 2))
+        
+        # Get default model that will be used if none is loaded
+        default_model = ollama_client._default_model if hasattr(ollama_client, '_default_model') else "llama3.1:8b"
+        
+        memory_info = {
+            "ram_total_gb": ram_total,
+            "ram_available_gb": ram_available,
+            "ram_system_used_gb": ram_system_used,
+            "ram_model_used_gb": round(model_memory_gb, 2),
+            "ram_available_for_models_gb": ram_available_for_models,
+            "ram_used_percent": round((ram_system_used / ram_total) * 100, 1) if ram_total > 0 else 0,
+            "loaded_model_name": loaded_model_name if loaded_model_name and loaded_model_name != "unknown" else None,
+            "default_model": default_model,  # Model that will be used if none is loaded
+            "model_status": "loaded" if loaded_model_name else "unloaded (will load on first use)",
+        }
+    except Exception as e:
+        print(f"[LOOM] Error getting system memory info: {e}")
+        import traceback
+        traceback.print_exc()
+        memory_info = {}
+    
     return {
         "status": "healthy",
         "ollama": ollama_status,
         "vector_store": vector_store.is_connected(),
+        "memory": memory_info,
     }
 
 
@@ -206,7 +404,7 @@ async def disconnect(sid):
 async def chat(sid, data):
     """Handle chat/AI processing requests with optional RAG"""
     prompt = data.get('prompt', '')
-    model = data.get('model', 'llama2')
+    model = data.get('model', 'llama3.1:8b')
     use_rag = data.get('use_rag', False)  # Enable RAG retrieval
     rag_collection = data.get('rag_collection', None)
     rag_n_results = data.get('rag_n_results', 5)
@@ -371,6 +569,79 @@ async def pull_model(sid, data):
         print(f"[LOOM] Error pulling model {model_name}: {e}")
         print(f"[LOOM] Traceback: {error_details}")
         await sio.emit('pull_status', {
+            'status': 'error',
+            'model': model_name,
+            'message': f'Failed to pull model: {str(e)}',
+            'error': str(e),
+        }, room=sid)
+
+
+@sio.event
+async def pull_image_model(sid, data):
+    """Download/prepare an image generation model"""
+    model_name = data.get('model', '').strip()
+    
+    if not model_name:
+        await sio.emit('pull_image_status', {
+            'status': 'error',
+            'message': 'No model name provided'
+        }, room=sid)
+        return
+    
+    print(f"[LOOM] Pull request for image model: {model_name}")
+    
+    try:
+        from app.services.local_image_gen import local_image_gen
+        
+        # Check if model is in our list
+        from app.services.local_image_gen import MODELS
+        if model_name not in MODELS:
+            await sio.emit('pull_image_status', {
+                'status': 'error',
+                'model': model_name,
+                'message': f'Unknown model: {model_name}. Available: {", ".join(MODELS.keys())}',
+                'error': f'Model {model_name} not found',
+            }, room=sid)
+            return
+        
+        model_info = MODELS[model_name]
+        
+        # Send initial status
+        await sio.emit('pull_image_status', {
+            'status': 'starting',
+            'model': model_name,
+            'message': f'Preparing to download {model_name}...',
+            'repo': model_info['repo'],
+        }, room=sid)
+        
+        # Try to load the model (this will download if needed)
+        # Note: This is a blocking operation, but diffusers handles progress internally
+        try:
+            local_image_gen.load_model(model_name)
+            await sio.emit('pull_image_status', {
+                'status': 'success',
+                'model': model_name,
+                'message': f'Model {model_name} is ready!',
+            }, room=sid)
+        except Exception as e:
+            error_msg = str(e)
+            # Check if it's a HuggingFace token issue
+            if 'token' in error_msg.lower() or 'authentication' in error_msg.lower():
+                error_msg = f"Model requires HuggingFace token. Set it with: /set-hf-token <your-token>\n\nGet a token from: https://huggingface.co/settings/tokens"
+            
+            await sio.emit('pull_image_status', {
+                'status': 'error',
+                'model': model_name,
+                'message': f'Failed to load model: {error_msg}',
+                'error': error_msg,
+            }, room=sid)
+    
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"[LOOM] Error pulling image model {model_name}: {e}")
+        print(f"[LOOM] Traceback: {error_details}")
+        await sio.emit('pull_image_status', {
             'status': 'error',
             'model': model_name,
             'message': f'Failed to pull model: {str(e)}',

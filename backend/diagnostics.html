@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Loom Diagnostics</title>
+    <style>
+        body {
+            font-family: monospace;
+            background: #0a0a0a;
+            color: #00ff88;
+            padding: 1rem;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .test {
+            margin: 1rem 0;
+            padding: 1rem;
+            border: 1px solid #333;
+            background: #1a1a1a;
+        }
+        .pass { border-color: #00ff88; }
+        .fail { border-color: #ff4444; }
+        .pending { border-color: #888; }
+        h1 { color: #00ff88; }
+        h2 { color: #00aaff; margin-top: 2rem; }
+        pre { background: #0a0a0a; padding: 0.5rem; overflow-x: auto; }
+        button {
+            background: #00ff88;
+            color: #0a0a0a;
+            border: none;
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+            font-weight: bold;
+            margin: 0.5rem 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔍 Loom Backend Diagnostics</h1>
+    
+    <div class="test pending" id="test1">
+        <h3>Test 1: Basic Connectivity</h3>
+        <p>Testing: <span id="url1"></span></p>
+        <p>Status: <span id="status1">Testing...</span></p>
+        <pre id="result1"></pre>
+    </div>
+    
+    <div class="test pending" id="test2">
+        <h3>Test 2: Health Endpoint</h3>
+        <p>Testing: <span id="url2"></span></p>
+        <p>Status: <span id="status2">Testing...</span></p>
+        <pre id="result2"></pre>
+    </div>
+    
+    <div class="test pending" id="test3">
+        <h3>Test 3: Network Info</h3>
+        <p>Testing: <span id="url3"></span></p>
+        <p>Status: <span id="status3">Testing...</span></p>
+        <pre id="result3"></pre>
+    </div>
+    
+    <div class="test pending" id="test4">
+        <h3>Test 4: Socket.IO Library</h3>
+        <p>Status: <span id="status4">Testing...</span></p>
+        <pre id="result4"></pre>
+    </div>
+    
+    <div class="test pending" id="test5">
+        <h3>Test 5: Socket.IO Connection</h3>
+        <p>Status: <span id="status5">Testing...</span></p>
+        <pre id="result5"></pre>
+    </div>
+    
+    <h2>Connection Info</h2>
+    <pre id="info"></pre>
+    
+    <button onclick="runTests()">Run Tests Again</button>
+    
+    <script>
+        const baseUrl = window.location.origin;
+        
+        function updateTest(testId, passed, status, result) {
+            const testEl = document.getElementById(testId);
+            const statusEl = document.getElementById(`status${testId.slice(-1)}`);
+            const resultEl = document.getElementById(`result${testId.slice(-1)}`);
+            
+            testEl.className = `test ${passed ? 'pass' : 'fail'}`;
+            statusEl.textContent = status;
+            resultEl.textContent = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+        }
+        
+        async function runTests() {
+            // Test 1: Basic connectivity
+            document.getElementById('url1').textContent = `${baseUrl}/test`;
+            try {
+                const res = await fetch(`${baseUrl}/test`);
+                const data = await res.json();
+                updateTest('test1', res.ok, res.ok ? 'PASS' : 'FAIL', data);
+            } catch (e) {
+                updateTest('test1', false, 'FAIL', `Error: ${e.message}`);
+            }
+            
+            // Test 2: Health endpoint
+            document.getElementById('url2').textContent = `${baseUrl}/health`;
+            try {
+                const res = await fetch(`${baseUrl}/health`);
+                const data = await res.json();
+                updateTest('test2', res.ok, res.ok ? 'PASS' : 'FAIL', data);
+            } catch (e) {
+                updateTest('test2', false, 'FAIL', `Error: ${e.message}`);
+            }
+            
+            // Test 3: Network info
+            document.getElementById('url3').textContent = `${baseUrl}/network-info`;
+            try {
+                const res = await fetch(`${baseUrl}/network-info`);
+                const data = await res.json();
+                updateTest('test3', res.ok, res.ok ? 'PASS' : 'FAIL', data);
+            } catch (e) {
+                updateTest('test3', false, 'FAIL', `Error: ${e.message}`);
+            }
+            
+            // Test 4: Socket.IO library
+            const socketIOLoaded = typeof io !== 'undefined';
+            updateTest('test4', socketIOLoaded, socketIOLoaded ? 'PASS' : 'FAIL', 
+                socketIOLoaded ? 'Socket.IO library loaded' : 'Socket.IO library NOT loaded - need internet connection');
+            
+            // Test 5: Socket.IO connection
+            if (socketIOLoaded) {
+                document.getElementById('status5').textContent = 'Connecting...';
+                const socket = io(baseUrl, {
+                    transports: ['websocket', 'polling'],
+                    timeout: 5000,
+                });
+                
+                const timeout = setTimeout(() => {
+                    updateTest('test5', false, 'TIMEOUT', 'Connection timeout after 5 seconds');
+                    socket.disconnect();
+                }, 5000);
+                
+                socket.on('connect', () => {
+                    clearTimeout(timeout);
+                    updateTest('test5', true, 'PASS', 'Socket.IO connected successfully');
+                    socket.disconnect();
+                });
+                
+                socket.on('connect_error', (error) => {
+                    clearTimeout(timeout);
+                    updateTest('test5', false, 'FAIL', `Connection error: ${error.message}`);
+                });
+            } else {
+                updateTest('test5', false, 'SKIP', 'Skipped - Socket.IO library not loaded');
+            }
+            
+            // Connection info
+            document.getElementById('info').textContent = 
+                `Current URL: ${window.location.href}\n` +
+                `Origin: ${baseUrl}\n` +
+                `User Agent: ${navigator.userAgent}\n` +
+                `Screen: ${window.screen.width}x${window.screen.height}`;
+        }
+        
+        // Load Socket.IO
+        const script = document.createElement('script');
+        script.src = 'https://cdn.socket.io/4.7.0/socket.io.min.js';
+        script.onload = () => {
+            console.log('Socket.IO loaded');
+            runTests();
+        };
+        script.onerror = () => {
+            console.error('Failed to load Socket.IO');
+            runTests();
+        };
+        document.head.appendChild(script);
+    </script>
+</body>
+</html>

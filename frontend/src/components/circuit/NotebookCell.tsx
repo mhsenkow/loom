@@ -68,6 +68,62 @@ export function NotebookCell({
   const [editContent, setEditContent] = useState(cell.content)
   const [showFilePicker, setShowFilePicker] = useState(false)
   const [hasOverflow, setHasOverflow] = useState(false)
+  const [availableImageModels, setAvailableImageModels] = useState<Array<{ name: string; vram?: string; type?: string }>>([])
+  const [currentImageModel, setCurrentImageModel] = useState<string | null>(null)
+
+  // Fetch available image models when this is an image_gen cell
+  useEffect(() => {
+    if (cell.type === 'image_gen') {
+      const fetchImageModels = async () => {
+        try {
+          const response = await fetch('http://localhost:8000/api/images/models')
+          if (response.ok) {
+            const data = await response.json()
+            const localModels = data.local || []
+            
+            // Handle both dict format (from MODELS) and any other formats
+            const models = localModels
+              .map((m: any) => {
+                if (typeof m === 'string') {
+                  return { name: m, vram: 'unknown', type: 'unknown' }
+                }
+                return {
+                  name: m.name || m,
+                  vram: m.vram || 'unknown',
+                  type: m.type || 'unknown',
+                }
+              })
+              .filter((m: any) => m.name) // Filter out any invalid entries
+            
+            setAvailableImageModels(models)
+            setCurrentImageModel(data.current_model || null)
+            
+            // If cell doesn't have a model set, use the current loaded model or first available
+            if (!cell.model && models.length > 0) {
+              const modelToUse = data.current_model || models[0].name
+              onUpdate({ model: modelToUse })
+            }
+          } else {
+            console.warn('[LOOM] Failed to fetch image models:', response.status)
+          }
+        } catch (error) {
+          console.error('[LOOM] Failed to fetch image models:', error)
+          // Don't set fallback - let user see empty state or keep existing selection
+        }
+      }
+      fetchImageModels()
+      
+      // Also listen for model updates
+      const handleModelUpdate = () => {
+        fetchImageModels()
+      }
+      window.addEventListener('loom:image_models_updated', handleModelUpdate)
+      
+      return () => {
+        window.removeEventListener('loom:image_models_updated', handleModelUpdate)
+      }
+    }
+  }, [cell.type, cell.model, onUpdate])
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -190,29 +246,29 @@ export function NotebookCell({
   const getPlaceholder = () => {
     switch (cell.type) {
       case 'data_input':
-        return 'Enter your prompt or data...'
+        return 'Enter your prompt or data... (e.g., "What are the main themes in classic literature?")'
       case 'ai_processor':
-        return 'Optional: System prompt (leave empty for default)'
+        return 'System prompt or analysis instructions. Use {{input}} to reference previous output.'
       case 'script_execution':
-        return 'Transform template. Use {{input}} to reference previous output.'
+        return 'Transform template. Use {{input}} to reference previous output. (e.g., "Extract first 200 chars: {{input}}")'
       case 'log_entry':
-        return 'Optional: Label for output'
+        return 'Optional: Label for output (e.g., "Final Result")'
       case 'image_gen':
-        return 'Optional: Negative prompt (what to avoid)'
+        return 'Negative prompt - what to avoid (e.g., "blurry, low quality, distorted")'
       case 'markdown':
         return 'Write notes or documentation here...'
       case 'data_loader':
-        return 'File path (e.g., data.csv, reports/summary.pdf)'
+        return 'File path in data folder (e.g., data.csv, reports/summary.pdf)\n\nOr use public data:\n- Project Gutenberg books\n- Your local files'
       case 'conditional':
-        return 'Condition description (e.g., "contains question mark")'
+        return 'Condition value (e.g., "error" to check if input contains "error")'
       case 'web_fetch':
-        return 'URL (or use {{input}} to use previous cell output as URL)'
+        return 'URL to fetch (e.g., https://www.gutenberg.org/files/1342/1342-0.txt)\n\nOr use {{input}} to use previous cell output as URL\n\nExamples:\n- Project Gutenberg: https://www.gutenberg.org/files/1342/1342-0.txt\n- data.gov API: https://api.data.gov/regulations/v3/documents.json'
       case 'vector_index':
-        return 'File path to index (e.g., documents/guide.pdf)'
+        return 'File path to index (e.g., documents/guide.pdf)\n\nFiles will be chunked and added to vector store for semantic search.'
       case 'vector_search':
-        return 'Search query (e.g., "machine learning algorithms")'
+        return 'Search query (e.g., "What are the main themes?")\n\nOr use {{input}} to search using previous cell output'
       case 'terminal_history':
-        return 'Search text or JSON query: {"search": "keyword", "types": ["user", "ai"], "limit": 10}'
+        return 'JSON query: {"search": "keyword", "types": ["user", "ai"], "limit": 10}\n\nOr just text to search all terminal history'
       default:
         return 'Enter content...'
     }
@@ -329,22 +385,21 @@ export function NotebookCell({
             </div>
           )}
           
-          {/* Model Selector for Image cells */}
+          {/* Model Selector for Image cells - shows current slot selection */}
           {cell.type === 'image_gen' && (
-            <select
-              value={cell.model || 'sdxl'}
-              onChange={(e) => onUpdate({ model: e.target.value })}
-              className="bg-void border border-terminal-border text-pink-400 text-[10px] px-2 py-1 focus:outline-none focus:border-pink-400"
-            >
-              <optgroup label="Local (MPS/CUDA)">
-                <option value="sdxl">SDXL (8GB)</option>
-                <option value="sdxl-turbo">SDXL Turbo - Fast (8GB)</option>
-                <option value="sd-3">Stable Diffusion 3 (16GB)</option>
-                <option value="flux-schnell">FLUX Schnell (32GB)</option>
-                <option value="flux-dev">FLUX Dev (32GB)</option>
-                <option value="sd-1.5">SD 1.5 - Classic (4GB)</option>
-              </optgroup>
-            </select>
+            <div className="flex items-center gap-2">
+              <span className="text-[9px] text-terminal-muted">Model:</span>
+              <span 
+                className="text-[10px] font-bold px-1.5 py-0.5 bg-black/30"
+                style={{ color: '#ff69b4' }}
+                title={`Using image model slot: ${modelSlots.IMAGE || 'Default'}`}
+              >
+                {modelSlots.IMAGE || cell.model || 'Default'}
+              </span>
+              <span className="text-[8px] text-terminal-muted">
+                ({availableImageModels.length > 0 ? `${availableImageModels.length} available` : 'Loading...'})
+              </span>
+            </div>
           )}
           
           {/* Read mode indicator for Data cells */}
@@ -591,9 +646,54 @@ export function NotebookCell({
                       setEditContent(e.target.value)
                       onUpdate({ content: e.target.value })
                     }}
-                    placeholder="https://api.example.com/data or {{input}}"
+                    placeholder="https://www.gutenberg.org/files/1342/1342-0.txt"
                     className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-blue-500"
                   />
+                  <div className="text-[9px] text-terminal-muted mt-1 space-y-0.5">
+                    <div>Quick examples:</div>
+                    <div className="flex flex-wrap gap-1">
+                      <button
+                        onClick={() => {
+                          setEditContent('https://www.gutenberg.org/files/1342/1342-0.txt')
+                          onUpdate({ content: 'https://www.gutenberg.org/files/1342/1342-0.txt' })
+                        }}
+                        className="px-1.5 py-0.5 border border-terminal-border hover:border-blue-500 text-[9px]"
+                        title="Pride and Prejudice from Project Gutenberg"
+                      >
+                        📚 Pride & Prejudice
+                      </button>
+                      <button
+                        onClick={() => {
+                          setEditContent('https://www.gutenberg.org/files/84/84-0.txt')
+                          onUpdate({ content: 'https://www.gutenberg.org/files/84/84-0.txt' })
+                        }}
+                        className="px-1.5 py-0.5 border border-terminal-border hover:border-blue-500 text-[9px]"
+                        title="Frankenstein from Project Gutenberg"
+                      >
+                        📚 Frankenstein
+                      </button>
+                      <button
+                        onClick={() => {
+                          setEditContent('https://api.github.com/repos/ollama/ollama')
+                          onUpdate({ content: 'https://api.github.com/repos/ollama/ollama' })
+                        }}
+                        className="px-1.5 py-0.5 border border-terminal-border hover:border-blue-500 text-[9px]"
+                        title="GitHub API example"
+                      >
+                        🔗 GitHub API
+                      </button>
+                      <button
+                        onClick={() => {
+                          setEditContent('https://api.data.gov/regulations/v3/documents.json?rpp=5')
+                          onUpdate({ content: 'https://api.data.gov/regulations/v3/documents.json?rpp=5' })
+                        }}
+                        className="px-1.5 py-0.5 border border-terminal-border hover:border-blue-500 text-[9px]"
+                        title="data.gov API example"
+                      >
+                        📊 data.gov
+                      </button>
+                    </div>
+                  </div>
                 </div>
                 
                 {(cell.fetchMethod === 'POST' || cell.fetchMethod === 'PUT') && (
@@ -602,7 +702,7 @@ export function NotebookCell({
                     <textarea
                       value={cell.fetchBody || ''}
                       onChange={(e) => onUpdate({ fetchBody: e.target.value })}
-                      placeholder='{"key": "value"} or {{input}}'
+                      placeholder='{"key": "value"} or {{{{input}}}}'
                       className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-blue-500 min-h-[60px]"
                     />
                   </div>
@@ -645,8 +745,105 @@ export function NotebookCell({
           </>
         )}
 
+        {/* Content Area - Vector Search cell */}
+        {cell.type === 'vector_search' && (
+          <>
+            <div className="mb-3">
+              <label className="text-[10px] text-terminal-muted block mb-1">Search Query (or use {'{{input}}'}):</label>
+              <textarea
+                value={editContent}
+                onChange={(e) => {
+                  setEditContent(e.target.value)
+                  onUpdate({ content: e.target.value })
+                }}
+                onKeyDown={handleKeyDown}
+                onBlur={handleSave}
+                placeholder='What are the main themes?'
+                className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-yellow-500 min-h-[60px] resize-none"
+              />
+              <div className="text-[9px] text-terminal-muted mt-1 space-y-0.5">
+                <div>Example queries:</div>
+                <div className="flex flex-wrap gap-1">
+                  <button
+                    onClick={() => {
+                      setEditContent('What are the main themes?')
+                      onUpdate({ content: 'What are the main themes?' })
+                    }}
+                    className="px-1.5 py-0.5 border border-terminal-border hover:border-yellow-500 text-[9px]"
+                  >
+                    Main themes
+                  </button>
+                  <button
+                    onClick={() => {
+                      setEditContent('Summarize key concepts')
+                      onUpdate({ content: 'Summarize key concepts' })
+                    }}
+                    className="px-1.5 py-0.5 border border-terminal-border hover:border-yellow-500 text-[9px]"
+                  >
+                    Key concepts
+                  </button>
+                  <button
+                    onClick={() => {
+                      setEditContent('Find relevant examples')
+                      onUpdate({ content: 'Find relevant examples' })
+                    }}
+                    className="px-1.5 py-0.5 border border-terminal-border hover:border-yellow-500 text-[9px]"
+                  >
+                    Examples
+                  </button>
+                </div>
+                <div className="text-[8px] mt-1">Tip: Use {'{{input}}'} to search using previous cell output</div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Content Area - Vector Index cell */}
+        {cell.type === 'vector_index' && (
+          <>
+            <div className="mb-3">
+              <div className="text-[10px] text-terminal-muted mb-2">File to Index:</div>
+              <div className="flex items-center gap-2 mb-2">
+                <button
+                  onClick={() => setShowFilePicker(true)}
+                  className="btn-terminal text-xs flex items-center gap-2"
+                  style={{ borderColor: '#00ff00', color: '#00ff00' }}
+                >
+                  📁 Browse Files
+                </button>
+                {cell.content && (
+                  <span className="text-xs text-phosphor font-mono truncate flex-1">
+                    {cell.content}
+                  </span>
+                )}
+              </div>
+              <input
+                type="text"
+                value={editContent}
+                onChange={(e) => {
+                  setEditContent(e.target.value)
+                  onUpdate({ content: e.target.value })
+                }}
+                placeholder="Enter file path (e.g., documents/guide.pdf)"
+                className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-green-500"
+              />
+              <div className="text-[9px] text-terminal-muted mt-1">
+                Files will be chunked and indexed for semantic search. Use INDEX before SEARCH.
+              </div>
+              <FilePicker
+                isOpen={showFilePicker}
+                onClose={() => setShowFilePicker(false)}
+                onSelect={(path) => {
+                  setEditContent(path)
+                  onUpdate({ content: path })
+                }}
+              />
+            </div>
+          </>
+        )}
+
         {/* Content Area - Regular cells */}
-        {cell.type !== 'log_entry' && cell.type !== 'data_loader' && cell.type !== 'conditional' && cell.type !== 'web_fetch' && (
+        {cell.type !== 'log_entry' && cell.type !== 'data_loader' && cell.type !== 'conditional' && cell.type !== 'web_fetch' && cell.type !== 'vector_search' && cell.type !== 'vector_index' && (
           <>
             {isEditing ? (
               <textarea

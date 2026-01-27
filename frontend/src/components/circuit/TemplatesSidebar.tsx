@@ -317,6 +317,39 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
     ]
   },
   {
+    id: 'iterative-improver',
+    name: 'Iterative Improver',
+    description: 'Create → Evaluate → If not good, rewrite using previous as input. Clear example of improvement loops.',
+    icon: '♻️',
+    category: 'thinking',
+    cells: [
+      input('TASK', 'Create a detailed prompt for generating an image of a futuristic city'),
+      ai('CREATE', 'Create a detailed, specific prompt. Include: subject, style, mood, composition, lighting, colors. Be thorough.', 'A'),
+      conditional(
+        'GOOD ENOUGH?',
+        'ai_check',
+        'Is this prompt good enough? Consider: Is it specific? Detailed? Clear? Would it generate a high-quality image? Answer only YES or NO.',
+        undefined,
+        'Max iterations reached.',
+        'previous',
+        2,  // loop back to CREATE (1-based)
+        5
+      ),
+      ai('IMPROVE', 'The previous attempt was not good enough. Here it is:\n\n{{input}}\n\nRewrite and improve it. Use what worked, fix what didn\'t. Make it more specific, detailed, and clear. Build on the previous version.', 'A', 'previous'),
+      conditional(
+        'BETTER NOW?',
+        'ai_check',
+        'Is this improved version significantly better than before? Is it specific, detailed, and clear enough? Answer only YES or NO.',
+        undefined,
+        'Max iterations reached.',
+        'previous',
+        4,  // loop back to IMPROVE (1-based)
+        5
+      ),
+      output('FINAL'),
+    ]
+  },
+  {
     id: 'opportunity-cost',
     name: 'Opportunity Cost',
     description: 'What are you NOT doing?',
@@ -1498,6 +1531,156 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
       output('ANSWER'),
     ]
   },
+
+  // ============================================
+  // IMAGE GENERATION - Complex creative workflows
+  // ============================================
+  {
+    id: 'storyboard-generator',
+    name: 'Storyboard Generator',
+    description: 'Turn a story into a visual storyboard with multiple scenes',
+    icon: '🎬',
+    category: 'writing',
+    cells: [
+      input('STORY', 'A detective discovers a hidden message in an old book'),
+      ai('SCENES', 'Break this story into 4-6 key visual scenes. Each scene should be a single, dramatic moment. List them clearly.', 'A'),
+      ai('SCENE_1', 'Write a detailed image prompt for scene 1. Cinematic, specific composition, lighting, mood.', 'B', 'previous'),
+      imageGen('VISUAL_1', 'blurry, text, watermark, cartoon'),
+      ai('SCENE_2', 'Write a detailed image prompt for scene 2. Cinematic, specific composition, lighting, mood.', 'B', 'all'),
+      imageGen('VISUAL_2', 'blurry, text, watermark, cartoon'),
+      ai('SCENE_3', 'Write a detailed image prompt for scene 3. Cinematic, specific composition, lighting, mood.', 'B', 'all'),
+      imageGen('VISUAL_3', 'blurry, text, watermark, cartoon'),
+      output('STORYBOARD'),
+    ]
+  },
+  {
+    id: 'mood-board-creator',
+    name: 'Mood Board Creator',
+    description: 'Generate multiple images exploring different visual directions',
+    icon: '🎨',
+    category: 'thinking',
+    cells: [
+      input('CONCEPT', 'Futuristic cityscape at sunset'),
+      ai('VARIATION_1', 'Create a detailed image prompt for this concept in a photorealistic style. Focus on architecture and lighting.', 'A'),
+      imageGen('REALISTIC', 'blurry, low quality, distorted'),
+      ai('VARIATION_2', 'Create a detailed image prompt for this concept in a cyberpunk/neon aesthetic. Bold colors, neon signs, rain.', 'B', 'all'),
+      imageGen('CYBERPUNK', 'blurry, low quality, distorted'),
+      ai('VARIATION_3', 'Create a detailed image prompt for this concept in a minimalist/architectural style. Clean lines, dramatic shadows.', 'A', 'all'),
+      imageGen('MINIMALIST', 'blurry, low quality, distorted'),
+      ai('COMPARE', 'Compare these three visual directions. What are the strengths of each? Which best captures the concept?', 'B', 'all'),
+      output('MOOD_BOARD'),
+    ]
+  },
+  {
+    id: 'character-design-loop',
+    name: 'Character Design Loop',
+    description: 'Iteratively refine a character design with feedback',
+    icon: '👤',
+    category: 'writing',
+    cells: [
+      input('CHARACTER', 'A wise old wizard who lives in a clockwork tower'),
+      ai('DESCRIPTION', 'Write a detailed physical description: appearance, clothing, accessories, posture, expression. Be specific.', 'A'),
+      ai('PROMPT_1', 'Turn this into a detailed character portrait image prompt. Full body or portrait, specific art style.', 'B', 'previous'),
+      imageGen('DESIGN_1', 'blurry, text, watermark, generic'),
+      ai('FEEDBACK', 'Review the character description and the generated image. What needs refinement? More detail? Different style?', 'A', 'all'),
+      ai('PROMPT_2', 'Create an improved image prompt incorporating the feedback. More specific details, better composition.', 'B', 'all'),
+      imageGen('DESIGN_2', 'blurry, text, watermark, generic'),
+      ai('FINAL', 'Compare both designs. Which captures the character better? What are the key visual elements?', 'A', 'all'),
+      output('FINAL_DESIGN'),
+    ]
+  },
+  {
+    id: 'product-visualization',
+    name: 'Product Visualization',
+    description: 'Generate product images from concept to final render',
+    icon: '📦',
+    category: 'thinking',
+    cells: [
+      input('PRODUCT', 'A minimalist smartwatch with a wooden band'),
+      ai('FEATURES', 'List the key visual features: materials, colors, form, details. What makes it unique?', 'A'),
+      ai('SKETCH_PROMPT', 'Create an image prompt for a product sketch/concept drawing. Line art style, showing key features.', 'B', 'previous'),
+      imageGen('SKETCH', 'blurry, text, watermark, photorealistic'),
+      ai('RENDER_PROMPT', 'Create an image prompt for a professional product render. Studio lighting, clean background, high detail.', 'A', 'all'),
+      imageGen('RENDER', 'blurry, low quality, distorted, sketch'),
+      ai('COMPARE', 'Compare sketch vs render. Does the final render capture all features? What works well?', 'B', 'all'),
+      output('PRODUCT_VISUALS'),
+    ]
+  },
+  {
+    id: 'world-building-visual',
+    name: 'World Building Visual',
+    description: 'Create visual representations of a fictional world',
+    icon: '🌍',
+    category: 'writing',
+    cells: [
+      input('WORLD', 'A floating city in the clouds powered by ancient crystals'),
+      ai('LOCATIONS', 'Break this world into 3-4 distinct locations. Each should have unique visual character. Describe them.', 'A'),
+      ai('LOCATION_1', 'Write a detailed image prompt for the first location. Architecture, atmosphere, lighting, scale.', 'B', 'previous'),
+      imageGen('PLACE_1', 'blurry, text, watermark, cartoon'),
+      ai('LOCATION_2', 'Write a detailed image prompt for the second location. Architecture, atmosphere, lighting, scale.', 'B', 'all'),
+      imageGen('PLACE_2', 'blurry, text, watermark, cartoon'),
+      ai('LOCATION_3', 'Write a detailed image prompt for the third location. Architecture, atmosphere, lighting, scale.', 'B', 'all'),
+      imageGen('PLACE_3', 'blurry, text, watermark, cartoon'),
+      ai('WORLD_MAP', 'Based on these locations, describe how they connect. What\'s the overall geography and visual theme?', 'A', 'all'),
+      output('WORLD_VISUAL'),
+    ]
+  },
+  {
+    id: 'style-transfer-exploration',
+    name: 'Style Transfer Exploration',
+    description: 'Generate the same subject in multiple artistic styles',
+    icon: '🖼️',
+    category: 'thinking',
+    cells: [
+      input('SUBJECT', 'A vintage typewriter on a wooden desk'),
+      ai('STYLE_1', 'Create an image prompt for this subject in impressionist painting style. Brushstrokes, color, mood.', 'A'),
+      imageGen('IMPRESSIONIST', 'blurry, low quality, photorealistic'),
+      ai('STYLE_2', 'Create an image prompt for this subject in art deco illustration style. Geometric patterns, bold lines.', 'B', 'all'),
+      imageGen('ART_DECO', 'blurry, low quality, photorealistic'),
+      ai('STYLE_3', 'Create an image prompt for this subject in digital art/cyberpunk style. Neon, glitch effects, futuristic.', 'A', 'all'),
+      imageGen('CYBERPUNK', 'blurry, low quality, photorealistic'),
+      ai('ANALYSIS', 'Compare these three styles. How does each change the mood and meaning? Which best fits the subject?', 'B', 'all'),
+      output('STYLE_COMPARISON'),
+    ]
+  },
+  {
+    id: 'concept-to-mockup',
+    name: 'Concept to Mockup',
+    description: 'Transform a written concept into visual mockups',
+    icon: '💡',
+    category: 'thinking',
+    cells: [
+      input('CONCEPT', 'A mobile app for tracking daily habits with gamification'),
+      ai('UI_ELEMENTS', 'What are the key UI elements? Dashboard, progress bars, achievements, calendar? Describe the layout.', 'A'),
+      ai('MOCKUP_1', 'Create an image prompt for a mobile app mockup. Show the main screen with all key elements. Clean, modern design.', 'B', 'previous'),
+      imageGen('SCREEN_1', 'blurry, text, watermark, low quality'),
+      ai('MOCKUP_2', 'Create an image prompt for a different screen (e.g., detail view, settings). Consistent design language.', 'A', 'all'),
+      imageGen('SCREEN_2', 'blurry, text, watermark, low quality'),
+      ai('DESIGN_SYSTEM', 'Based on both mockups, describe the design system: colors, typography, spacing, visual hierarchy.', 'B', 'all'),
+      output('MOCKUPS'),
+    ]
+  },
+  {
+    id: 'narrative-image-sequence',
+    name: 'Narrative Image Sequence',
+    description: 'Create a visual narrative with multiple connected images',
+    icon: '📖',
+    category: 'writing',
+    cells: [
+      input('NARRATIVE', 'A person finds a mysterious key that opens a door to another dimension'),
+      ai('BEATS', 'Break this into 4 story beats. Each should be a single, powerful visual moment. List them.', 'A'),
+      ai('BEAT_1', 'Write a detailed image prompt for beat 1. Show the discovery moment. Composition, lighting, emotion.', 'B', 'previous'),
+      imageGen('IMAGE_1', 'blurry, text, watermark'),
+      ai('BEAT_2', 'Write a detailed image prompt for beat 2. Show the investigation. Connect visually to image 1.', 'B', 'all'),
+      imageGen('IMAGE_2', 'blurry, text, watermark'),
+      ai('BEAT_3', 'Write a detailed image prompt for beat 3. Show the door opening. Dramatic moment, visual continuity.', 'A', 'all'),
+      imageGen('IMAGE_3', 'blurry, text, watermark'),
+      ai('BEAT_4', 'Write a detailed image prompt for beat 4. Show entering the dimension. Visual payoff, new world revealed.', 'B', 'all'),
+      imageGen('IMAGE_4', 'blurry, text, watermark'),
+      ai('STORY', 'Review all 4 images. How do they work as a sequence? What\'s the visual narrative arc?', 'A', 'all'),
+      output('NARRATIVE_SEQUENCE'),
+    ]
+  },
   {
     id: 'terminal-insights',
     name: 'Terminal Insights',
@@ -1526,6 +1709,7 @@ export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircui
   const [activeCategory, setActiveCategory] = useState<typeof CATEGORIES[number]['id']>('mine')
   const [savedCircuits, setSavedCircuits] = useState<Record<string, SavedCircuit>>({})
   const [hoveredCircuit, setHoveredCircuit] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState<string>('')
   
   // Check if current circuit matches a template or saved circuit
   const isCurrentTemplate = (templateId: string) => currentCircuitName === templateId
@@ -1561,12 +1745,39 @@ export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircui
     cells: circuit.cells,
   })
   
+  // Filter templates and saved circuits based on search query
+  const filterBySearch = (items: Array<{ name: string; description?: string }>, query: string) => {
+    if (!query.trim()) return items
+    const lowerQuery = query.toLowerCase()
+    return items.filter(item => 
+      item.name.toLowerCase().includes(lowerQuery) ||
+      (item.description && item.description.toLowerCase().includes(lowerQuery))
+    )
+  }
+  
   const filteredTemplates = activeCategory === 'mine' 
     ? [] // We'll render saved circuits separately
     : NOTEBOOK_TEMPLATES.filter(t => t.category === activeCategory)
   
+  // Apply search filter to templates
+  const searchFilteredTemplates = filterBySearch(filteredTemplates, searchQuery)
+  
   const savedCircuitList = Object.entries(savedCircuits)
     .sort(([, a], [, b]) => b.savedAt - a.savedAt)
+    .map(([name, circuit]) => ({
+      name,
+      circuit,
+      description: `${circuit.cells.length} cells • saved ${new Date(circuit.savedAt).toLocaleDateString()}`
+    }))
+  
+  // Apply search filter to saved circuits
+  const searchFilteredSavedCircuits = filterBySearch(
+    savedCircuitList.map(({ name, description }) => ({ name, description })),
+    searchQuery
+  ).map(({ name }) => {
+    const found = savedCircuitList.find(item => item.name === name)
+    return found ? [found.name, found.circuit] as [string, SavedCircuit] : null
+  }).filter((item): item is [string, SavedCircuit] => item !== null)
 
   return (
     <div 
@@ -1594,7 +1805,10 @@ export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircui
           {CATEGORIES.map((cat) => (
             <button
               key={cat.id}
-              onClick={() => setActiveCategory(cat.id)}
+              onClick={() => {
+                setActiveCategory(cat.id)
+                setSearchQuery('') // Clear search when switching categories
+              }}
               className={`flex-1 py-2 text-[9px] tracking-wider transition-colors ${
                 activeCategory === cat.id
                   ? 'text-phosphor border-b-2 border-phosphor bg-void/50'
@@ -1606,6 +1820,32 @@ export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircui
               {cat.label}
             </button>
           ))}
+        </div>
+      )}
+
+      {/* Search Input */}
+      {!isCollapsed && (
+        <div className="p-2 border-b border-terminal-border">
+          <div className="relative">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search templates..."
+              className="w-full bg-void border border-terminal-border text-phosphor text-[10px] px-2 py-1.5 pr-6 focus:outline-none focus:border-phosphor placeholder:text-terminal-muted/50"
+            />
+            {searchQuery ? (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-terminal-muted hover:text-phosphor text-xs"
+                title="Clear search"
+              >
+                ×
+              </button>
+            ) : (
+              <span className="absolute right-2 top-1/2 -translate-y-1/2 text-terminal-muted/50 text-xs">🔍</span>
+            )}
+          </div>
         </div>
       )}
 
@@ -1647,7 +1887,11 @@ export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircui
                 </div>
               )}
               
-              {savedCircuitList.length === 0 && !currentCircuitName ? (
+              {searchFilteredSavedCircuits.length === 0 && savedCircuitList.length > 0 && searchQuery ? (
+                <div className="text-center py-6 text-terminal-muted text-[10px]">
+                  No circuits match "{searchQuery}"
+                </div>
+              ) : savedCircuitList.length === 0 && !currentCircuitName ? (
                 <div className="text-center py-6 text-terminal-muted text-[10px]">
                   No saved circuits yet.
                   <div className="mt-1 text-terminal-muted/50">
@@ -1655,7 +1899,7 @@ export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircui
                   </div>
                 </div>
               ) : (
-                savedCircuitList.map(([name, circuit]) => {
+                searchFilteredSavedCircuits.map(([name, circuit]) => {
                 const isActive = isCurrentSavedCircuit(name)
                 return (
                   <div
@@ -1697,33 +1941,41 @@ export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircui
           )}
           
           {/* Regular templates for other categories */}
-          {activeCategory !== 'mine' && filteredTemplates.map((template) => {
-            const isActive = isCurrentTemplate(template.id)
-            return (
-              <button
-                key={template.id}
-                onClick={() => onSelectTemplate(template, template.id)}
-                className={`w-full text-left p-2 hover:bg-void group transition-colors ${
-                  isActive ? 'bg-void border-l-2 border-phosphor' : ''
-                }`}
-                title={template.description}
-              >
-                <div className="flex items-center gap-2">
-                  <span className="text-sm">{template.icon}</span>
-                  <span className={`text-xs truncate ${
-                    isActive ? 'text-phosphor font-bold' : 'text-terminal-muted group-hover:text-phosphor'
-                  }`}>
-                    {template.name}
-                  </span>
-                </div>
-                <p className={`text-[9px] mt-1 line-clamp-2 pl-6 ${
-                  isActive ? 'text-phosphor/50' : 'text-terminal-muted/60'
-                }`}>
-                  {template.description}
-                </p>
-              </button>
+          {activeCategory !== 'mine' && (
+            searchFilteredTemplates.length === 0 && searchQuery ? (
+              <div className="text-center py-6 text-terminal-muted text-[10px]">
+                No templates match "{searchQuery}"
+              </div>
+            ) : (
+              searchFilteredTemplates.map((template) => {
+                const isActive = isCurrentTemplate(template.id)
+                return (
+                  <button
+                    key={template.id}
+                    onClick={() => onSelectTemplate(template, template.id)}
+                    className={`w-full text-left p-2 hover:bg-void group transition-colors ${
+                      isActive ? 'bg-void border-l-2 border-phosphor' : ''
+                    }`}
+                    title={template.description}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm">{template.icon}</span>
+                      <span className={`text-xs truncate ${
+                        isActive ? 'text-phosphor font-bold' : 'text-terminal-muted group-hover:text-phosphor'
+                      }`}>
+                        {template.name}
+                      </span>
+                    </div>
+                    <p className={`text-[9px] mt-1 line-clamp-2 pl-6 ${
+                      isActive ? 'text-phosphor/50' : 'text-terminal-muted/60'
+                    }`}>
+                      {template.description}
+                    </p>
+                  </button>
+                )
+              })
             )
-          })}
+          )}
         </div>
       )}
 

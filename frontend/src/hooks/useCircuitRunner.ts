@@ -127,12 +127,17 @@ export function loadModelSlots(): ModelSlotConfig {
   try {
     const stored = localStorage.getItem(SLOTS_KEY)
     if (stored) {
-      return JSON.parse(stored)
+      const parsed = JSON.parse(stored)
+      // Ensure IMAGE field exists for backward compatibility
+      if (!parsed.IMAGE) {
+        parsed.IMAGE = ''
+      }
+      return parsed
     }
   } catch (e) {
     console.warn('[LOOM] Failed to load model slots:', e)
   }
-  return { A: '', B: '', C: '' }
+  return { A: '', B: '', C: '', IMAGE: '' }
 }
 
 // Save model slots
@@ -603,6 +608,7 @@ export function useCircuitRunner() {
               ai: '🤖',
               system: '⚙️',
               error: '❌',
+              image: '🖼️',
             }[entry.type] || '○'
             
             const contentPreview = entry.content.length > 200 

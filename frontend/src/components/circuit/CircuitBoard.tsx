@@ -32,6 +32,7 @@ export interface ModelSlotConfig {
   A: string  // Creative/Generative
   B: string  // Critical/Analytical  
   C: string  // Fast/Simple
+  IMAGE: string  // Image Generation
 }
 
 const SLOT_LABELS: Record<ModelSlot, { label: string; desc: string; color: string }> = {
@@ -87,22 +88,24 @@ export interface CellData {
   fetchMaxSize?: number  // Max response size in bytes (default: 8388608 = 8MB)
 }
 
-// Initial demo cells
+// Initial demo cells with better defaults
 const initialCells: CellData[] = [
   {
     id: 'cell-1',
     type: 'data_input',
     label: 'INPUT',
-    content: 'What is the capital of France?',
+    content: 'What are the main themes in classic literature?',
     status: 'idle',
+    inputMode: 'none',
   },
   {
     id: 'cell-2',
     type: 'ai_processor',
     label: 'AI',
-    content: '',
+    content: 'Analyze and summarize the following:\n\n{{input}}',
     status: 'idle',
     modelSlot: 'A',
+    inputMode: 'previous',
   },
   {
     id: 'cell-3',
@@ -110,6 +113,7 @@ const initialCells: CellData[] = [
     label: 'OUTPUT',
     content: '',
     status: 'idle',
+    inputMode: 'previous',
   },
 ]
 
@@ -195,6 +199,54 @@ export function CircuitBoard() {
   
   // Model slot configuration - maps slots to actual model names
   const [modelSlots, setModelSlots] = useState<ModelSlotConfig>(() => loadModelSlots())
+  
+  // Fetch available image models
+  const [imageModels, setImageModels] = useState<Array<{ name: string; vram?: string }>>([])
+  const [currentImageModel, setCurrentImageModel] = useState<string | null>(null)
+  
+  useEffect(() => {
+    const fetchImageModels = async () => {
+      try {
+        const response = await fetch('http://localhost:8000/api/images/models')
+        if (response.ok) {
+          const data = await response.json()
+          // Use the combined 'local' array which contains only actually available models
+          const availableModels = data.local || []
+          const models = availableModels
+            .map((m: any) => ({
+              name: typeof m === 'string' ? m : (m.name || m),
+              vram: m.vram || 'unknown',
+              type: m.type || 'unknown',
+            }))
+            .filter((m: any) => m.name) // Filter out any invalid entries
+          
+          setImageModels(models)
+          setCurrentImageModel(data.current_model || null)
+          
+          // If IMAGE slot is not set, use current model or first available
+          if (!modelSlots.IMAGE && models.length > 0) {
+            setModelSlots(prev => ({
+              ...prev,
+              IMAGE: data.current_model || models[0].name,
+            }))
+          }
+        }
+      } catch (error) {
+        console.error('[LOOM] Failed to fetch image models:', error)
+      }
+    }
+    fetchImageModels()
+    
+    // Listen for model updates
+    const handleModelUpdate = () => {
+      fetchImageModels()
+    }
+    window.addEventListener('loom:image_models_updated', handleModelUpdate)
+    
+    return () => {
+      window.removeEventListener('loom:image_models_updated', handleModelUpdate)
+    }
+  }, [modelSlots.IMAGE])
   
   // Persist model slots when they change
   useEffect(() => {
@@ -380,16 +432,111 @@ export function CircuitBoard() {
       terminal_history: 'HISTORY',
     }
 
+    // Default content based on cell type - using real public data sources
+    const defaultContent: Record<ModuleType, string> = {
+      data_input: 'What are the main themes in classic literature?',
+      ai_processor: 'Analyze the following text and extract key insights:\n\n{{input}}',
+      script_execution: 'Extract the first 200 characters:\n\n{{input}}',
+      log_entry: '',
+      image_gen: 'blurry, low quality, distorted',
+      markdown: '# Notes\n\nDocument your workflow here...',
+      data_loader: '',
+      conditional: '',
+      web_fetch: 'https://www.gutenberg.org/files/1342/1342-0.txt', // Pride and Prejudice
+      vector_index: '',
+      vector_search: 'What are the main themes?',
+      terminal_history: '',
+    }
+
+    // Default configurations for specific cell types
+    const getDefaultConfig = (): Partial<CellData> => {
+      switch (type) {
+        case 'web_fetch':
+          return {
+            content: 'https://www.gutenberg.org/files/1342/1342-0.txt', // Project Gutenberg example
+            fetchMethod: 'GET',
+            fetchTimeout: 30,
+            fetchMaxSize: 8388608,
+            inputMode: 'none',
+          }
+        case 'data_loader':
+          return {
+            content: '', // User should specify file path
+            readMode: 'raw',
+            inputMode: 'none',
+          }
+        case 'vector_index':
+          return {
+            content: '', // User should specify file path
+            inputMode: 'none',
+          }
+        case 'vector_search':
+          return {
+            content: 'What are the main themes and concepts?',
+            inputMode: 'previous', // Can use previous cell output as query
+          }
+        case 'conditional':
+          return {
+            content: '',
+            conditionType: 'contains',
+            conditionValue: 'error',
+            onPass: '{{input}}',
+            onFail: 'Condition not met',
+            inputMode: 'previous',
+            loopBackTo: 0,
+            loopBackMax: 3,
+          }
+        case 'ai_processor':
+          return {
+            content: 'Analyze and summarize the following:\n\n{{input}}',
+            modelSlot: 'A',
+            inputMode: 'previous',
+          }
+        case 'script_execution':
+          return {
+            content: 'Format as JSON:\n\n{"text": "{{input}}"}',
+            inputMode: 'previous',
+          }
+        case 'terminal_history':
+          return {
+            content: '{"search": "", "types": ["user", "ai"], "limit": 10}',
+            inputMode: 'none',
+          }
+        case 'data_input':
+          return {
+            content: defaultContent[type],
+            inputMode: 'none',
+          }
+        case 'image_gen':
+          return {
+            content: 'blurry, low quality, distorted, watermark',
+            inputMode: 'previous',
+          }
+        case 'log_entry':
+          return {
+            content: '',
+            inputMode: 'previous',
+          }
+        case 'markdown':
+          return {
+            content: '# Documentation\n\nDescribe what this circuit does...',
+            inputMode: 'none',
+          }
+        default:
+          return {
+            content: defaultContent[type] || '',
+            inputMode: 'previous',
+          }
+      }
+    }
+
     const newCell: CellData = {
       id: `cell-${Date.now()}`,
       type,
       label: labels[type],
-      content: '',
+      content: defaultContent[type] || '',
       status: 'idle',
-      modelSlot: type === 'ai_processor' ? 'A' : undefined,
-      conditionType: type === 'conditional' ? 'contains' : undefined,
-      conditionValue: type === 'conditional' ? '' : undefined,
-      fetchMethod: type === 'web_fetch' ? 'GET' : undefined,
+      ...getDefaultConfig(),
     }
     
     setCells((prev) => {
@@ -554,9 +701,15 @@ export function CircuitBoard() {
       
       case 'ai_processor':
         // Build prompt: if cell has content, use it as system instruction
-        const prompt = cell.content 
-          ? `${cell.content}\n\n---\n\n${input}`
-          : input
+        // Support {{input}} placeholder for explicit input insertion
+        let prompt = cell.content || ''
+        if (prompt.includes('{{input}}')) {
+          prompt = prompt.replace(/\{\{input\}\}/g, input)
+        } else if (prompt) {
+          prompt = `${prompt}\n\n---\n\n${input}`
+        } else {
+          prompt = input
+        }
           
         return new Promise((resolve, reject) => {
           let response = ''
@@ -600,15 +753,22 @@ export function CircuitBoard() {
         return input
 
       case 'image_gen':
-        const imageModel = cell.model || 'sdxl'
-        updateCell(cell.id, { output: 'Loading model & generating image...' })
+        // Use IMAGE slot from modelSlots, or cell.model, or default
+        const imageModel = cell.model || modelSlots.IMAGE || 'sdxl'
+        updateCell(cell.id, { 
+          output: `Loading model "${imageModel}"...`,
+          status: 'running'
+        })
         
         try {
+          // First ensure model is loaded
+          updateCell(cell.id, { output: `Loading model "${imageModel}" & preparing...` })
+          
           const response = await fetch('http://localhost:8000/api/images/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              prompt: input,
+              prompt: input || 'a beautiful image',
               model: imageModel,
               negative_prompt: cell.content || '',
               provider: 'local',
@@ -619,19 +779,31 @@ export function CircuitBoard() {
           })
           
           if (!response.ok) {
-            const error = await response.json()
-            throw new Error(error.detail || 'Image generation failed')
+            const errorData = await response.json().catch(() => ({ detail: `HTTP ${response.status}: ${response.statusText}` }))
+            const errorMsg = errorData.detail || errorData.error || errorData.message || 'Image generation failed'
+            throw new Error(errorMsg)
           }
           
           const result = await response.json()
           
-          if (result.status === 'loading') {
-            throw new Error(result.message)
+          if (result.status === 'success' && result.image) {
+            updateCell(cell.id, { 
+              output: result.image,
+              status: 'success'
+            })
+            return result.image
+          } else if (result.status === 'loading') {
+            throw new Error(result.message || 'Model is still loading, please wait...')
+          } else {
+            throw new Error(result.error || result.message || 'Image generation failed - no image returned')
           }
-          
-          return result.image
         } catch (e) {
-          throw new Error(`Image generation error: ${e instanceof Error ? e.message : e}`)
+          const errorMsg = e instanceof Error ? e.message : String(e)
+          updateCell(cell.id, { 
+            error: errorMsg,
+            status: 'error'
+          })
+          throw new Error(`Image generation error: ${errorMsg}`)
         }
 
       case 'markdown':
@@ -1007,6 +1179,7 @@ export function CircuitBoard() {
               ai: '🤖',
               system: '⚙️',
               error: '❌',
+              image: '🖼️',
             }[entry.type] || '○'
             
             const contentPreview = entry.content.length > 200 
@@ -1128,7 +1301,7 @@ export function CircuitBoard() {
         {/* Model Slots Config Panel */}
         {showModelConfig && (
           <div className="bg-void border-b border-terminal-border px-4 py-3">
-            <div className="flex items-center gap-6">
+            <div className="flex items-center gap-6 flex-wrap">
               <span className="text-[10px] text-terminal-muted tracking-widest">MODEL SLOTS</span>
               {(['A', 'B', 'C'] as ModelSlot[]).map((slot) => (
                 <div key={slot} className="flex items-center gap-2">
@@ -1154,6 +1327,32 @@ export function CircuitBoard() {
                   </select>
                 </div>
               ))}
+              {/* Image Model Slot */}
+              <div className="flex items-center gap-2">
+                <span 
+                  className="text-xs font-bold w-5 h-5 flex items-center justify-center border"
+                  style={{ 
+                    color: '#ff69b4',
+                    borderColor: '#ff69b4',
+                  }}
+                >
+                  🖼️
+                </span>
+                <span className="text-[10px] text-terminal-muted">Image</span>
+                <select
+                  value={modelSlots.IMAGE || ''}
+                  onChange={(e) => setModelSlots(prev => ({ ...prev, IMAGE: e.target.value }))}
+                  className="bg-slate border border-terminal-border text-pink-400 text-xs px-2 py-1 focus:outline-none focus:border-pink-400 min-w-[140px]"
+                >
+                  <option value="">Default</option>
+                  {imageModels.map((m) => (
+                    <option key={m.name} value={m.name}>
+                      {m.name} {m.vram ? `(${m.vram})` : ''}
+                      {currentImageModel === m.name ? ' ✓' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           </div>
         )}
