@@ -15,18 +15,34 @@ class MusicGenerationRequest(BaseModel):
     duration: int = Field(10, ge=5, le=300, description="Duration in seconds")
     guidance_scale: float = Field(7.0, description="Creativity level (Low to High)")
     steps: int = Field(20, description="Complexity/Texture level")
+    seed: Optional[int] = Field(None, description="Seed for reproducibility")
+    task: str = Field("text2music", description="Task type: text2music, audio2audio, repaint, edit, extend")
+    source_audio_path: Optional[str] = Field(None, description="Path or URL to source audio for remix/edit")
+    ref_audio_strength: Optional[float] = Field(0.5, description="Strength of source audio influence (0.0-1.0)")
+    repaint_start: Optional[float] = Field(None, description="Start time for repaint/inpainting")
+    repaint_end: Optional[float] = Field(None, description="End time for repaint/inpainting")
+    target_prompt: Optional[str] = Field(None, description="Target prompt for edit mode")
+    target_lyrics: Optional[str] = Field(None, description="Target lyrics for edit mode")
 
 @router.post("/generate")
 async def generate_music(request: MusicGenerationRequest):
     try:
-        audio_url = await music_service.generate(
+        audio_url, used_seed = await music_service.generate(
             prompt=request.prompt,
             lyrics=request.lyrics if request.use_lyrics else None,
             duration=request.duration,
             guidance_scale=request.guidance_scale,
-            steps=request.steps
+            steps=request.steps,
+            seed=request.seed,
+            task=request.task,
+            source_audio_path=request.source_audio_path,
+            ref_audio_strength=request.ref_audio_strength,
+            repaint_start=request.repaint_start,
+            repaint_end=request.repaint_end,
+            target_prompt=request.target_prompt,
+            target_lyrics=request.target_lyrics
         )
-        return {"status": "success", "audio_url": audio_url}
+        return {"status": "success", "audio_url": audio_url, "seed": used_seed}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

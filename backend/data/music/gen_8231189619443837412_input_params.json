@@ -1,0 +1,47 @@
+{
+    "format": "wav",
+    "lora_name_or_path": "none",
+    "lora_weight": 1.0,
+    "task": "text2music",
+    "prompt": "Angry death metal",
+    "lyrics": "Verse 1:\nHey there, have you noticed how smart your Mac has become?\nIt's got a feature called Localized AI that's second to none!\nYour device can understand the context of what you write\nAnd offer suggestions just when they're needed, day or night!\n\nChorus:\nLocalized AI on your Mac, making life so easy\nPersonalization is the key! (Ah ah)\nWith local knowledge working its magic from within,\nPrivacy concerns are now far behind!\n\nVerse 2:\nImagine typing away at home, in a cozy, warm space\nYour Mac learns your style and offers suggestions based on every page\nWhether it's drafting an email or planning your day\nLocalized AI helps you work smarter, not harder, in any way!\n\n(Repeat Chorus)\n\nBridge:\nWhen you're brainstorming late into the night,\nYour Mac knows just what to write.\nFrom cooking up a storm in the kitchen to sorting through photos with ease,\nLocalized AI makes every task feel like a breeze!\n\n(Repeat Chorus)\n\nOutro:\nLocalized AI on your Mac, making things more intuitive\nPersonalization is now our foundation! (Ah ah)\nWith local knowledge guiding the way, data stays secure and tight,\nEmbrace this future of computing, and productivity will shine so bright!",
+    "audio_duration": 160.0,
+    "infer_step": 49,
+    "guidance_scale": 13.5,
+    "scheduler_type": "euler",
+    "cfg_type": "apg",
+    "omega_scale": 10.0,
+    "guidance_interval": 0.5,
+    "guidance_interval_decay": 0.0,
+    "min_guidance_scale": 3.0,
+    "use_erg_tag": true,
+    "use_erg_lyric": true,
+    "use_erg_diffusion": true,
+    "oss_steps": [],
+    "timecosts": {
+        "preprocess": 0.20830988883972168,
+        "diffusion": 61.462955951690674,
+        "latent2audio": 6.006433010101318
+    },
+    "actual_seeds": [
+        592371766
+    ],
+    "retake_seeds": [
+        3800559655
+    ],
+    "retake_variance": 0.5,
+    "guidance_scale_text": 0.0,
+    "guidance_scale_lyric": 0.0,
+    "repaint_start": 0,
+    "repaint_end": 0,
+    "edit_n_min": 0.0,
+    "edit_n_max": 1.0,
+    "edit_n_avg": 1,
+    "src_audio_path": null,
+    "edit_target_prompt": null,
+    "edit_target_lyrics": null,
+    "audio2audio_enable": false,
+    "ref_audio_strength": 0.5,
+    "ref_audio_input": null,
+    "audio_path": "data/music/gen_8231189619443837412.wav"
+}

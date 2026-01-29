@@ -9,12 +9,13 @@ interface MusicGeneration {
     error?: string
     progress?: number
     message?: string
+    seed?: number
 }
 
 interface MusicGenerationPanelProps {
     generation: MusicGeneration | null
     onClose?: () => void
-    onGenerate?: (prompt: string, lyrics: string, duration: number) => void
+    onGenerate?: (prompt: string, lyrics: string, duration: number, guidanceScale: number, steps: number, seed?: number) => void
     onApproveToChat?: (audioUrl: string, prompt: string, duration: number) => void
 }
 
@@ -36,6 +37,10 @@ export function MusicGenerationPanel({
     const [promptInput, setPromptInput] = useState('')
     const [lyricsInput, setLyricsInput] = useState('')
     const [durationInput, setDurationInput] = useState(30)
+    const [guidanceScale, setGuidanceScale] = useState(7.0)
+    const [steps, setSteps] = useState(20)
+    const [seedInput, setSeedInput] = useState('')
+    const [showAdvanced, setShowAdvanced] = useState(false)
     const [isPlaying, setIsPlaying] = useState(false)
     const [audioProgress, setAudioProgress] = useState(0)
     const audioRef = useRef<HTMLAudioElement>(null)
@@ -90,7 +95,8 @@ export function MusicGenerationPanel({
 
     const handleGenerate = () => {
         if (promptInput.trim() && onGenerate) {
-            onGenerate(promptInput.trim(), lyricsInput.trim(), durationInput)
+            const seed = seedInput ? parseInt(seedInput) : undefined
+            onGenerate(promptInput.trim(), lyricsInput.trim(), durationInput, guidanceScale, steps, seed)
         }
     }
 
@@ -200,6 +206,79 @@ export function MusicGenerationPanel({
                                 <span>120s</span>
                                 <span>180s</span>
                             </div>
+                        </div>
+
+                        {/* Advanced Settings Toggle */}
+                        <div>
+                            <button
+                                onClick={() => setShowAdvanced(!showAdvanced)}
+                                className="text-[10px] text-terminal-muted hover:text-phosphor flex items-center gap-1 transition-colors"
+                            >
+                                {showAdvanced ? '▼' : '▶'} ADVANCED SETTINGS
+                            </button>
+
+                            {showAdvanced && (
+                                <div className="mt-3 space-y-4 pl-2 border-l border-terminal-border/50">
+                                    {/* Guidance Scale */}
+                                    <div>
+                                        <div className="flex justify-between text-[10px] text-terminal-muted mb-1">
+                                            <span>PROMPT ADHERENCE</span>
+                                            <span className="text-phosphor">{guidanceScale.toFixed(1)}</span>
+                                        </div>
+                                        <div className="relative">
+                                            <input
+                                                type="range"
+                                                min={1.0}
+                                                max={15.0}
+                                                step={0.5}
+                                                value={guidanceScale}
+                                                onChange={(e) => setGuidanceScale(Number(e.target.value))}
+                                                className="w-full accent-phosphor h-1 bg-void/50 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-phosphor [&::-webkit-slider-thumb]:rounded-full hover:[&::-webkit-slider-thumb]:scale-110 transition-all"
+                                            />
+                                            {/* Style the track background using inline styles or utility classes if needed, 
+                                                but standard range input is okay for now. */}
+                                        </div>
+                                        <div className="text-[9px] text-terminal-muted/60 mt-0.5">
+                                            Higher values follow text closer but may reduce quality.
+                                        </div>
+                                    </div>
+
+                                    {/* Inference Steps */}
+                                    <div>
+                                        <div className="flex justify-between text-[10px] text-terminal-muted mb-1">
+                                            <span>QUALITY STEPS</span>
+                                            <span className="text-phosphor">{steps}</span>
+                                        </div>
+                                        <input
+                                            type="range"
+                                            min={10}
+                                            max={50}
+                                            step={1}
+                                            value={steps}
+                                            onChange={(e) => setSteps(Number(e.target.value))}
+                                            className="w-full accent-phosphor h-1 bg-void/50 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-phosphor [&::-webkit-slider-thumb]:rounded-full hover:[&::-webkit-slider-thumb]:scale-110 transition-all"
+                                        />
+                                        <div className="text-[9px] text-terminal-muted/60 mt-0.5">
+                                            More steps improves quality but takes longer.
+                                        </div>
+                                    </div>
+
+                                    {/* Seed */}
+                                    <div>
+                                        <div className="text-[10px] text-terminal-muted mb-1">SEED (OPTIONAL)</div>
+                                        <input
+                                            type="number"
+                                            value={seedInput}
+                                            onChange={(e) => setSeedInput(e.target.value)}
+                                            placeholder="Random"
+                                            className="w-full bg-void border border-terminal-border text-phosphor text-xs px-2 py-1 focus:outline-none focus:border-phosphor placeholder:text-terminal-muted/50 font-mono"
+                                        />
+                                        <div className="text-[9px] text-terminal-muted/60 mt-0.5">
+                                            Use same seed to reproduce results.
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
                         </div>
 
                         {/* Generate Button */}
@@ -313,8 +392,17 @@ export function MusicGenerationPanel({
                         </div>
 
                         {/* Duration Info */}
-                        <div className="text-[9px] text-terminal-muted">
-                            Duration: {generation.duration}s • ACE-Step v1
+                        <div className="flex justify-between text-[9px] text-terminal-muted">
+                            <span>Duration: {generation.duration}s • ACE-Step v1</span>
+                            {generation.seed !== undefined && (
+                                <span
+                                    className="cursor-pointer hover:text-phosphor"
+                                    onClick={() => setSeedInput(generation.seed!.toString())}
+                                    title="Click to use this seed"
+                                >
+                                    Seed: {generation.seed}
+                                </span>
+                            )}
                         </div>
 
                         {/* Action Buttons */}

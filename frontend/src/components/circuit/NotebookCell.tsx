@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { CellData, ModelSlot, ModelSlotConfig, InputMode } from './CircuitBoard'
 import { FilePicker, ReadMode } from './FilePicker'
+import { MusicPlayerCard } from '../terminal/MusicPlayerCard'
 import type { ModuleType } from '../../types/module'
 
 const INPUT_MODE_INDICATORS: Record<InputMode, { icon: string; color: string }> = {
@@ -69,8 +70,6 @@ export function NotebookCell({
   const [showFilePicker, setShowFilePicker] = useState(false)
   const [hasOverflow, setHasOverflow] = useState(false)
   const [availableImageModels, setAvailableImageModels] = useState<Array<{ name: string; vram?: string; type?: string }>>([])
-  const [currentImageModel, setCurrentImageModel] = useState<string | null>(null)
-
   // Fetch available image models when this is an image_gen cell
   useEffect(() => {
     if (cell.type === 'image_gen') {
@@ -96,7 +95,6 @@ export function NotebookCell({
               .filter((m: any) => m.name) // Filter out any invalid entries
 
             setAvailableImageModels(models)
-            setCurrentImageModel(data.current_model || null)
 
             // If cell doesn't have a model set, use the current loaded model or first available
             if (!cell.model && models.length > 0) {
@@ -775,6 +773,98 @@ export function NotebookCell({
                 </div>
 
                 <div className="space-y-3">
+                  {/* Advanced Task Control */}
+                  <div className="p-2 border border-violet-500/30 rounded bg-violet-900/10">
+                    <div className="flex justify-between items-center mb-2">
+                      <label className="text-[10px] text-terminal-muted uppercase tracking-wider">Generation Task</label>
+                      <select
+                        value={cell.musicTask || 'text2music'}
+                        onChange={(e) => onUpdate({ musicTask: e.target.value as any })}
+                        className="bg-black/40 border border-violet-500/50 text-violet-300 text-[10px] rounded px-2 py-0.5 focus:outline-none"
+                      >
+                        <option value="text2music">Text to Music</option>
+                        <option value="audio2audio">Remix (Audio2Audio)</option>
+                        <option value="repaint">Inpaint (Repaint)</option>
+                        <option value="edit">Edit (Instruction)</option>
+                        <option value="extend">Extend (Outpaint)</option>
+                      </select>
+                    </div>
+
+                    {/* Task Specific Inputs */}
+                    {cell.musicTask && cell.musicTask !== 'text2music' && (
+                      <div className="space-y-2 mt-2 pt-2 border-t border-violet-500/20">
+                        {/* Source Audio Input */}
+                        <div>
+                          <label className="text-[10px] text-terminal-muted block mb-1">Source Audio (path/URL or {'{{input}}'})</label>
+                          <input
+                            type="text"
+                            value={cell.musicSourceAudio || ''}
+                            onChange={(e) => onUpdate({ musicSourceAudio: e.target.value })}
+                            placeholder="{{input}}"
+                            className="w-full bg-black/40 border border-violet-500/30 text-violet-200 text-[10px] rounded p-1.5 focus:border-violet-500"
+                          />
+                        </div>
+
+                        {/* Audio2Audio Strength */}
+                        {cell.musicTask === 'audio2audio' && (
+                          <div>
+                            <div className="flex justify-between text-[10px] text-terminal-muted mb-1">
+                              <span>Remix Strength</span>
+                              <span className="text-violet-400">{cell.musicRefStrength || 0.5}</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="0"
+                              max="1"
+                              step="0.05"
+                              value={cell.musicRefStrength || 0.5}
+                              onChange={(e) => onUpdate({ musicRefStrength: parseFloat(e.target.value) })}
+                              className="w-full accent-violet-500 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                            />
+                          </div>
+                        )}
+
+                        {/* Repaint/Extend Ranges */}
+                        {(cell.musicTask === 'repaint' || cell.musicTask === 'extend') && (
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="text-[10px] text-terminal-muted block mb-1">Start Time (s)</label>
+                              <input
+                                type="number"
+                                value={cell.musicRepaintStart || 0}
+                                onChange={(e) => onUpdate({ musicRepaintStart: parseFloat(e.target.value) })}
+                                className="w-full bg-black/40 border border-violet-500/30 text-violet-200 text-[10px] rounded p-1.5"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-terminal-muted block mb-1">End Time (s)</label>
+                              <input
+                                type="number"
+                                value={cell.musicRepaintEnd || 0}
+                                onChange={(e) => onUpdate({ musicRepaintEnd: parseFloat(e.target.value) })}
+                                className="w-full bg-black/40 border border-violet-500/30 text-violet-200 text-[10px] rounded p-1.5"
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Edit Target Prompt */}
+                        {cell.musicTask === 'edit' && (
+                          <div>
+                            <label className="text-[10px] text-terminal-muted block mb-1">Target Prompt</label>
+                            <input
+                              type="text"
+                              value={cell.musicTargetPrompt || ''}
+                              onChange={(e) => onUpdate({ musicTargetPrompt: e.target.value })}
+                              placeholder="e.g. Add drums"
+                              className="w-full bg-black/40 border border-violet-500/30 text-violet-200 text-[10px] rounded p-1.5"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
                   <div>
                     <div className="flex justify-between text-[10px] text-terminal-muted mb-1">
                       <span>Duration</span>
@@ -800,7 +890,7 @@ export function NotebookCell({
                       <input
                         type="range"
                         min="1"
-                        max="15"
+                        max="20"
                         step="0.5"
                         value={cell.musicGuidance || 7.0}
                         onChange={(e) => onUpdate({ musicGuidance: parseFloat(e.target.value) })}
@@ -975,8 +1065,24 @@ export function NotebookCell({
                 {cell.error ? 'ERROR' : 'OUTPUT'}
               </div>
 
-              {/* Image output */}
-              {cell.type === 'image_gen' && cell.output?.startsWith('data:image') ? (
+              {/* Music output */}
+              {cell.type === 'music_gen' && cell.output?.startsWith('http') ? (
+                <div className="mt-2">
+                  <MusicPlayerCard
+                    audioUrl={cell.output}
+                    prompt={cell.musicStyle || 'Generated Music'}
+                    duration={cell.musicDuration || 10}
+                    onDownload={() => {
+                      const link = document.createElement('a')
+                      link.href = cell.output!
+                      link.download = `music-${Date.now()}.wav`
+                      document.body.appendChild(link)
+                      link.click()
+                      document.body.removeChild(link)
+                    }}
+                  />
+                </div>
+              ) : cell.type === 'image_gen' && cell.output?.startsWith('data:image') ? (
                 <div className="flex justify-center">
                   <img
                     src={cell.output}

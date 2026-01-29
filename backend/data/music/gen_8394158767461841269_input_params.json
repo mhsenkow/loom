@@ -1,0 +1,47 @@
+{
+    "format": "wav",
+    "lora_name_or_path": "none",
+    "lora_weight": 1.0,
+    "task": "text2music",
+    "prompt": "light old piano from the 60's",
+    "lyrics": "Hey Jude, don't make it bad.\n\nTake a sad song and make it better.\n\nRemember to let her into your heart,\n\nThen you can start to make it better.\n\nHey Jude, don't be afraid.\n\nYou were made to go out and get her.\n\nThe minute you let her under your skin,\n\nThen you begin to make it better.\n\nAnd anytime you feel the pain, hey Jude, refrain,\n\nDon't carry the world upon your shoulders.\n\nFor well you know that it's a fool who plays it cool\n\nBy making his world a little colder.\n\nHey Jude, don't let me down.\n\nYou have found her, now go and get her.\n\nRemember to let her into your heart,\n\nThen you can start to make it better.\n\nSo let it out and let it in, hey Jude, begin,\n\nYou're waiting for someone to perform with.\n\nAnd don't you know that it's just you, hey Jude, you'll do,\n\nThe movement you need is on your shoulder.\n\nHey Jude, don't make it bad.\n\nTake a sad song and make it better.\n\nRemember to let her under your skin,\n\nThen you'll begin to make it\n\nBetter better better better better better, oh.\n\nNa na na nananana, nannana, hey Jude...",
+    "audio_duration": 120.0,
+    "infer_step": 20,
+    "guidance_scale": 7.0,
+    "scheduler_type": "euler",
+    "cfg_type": "apg",
+    "omega_scale": 10.0,
+    "guidance_interval": 0.5,
+    "guidance_interval_decay": 0.0,
+    "min_guidance_scale": 3.0,
+    "use_erg_tag": true,
+    "use_erg_lyric": true,
+    "use_erg_diffusion": true,
+    "oss_steps": [],
+    "timecosts": {
+        "preprocess": 0.11482763290405273,
+        "diffusion": 17.252495288848877,
+        "latent2audio": 3.962275981903076
+    },
+    "actual_seeds": [
+        4290815669
+    ],
+    "retake_seeds": [
+        3095727071
+    ],
+    "retake_variance": 0.5,
+    "guidance_scale_text": 0.0,
+    "guidance_scale_lyric": 0.0,
+    "repaint_start": 0,
+    "repaint_end": 0,
+    "edit_n_min": 0.0,
+    "edit_n_max": 1.0,
+    "edit_n_avg": 1,
+    "src_audio_path": null,
+    "edit_target_prompt": null,
+    "edit_target_lyrics": null,
+    "audio2audio_enable": false,
+    "ref_audio_strength": 0.5,
+    "ref_audio_input": null,
+    "audio_path": "data/music/gen_8394158767461841269.wav"
+}

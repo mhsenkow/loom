@@ -93,6 +93,13 @@ export interface CellData {
   musicDuration?: number
   musicGuidance?: number
   musicSteps?: number
+  musicTask?: 'text2music' | 'audio2audio' | 'repaint' | 'edit' | 'extend'
+  musicSourceAudio?: string
+  musicRefStrength?: number
+  musicRepaintStart?: number
+  musicRepaintEnd?: number
+  musicTargetPrompt?: string
+  musicTargetLyrics?: string
 }
 
 // Initial demo cells with better defaults

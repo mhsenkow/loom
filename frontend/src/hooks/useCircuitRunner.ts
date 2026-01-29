@@ -630,6 +630,62 @@ export function useCircuitRunner() {
           throw new Error(`Terminal history query failed: ${e instanceof Error ? e.message : e}`)
         }
 
+      case 'music_gen':
+        // Generate music
+        const musicPrompt = (input || cell.content || '').trim()
+        if (!musicPrompt) {
+          throw new Error('No prompt specified. Enter a prompt in the cell content or connect from previous cell.')
+        }
+
+        const musicDuration = cell.musicDuration || 10
+        const musicGuidance = cell.musicGuidance || 7.0
+        const musicSteps = cell.musicSteps || 20
+        const musicLyrics = cell.musicUseLyrics ? cell.musicLyrics : undefined
+        // Note: cell data doesn't explicitly store seed in the model I saw in CircuitBoard.tsx yet, 
+        // but we can add it if needed later or rely on random. 
+        // Wait, I should double check if I need to support seed here. 
+        // The previous turn added seed to MusicGenerationPanel, but CellData definition I saw in CircuitBoard.tsx 
+        // did NOT have seed. I should fix that too if I want full parity.
+        // For now let's implement basic generation.
+
+        try {
+          const response = await fetch(`${API_BASE}/api/music/generate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              prompt: musicPrompt,
+              lyrics: musicLyrics,
+              use_lyrics: !!musicLyrics,
+              duration: musicDuration,
+              guidance_scale: musicGuidance,
+              steps: musicSteps,
+              task: cell.musicTask || 'text2music',
+              source_audio_path: cell.musicSourceAudio?.includes('{{input}}')
+                ? cell.musicSourceAudio.replace(/\{\{input\}\}/g, input)
+                : cell.musicSourceAudio || undefined,
+              ref_audio_strength: cell.musicRefStrength,
+              repaint_start: cell.musicRepaintStart,
+              repaint_end: cell.musicRepaintEnd,
+              target_prompt: cell.musicTargetPrompt,
+              target_lyrics: cell.musicTargetLyrics,
+            }),
+          })
+
+          if (!response.ok) {
+            const errData = await response.json()
+            throw new Error(errData.detail || 'Music generation failed')
+          }
+
+          const data = await response.json()
+          if (data.status === 'success' && data.audio_url) {
+            return `${API_BASE}${data.audio_url}`
+          } else {
+            throw new Error(data.message || 'Unknown music generation error')
+          }
+        } catch (e) {
+          throw new Error(`Music generation failed: ${e instanceof Error ? e.message : e}`)
+        }
+
       default:
         return input
     }

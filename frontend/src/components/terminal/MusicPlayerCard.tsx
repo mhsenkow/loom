@@ -5,9 +5,10 @@ interface MusicPlayerCardProps {
     prompt: string
     duration?: number
     timestamp?: number
+    onDownload?: () => void
 }
 
-export function MusicPlayerCard({ audioUrl, prompt, duration, timestamp }: MusicPlayerCardProps) {
+export function MusicPlayerCard({ audioUrl, prompt, duration, timestamp, onDownload }: MusicPlayerCardProps) {
     const [isPlaying, setIsPlaying] = useState(false)
     const [progress, setProgress] = useState(0)
     const audioRef = useRef<HTMLAudioElement>(null)
@@ -116,15 +117,24 @@ export function MusicPlayerCard({ audioUrl, prompt, duration, timestamp }: Music
 
                 {/* Footer actions */}
                 <div className="flex justify-between mt-2">
-                    <a
-                        href={audioUrl}
-                        download
-                        className="text-[9px] text-terminal-muted hover:text-phosphor flex items-center gap-1"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                    >
-                        ⬇ DOWNLOAD
-                    </a>
+                    {onDownload ? (
+                        <button
+                            onClick={onDownload}
+                            className="text-[9px] text-terminal-muted hover:text-phosphor flex items-center gap-1"
+                        >
+                            ⬇ DOWNLOAD
+                        </button>
+                    ) : (
+                        <a
+                            href={audioUrl}
+                            download
+                            className="text-[9px] text-terminal-muted hover:text-phosphor flex items-center gap-1"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                        >
+                            ⬇ DOWNLOAD
+                        </a>
+                    )}
                     <div className="text-[9px] text-terminal-muted">
                         {duration ? `${duration}s` : 'AUDIO'}
                     </div>

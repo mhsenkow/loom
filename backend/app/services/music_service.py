@@ -141,19 +141,65 @@ class MusicService:
             logger.warning("Falling back to mock mode.")
             self.has_loaded = True
 
-    async def generate(self, prompt: str, lyrics: str = None, duration: int = 10, guidance_scale: float = 7.0, steps: int = 20):
+    async def generate(
+        self,
+        prompt: str,
+        lyrics: str = None,
+        duration: int = 10,
+        guidance_scale: float = 7.0,
+        steps: int = 20,
+        seed: int = None,
+        task: str = "text2music",
+        source_audio_path: str = None,
+        ref_audio_strength: float = 0.5,
+        repaint_start: float = None,
+        repaint_end: float = None,
+        target_prompt: str = None,
+        target_lyrics: str = None
+    ):
         """
         Generates music based on the prompt using ACE-Step.
+        Returns tuple (audio_url_path, used_seed)
         """
         if not self.has_loaded:
             await self.load_model()
 
-        logger.info(f"Generating music: '{prompt}' ({duration}s)")
+        # Handle seed
+        if seed is None:
+            seed = torch.randint(0, 2**32 - 1, (1,)).item()
+        
+        logger.info(f"Generating music: '{prompt}' ({duration}s), Seed: {seed}, Task: {task}")
+        
+        # Set seed for reproducibility
+        torch.manual_seed(seed)
+        if self.device == "cuda":
+            torch.cuda.manual_seed(seed)
         
         output_dir = "data/music"
         os.makedirs(output_dir, exist_ok=True)
-        filename = f"gen_{abs(hash(prompt + (lyrics or '')))}.wav"
+        # Include seed in filename to avoid collisions and allow caching of specific seeds
+        filename = f"gen_{abs(hash(prompt + (lyrics or '') + str(seed)))}.wav"
         filepath = os.path.join(output_dir, filename)
+
+        # Handle source audio path if provided
+        # Convert /api/music/files/filename to local path
+        local_source_path = None
+        if source_audio_path:
+            if source_audio_path.startswith("http"):
+                # Extract filename from URL
+                # Assuming format like http://localhost:8000/api/music/files/gen_123.wav
+                 fname = source_audio_path.split("/")[-1]
+                 local_source_path = os.path.join("data/music", fname)
+            elif source_audio_path.startswith("/api/music/files"):
+                 fname = source_audio_path.split("/")[-1]
+                 local_source_path = os.path.join("data/music", fname)
+            else:
+                 local_source_path = source_audio_path
+            
+            if not os.path.exists(local_source_path):
+                logger.warning(f"Source audio file not found: {local_source_path}")
+                # We might want to throw error or fallback, but for now let's log and proceed
+                # (ACE-Step will likely fail if it needs the file)
 
         try:
             if self.model:
@@ -161,6 +207,17 @@ class MusicService:
                 logger.info("Running inference with ACE-Step...")
                 
                 try:
+                    # Map task-specific parameters
+                    # For audio2audio, we use ref_audio_input
+                    ref_audio_input = None
+                    if task == "audio2audio":
+                        ref_audio_input = local_source_path
+                    
+                    # For edit/repaint/extend, we use src_audio_path
+                    src_audio_path_arg = None
+                    if task in ["edit", "repaint", "extend"]:
+                        src_audio_path_arg = local_source_path
+
                     # ACE-Step __call__ interface
                     result = self.model(
                         prompt=prompt,
@@ -169,7 +226,16 @@ class MusicService:
                         guidance_scale=guidance_scale,
                         infer_step=steps,
                         save_path=filepath,
-                        format="wav",  # Ensure soundfile backend is used
+                        format="wav",
+                        task=task,
+                        ref_audio_input=ref_audio_input,
+                        src_audio_path=src_audio_path_arg,
+                        audio2audio_enable=(task == "audio2audio"),
+                        ref_audio_strength=ref_audio_strength,
+                        repaint_start=repaint_start if repaint_start is not None else 0,
+                        repaint_end=repaint_end if repaint_end is not None else 0,
+                        edit_target_prompt=target_prompt,
+                        edit_target_lyrics=target_lyrics,
                     )
                 except Exception as e:
                     # ACE-Step may throw torchcodec error after saving the file
@@ -188,8 +254,11 @@ class MusicService:
                 sr = 44100
                 t = np.linspace(0, duration, int(sr * duration), False)
                 
+                # Use the provided seed for the mock generation too
+                rng = np.random.RandomState(seed % (2**32))
+                
                 # Create a more interesting mock sound
-                freq1 = 440 + (hash(prompt) % 220)
+                freq1 = 440 + (rng.randint(0, 220))
                 freq2 = freq1 * 1.5  # Perfect fifth
                 audio = 0.3 * np.sin(2 * np.pi * freq1 * t) + 0.2 * np.sin(2 * np.pi * freq2 * t)
                 
@@ -199,8 +268,8 @@ class MusicService:
                 
                 sf.write(filepath, audio.astype(np.float32), sr)
             
-            # Return relative path for frontend
-            return f"/api/music/files/{filename}"
+            # Return relative path and seed
+            return f"/api/music/files/{filename}", seed
 
         except Exception as e:
             logger.error(f"Generation failed: {e}")
