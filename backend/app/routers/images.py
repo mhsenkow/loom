@@ -4,8 +4,10 @@ Supports: HuggingFace API, Local diffusers (MPS/CUDA), ComfyUI
 """
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional
+from pathlib import Path
 import asyncio
 
 from app.services.image_gen import image_gen_service
@@ -230,6 +232,29 @@ async def get_status():
         "current_model": local_image_gen.current_model,
         "models_dir": str(local_image_gen.models_dir),
     }
+
+
+@router.get("/files/{filename}")
+async def get_image_file(filename: str):
+    """Serve a saved image file"""
+    images_dir = Path(__file__).parent.parent.parent / "data" / "images"
+    filepath = images_dir / filename
+    
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail=f"Image not found: {filename}")
+    
+    # Security: ensure the file is within the images directory
+    try:
+        filepath.resolve().relative_to(images_dir.resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    return FileResponse(
+        path=str(filepath),
+        media_type="image/png",
+        filename=filename,
+    )
+
 
 
 class ImageAnalysisRequest(BaseModel):

@@ -43,6 +43,11 @@ if ! command -v node &> /dev/null; then
     exit 1
 fi
 
+# Mac-specific: Ensure Ollama uses Metal GPU acceleration on Apple Silicon
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    export OLLAMA_GPU_DRIVER=metal
+fi
+
 # Check Ollama
 OLLAMA_RUNNING=false
 if command -v ollama &> /dev/null; then

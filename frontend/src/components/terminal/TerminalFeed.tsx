@@ -38,6 +38,7 @@ const SESSIONS_KEY = 'loom-terminal-sessions'
 const BEFORE_CLEAR_KEY = 'loom-terminal-before-clear'
 const MAX_STORED_ENTRIES = 500
 const PANEL_COLLAPSED_KEY = 'loom-session-panel-collapsed'
+const API_BASE = 'http://localhost:8000'
 
 // State for collecting circuit inputs
 interface CircuitInputState {
@@ -47,7 +48,53 @@ interface CircuitInputState {
   currentInputIndex: number
 }
 
-// Load saved sessions index
+// Extract media file URLs from entries (for shared datapool tracking)
+function extractMediaFiles(entries: LogEntry[]): string[] {
+  const mediaFiles: string[] = []
+  for (const entry of entries) {
+    // Check for image URLs (directly on entry or in content)
+    if (entry.imageUrl?.includes('/api/images/files/')) {
+      mediaFiles.push(entry.imageUrl)
+    }
+    // Check for audio/music URLs
+    if (entry.audioUrl?.includes('/api/music/files/')) {
+      mediaFiles.push(entry.audioUrl)
+    }
+    // Also scan content for any embedded URLs
+    if (entry.content?.includes('/api/images/files/')) {
+      const matches = entry.content.match(/\/api\/images\/files\/[^\s"')]+/g)
+      if (matches) mediaFiles.push(...matches)
+    }
+    if (entry.content?.includes('/api/music/files/')) {
+      const matches = entry.content.match(/\/api\/music\/files\/[^\s"')]+/g)
+      if (matches) mediaFiles.push(...matches)
+    }
+  }
+  return [...new Set(mediaFiles)] // Deduplicate
+}
+
+// Load saved sessions index (from backend with localStorage fallback)
+async function loadSessionsIndexAsync(): Promise<Record<string, { savedAt: number; entryCount: number; mediaFiles?: string[] }>> {
+  try {
+    const res = await fetch(`${API_BASE}/api/sessions`)
+    if (res.ok) {
+      const data = await res.json()
+      return data.sessions || {}
+    }
+  } catch (e) {
+    console.warn('[LOOM] Backend unavailable, using localStorage:', e)
+  }
+  // Fallback to localStorage
+  try {
+    const stored = localStorage.getItem(SESSIONS_KEY)
+    if (stored) return JSON.parse(stored)
+  } catch (e) {
+    console.warn('[LOOM] Failed to load sessions index:', e)
+  }
+  return {}
+}
+
+// Sync version for compatibility
 function loadSessionsIndex(): Record<string, { savedAt: number; entryCount: number }> {
   try {
     const stored = localStorage.getItem(SESSIONS_KEY)
@@ -60,20 +107,37 @@ function loadSessionsIndex(): Record<string, { savedAt: number; entryCount: numb
   return {}
 }
 
-// Save a session
+// Save a session (to backend - no localStorage backup needed)
+async function saveSessionAsync(name: string, entries: LogEntry[]): Promise<boolean> {
+  const mediaFiles = extractMediaFiles(entries)
+
+  try {
+    const res = await fetch(`${API_BASE}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, entries, mediaFiles }),
+    })
+    if (res.ok) {
+      // Backend saved successfully - just trigger UI refresh
+      window.dispatchEvent(new CustomEvent('loom:session-saved', { detail: { name } }))
+      return true
+    }
+  } catch (e) {
+    console.warn('[LOOM] Backend save failed, trying localStorage:', e)
+  }
+
+  // Fallback to localStorage only (when backend unavailable)
+  return saveSession(name, entries)
+}
+
+// Sync version - localStorage only (with quota handling)
 function saveSession(name: string, entries: LogEntry[]): boolean {
   try {
-    // Save the session data
     localStorage.setItem(`${SESSIONS_KEY}:${name}`, JSON.stringify(entries))
-
-    // Update the index
     const index = loadSessionsIndex()
     index[name] = { savedAt: Date.now(), entryCount: entries.length }
     localStorage.setItem(SESSIONS_KEY, JSON.stringify(index))
-
-    // Dispatch custom event to notify SessionPanel immediately
     window.dispatchEvent(new CustomEvent('loom:session-saved', { detail: { name } }))
-
     return true
   } catch (e) {
     console.warn('[LOOM] Failed to save session:', e)
@@ -81,7 +145,22 @@ function saveSession(name: string, entries: LogEntry[]): boolean {
   }
 }
 
-// Load a session
+// Load a session (from backend with localStorage fallback)
+async function loadSessionAsync(name: string): Promise<LogEntry[] | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/sessions/${encodeURIComponent(name)}`)
+    if (res.ok) {
+      const data = await res.json()
+      return data.entries || null
+    }
+  } catch (e) {
+    console.warn('[LOOM] Backend load failed, using localStorage:', e)
+  }
+  // Fallback to localStorage
+  return loadSession(name)
+}
+
+// Sync version for compatibility
 function loadSession(name: string): LogEntry[] | null {
   try {
     const stored = localStorage.getItem(`${SESSIONS_KEY}:${name}`)
@@ -94,18 +173,36 @@ function loadSession(name: string): LogEntry[] | null {
   return null
 }
 
-// Delete a session
+// Delete a session (from backend with localStorage cleanup)
+async function deleteSessionAsync(name: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/api/sessions/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    })
+    if (res.ok) {
+      // Also remove from localStorage
+      localStorage.removeItem(`${SESSIONS_KEY}:${name}`)
+      const index = loadSessionsIndex()
+      delete index[name]
+      localStorage.setItem(SESSIONS_KEY, JSON.stringify(index))
+      window.dispatchEvent(new CustomEvent('loom:session-deleted', { detail: { name } }))
+      return true
+    }
+  } catch (e) {
+    console.warn('[LOOM] Backend delete failed, using localStorage:', e)
+  }
+  // Fallback to localStorage only
+  return deleteSession(name)
+}
+
+// Sync version for compatibility
 function deleteSession(name: string): boolean {
   try {
     localStorage.removeItem(`${SESSIONS_KEY}:${name}`)
-
     const index = loadSessionsIndex()
     delete index[name]
     localStorage.setItem(SESSIONS_KEY, JSON.stringify(index))
-
-    // Dispatch custom event to notify SessionPanel immediately
     window.dispatchEvent(new CustomEvent('loom:session-deleted', { detail: { name } }))
-
     return true
   } catch (e) {
     console.warn('[LOOM] Failed to delete session:', e)
@@ -138,6 +235,45 @@ function loadBeforeClear(): LogEntry[] | null {
     console.warn('[LOOM] Failed to load before-clear stash:', e)
   }
   return null
+}
+
+// Generate auto session name from first user prompt (ChatGPT style)
+function generateSessionName(entries: LogEntry[]): string {
+  // Find first user entry
+  const firstUserEntry = entries.find(e => e.type === 'user')
+  if (firstUserEntry?.content) {
+    // Clean and truncate to ~30 chars
+    const clean = firstUserEntry.content
+      .replace(/^\/\w+\s*/, '') // Remove slash commands
+      .replace(/[^\w\s]/g, ' ') // Remove special chars
+      .trim()
+      .split(/\s+/)
+      .slice(0, 5) // First 5 words
+      .join(' ')
+    if (clean.length > 0) {
+      return clean.slice(0, 30).trim()
+    }
+  }
+  // Fallback to timestamp
+  return `session-${Date.now()}`
+}
+
+// Save session to backend silently (returns promise)
+async function saveSessionSilent(name: string, entries: LogEntry[]): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name,
+        entries: entries.slice(-MAX_STORED_ENTRIES),
+        mediaFiles: extractMediaFiles(entries),
+      }),
+    })
+    return res.ok
+  } catch {
+    return false
+  }
 }
 
 // Load entries from localStorage
@@ -245,6 +381,17 @@ export function TerminalFeed() {
     seed?: number
   } | null>(null)
 
+  // Current session tracking - ChatGPT style
+  const [currentSessionName, setCurrentSessionName] = useState<string | null>(() => {
+    // Try to restore from localStorage
+    try {
+      return localStorage.getItem('loom-current-session') || null
+    } catch {
+      return null
+    }
+  })
+  const lastSavedEntriesCountRef = useRef(0)
+
   const feedRef = useRef<HTMLDivElement>(null)
   const currentAIEntryRef = useRef<string | null>(null)
   const pendingImageUrlRef = useRef<string | null>(null)
@@ -264,7 +411,7 @@ export function TerminalFeed() {
     }
   }, [entries])
 
-  // Persist entries to localStorage (debounced)
+  // Persist entries to localStorage (debounced) - this is fast local backup
   useEffect(() => {
     const timeout = setTimeout(() => {
       try {
@@ -272,12 +419,44 @@ export function TerminalFeed() {
         const toStore = entries.slice(-MAX_STORED_ENTRIES)
         localStorage.setItem(STORAGE_KEY, JSON.stringify(toStore))
       } catch (e) {
-        console.warn('[LOOM] Failed to save terminal history:', e)
+        // Quota errors are fine - backend is primary storage now
       }
     }, 500) // Debounce 500ms
 
     return () => clearTimeout(timeout)
   }, [entries])
+
+  // ChatGPT-style seamless save to backend
+  useEffect(() => {
+    // Don't save empty/system-only sessions
+    const hasUserContent = entries.some(e => e.type === 'user' || e.type === 'ai')
+    if (!hasUserContent) return
+
+    // Debounce save - triggers after 1.5s of inactivity
+    const timeout = setTimeout(() => {
+      // Auto-generate session name if we don't have one yet
+      let sessionName = currentSessionName
+      if (!sessionName) {
+        sessionName = generateSessionName(entries)
+        setCurrentSessionName(sessionName)
+        // Persist current session name
+        try {
+          localStorage.setItem('loom-current-session', sessionName)
+        } catch { }
+      }
+
+      // Save to backend silently
+      saveSessionSilent(sessionName, entries).then(success => {
+        if (success) {
+          lastSavedEntriesCountRef.current = entries.length
+          // Trigger sidebar refresh
+          window.dispatchEvent(new CustomEvent('loom:session-saved', { detail: { name: sessionName } }))
+        }
+      })
+    }, 1500) // 1.5s debounce
+
+    return () => clearTimeout(timeout)
+  }, [entries, currentSessionName])
 
   // Show connection status on change and fetch models when connected
   useEffect(() => {
@@ -543,7 +722,7 @@ export function TerminalFeed() {
       // Full or Key: include conversation history (entries not yet including this user message)
       // Also include image entries with their analysis
       const relevant = entries.filter(e =>
-        e.type === 'user' || e.type === 'ai' || e.type === 'image'
+        e.type === 'user' || e.type === 'ai' || e.type === 'image' || e.type === 'system'
       ).slice(-16)
 
       const historyBlock = relevant.map(e => {
@@ -553,6 +732,8 @@ export function TerminalFeed() {
           // Include image analysis in context
           const analysis = e.imageAnalysis || 'Image added to conversation'
           return `[Image Context]\n${analysis}`
+        } else if (e.type === 'system') {
+          return `[System Event]: ${e.content}`
         } else {
           const text = e.content || ''
           if (contextMode === 'key') {
@@ -929,11 +1110,14 @@ export function TerminalFeed() {
           break
         }
 
-        if (saveSession(nameArg, filtered)) {
-          addSystemEntry(`Session saved as "${nameArg}" (${filtered.length} entries)`, timestamp)
-        } else {
-          addErrorEntry('Failed to save session', timestamp)
-        }
+        // Use async API with callback
+        saveSessionAsync(nameArg, filtered).then(success => {
+          if (success) {
+            addSystemEntry(`Session saved as "${nameArg}" (${filtered.length} entries)`, Date.now())
+          } else {
+            addErrorEntry('Failed to save session', Date.now())
+          }
+        })
         break
       }
 
@@ -962,20 +1146,23 @@ export function TerminalFeed() {
           break
         }
 
-        const sessionEntries = loadSession(sessionName)
-        if (sessionEntries) {
-          setEntries([
-            {
-              id: `system-${timestamp}`,
-              type: 'system',
-              content: `Loaded: ${sessionName} (${sessionEntries.length} entries)`,
-              timestamp,
-            },
-            ...sessionEntries,
-          ])
-        } else {
-          addErrorEntry(`Session "${sessionName}" not found. Use /sessions to list.`, timestamp)
-        }
+        // Use async API with callback
+        loadSessionAsync(sessionName).then(sessionEntries => {
+          const nowTs = Date.now()
+          if (sessionEntries) {
+            setEntries([
+              {
+                id: `system-${nowTs}`,
+                type: 'system',
+                content: `Loaded: ${sessionName} (${sessionEntries.length} entries)`,
+                timestamp: nowTs,
+              },
+              ...sessionEntries,
+            ])
+          } else {
+            addErrorEntry(`Session "${sessionName}" not found. Use /sessions to list.`, nowTs)
+          }
+        })
         break
       }
 
@@ -986,11 +1173,122 @@ export function TerminalFeed() {
           break
         }
 
-        if (deleteSession(sessionToDelete)) {
-          addSystemEntry(`Session "${sessionToDelete}" deleted`, timestamp)
-        } else {
-          addErrorEntry(`Failed to delete session "${sessionToDelete}"`, timestamp)
+        // Use async API with callback
+        deleteSessionAsync(sessionToDelete).then(success => {
+          const nowTs = Date.now()
+          if (success) {
+            addSystemEntry(`Session "${sessionToDelete}" deleted`, nowTs)
+          } else {
+            addErrorEntry(`Failed to delete session "${sessionToDelete}"`, nowTs)
+          }
+        })
+        break
+      }
+
+      case 'visit': {
+        const url_arg = args.join(' ').trim()
+        if (!url_arg) {
+          addErrorEntry('Usage: /visit <url>', timestamp)
+          break
         }
+
+        let targetUrl = url_arg
+        if (!targetUrl.startsWith('http')) {
+          targetUrl = `https://${targetUrl}`
+        }
+
+        addSystemEntry(`Visiting ${targetUrl} (headless)...`, Date.now())
+
+        fetch(`${API_BASE}/api/web/visit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: targetUrl }),
+        })
+          .then(res => res.json())
+          .then(data => {
+            const nowTs = Date.now()
+            if (data.status === 'success') {
+              // Build content with optional vision analysis
+              let displayContent = `WEB BROWSE: ${data.title}\n\n${data.text_content}`
+              if (data.vision_analysis) {
+                displayContent += `\n\n---\n🖼️ VISUAL ANALYSIS:\n${data.vision_analysis}`
+              }
+
+              // Show title, text, and vision analysis
+              setEntries(prev => [...prev, {
+                id: `web-${nowTs}`,
+                type: 'system',
+                content: displayContent,
+                imageUrl: data.screenshot_url,
+                timestamp: nowTs,
+              }])
+
+              // Auto-TL;DR (include vision analysis in context if available)
+              let aiContext = `Here is the content of the web page "${data.title}" (${targetUrl}):\n\n${data.text_content}`
+              if (data.vision_analysis) {
+                aiContext += `\n\nVisual observations from the page:\n${data.vision_analysis}`
+              }
+              aiContext += `\n\nPlease provide a concise TL;DR summary of this content.`
+
+              handleAIRequest(aiContext, nowTs + 1)
+            } else {
+              addErrorEntry(`Web visit failed: ${data.error}`, nowTs)
+            }
+          })
+          .catch(e => {
+            addErrorEntry(`Web visit request failed: ${e.message}`, Date.now())
+          })
+        break
+      }
+
+      case 'research': {
+        const query = args.join(' ').trim()
+        if (!query) {
+          addErrorEntry('Usage: /research <query>', timestamp)
+          break
+        }
+
+        addSystemEntry(`🔍 Deep searching: "${query}"...`, timestamp)
+
+        fetch(`${API_BASE}/api/web/research`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query, max_results: 3 }),
+        })
+          .then(res => res.json())
+          .then(data => {
+            const nowTs = Date.now()
+            if (data.status === 'success' && data.sources) {
+              // Build combined research content
+              let researchContent = `📚 RESEARCH RESULTS: "${query}"\n\n`
+              researchContent += `Found ${data.source_count} sources:\n\n`
+
+              const sourceContents: string[] = []
+              data.sources.forEach((source: { title: string; url: string; content: string; screenshot_url?: string }, idx: number) => {
+                researchContent += `---\n**Source ${idx + 1}: ${source.title}**\n${source.url}\n\n`
+                researchContent += source.content.slice(0, 1000) + (source.content.length > 1000 ? '...' : '') + '\n\n'
+                sourceContents.push(`Source ${idx + 1}: ${source.title}\nURL: ${source.url}\nContent:\n${source.content}`)
+              })
+
+              // Display research results
+              setEntries(prev => [...prev, {
+                id: `research-${nowTs}`,
+                type: 'system',
+                content: researchContent,
+                timestamp: nowTs,
+              }])
+
+              // Trigger AI synthesis
+              const synthesisPrompt = `You have been given research from ${data.source_count} sources about "${query}". Please synthesize a comprehensive answer based on these sources:\n\n${sourceContents.join('\n\n---\n\n')}\n\nProvide a well-structured synthesis that answers the query, citing sources where appropriate.`
+
+              handleAIRequest(synthesisPrompt, nowTs + 1)
+            } else {
+              addErrorEntry(`Research failed: ${data.error || 'Unknown error'}`, nowTs)
+            }
+          })
+          .catch(e => {
+            addErrorEntry(`Research request failed: ${e.message}`, Date.now())
+          })
         break
       }
 
@@ -1761,19 +2059,35 @@ export function TerminalFeed() {
 
   // Session panel handlers
   const handleLoadSession = useCallback((name: string) => {
-    const sessionEntries = loadSession(name)
-    if (sessionEntries) {
-      const timestamp = Date.now()
-      setEntries([
-        {
-          id: `system-${timestamp}`,
-          type: 'system',
-          content: `Loaded: ${name} (${sessionEntries.length} entries)`,
+    // Use async API that checks backend first
+    loadSessionAsync(name).then(sessionEntries => {
+      if (sessionEntries) {
+        // Set current session to the loaded one
+        setCurrentSessionName(name)
+        try {
+          localStorage.setItem('loom-current-session', name)
+        } catch { }
+
+        const timestamp = Date.now()
+        setEntries([
+          {
+            id: `system-${timestamp}`,
+            type: 'system',
+            content: `Loaded: ${name} (${sessionEntries.length} entries)`,
+            timestamp,
+          },
+          ...sessionEntries,
+        ])
+      } else {
+        const timestamp = Date.now()
+        setEntries(prev => [...prev, {
+          id: `error-${timestamp}`,
+          type: 'error',
+          content: `Session "${name}" not found`,
           timestamp,
-        },
-        ...sessionEntries,
-      ])
-    }
+        }])
+      }
+    })
   }, [])
 
   const handleSaveSession = useCallback((name: string) => {
@@ -1782,18 +2096,40 @@ export function TerminalFeed() {
       !(e.type === 'system' && (e.content.includes('INITIALIZED') || e.content.includes('BACKEND CONNECTED')))
     )
 
-    if (saveSession(name, filtered)) {
+    // Use async API that saves to backend
+    saveSessionAsync(name, filtered).then(success => {
       const timestamp = Date.now()
-      setEntries(prev => [...prev, {
-        id: `system-${timestamp}`,
-        type: 'system',
-        content: `Session saved as "${name}" (${filtered.length} entries)`,
-        timestamp,
-      }])
-    }
+      if (success) {
+        // Update current session name to the manually saved name
+        setCurrentSessionName(name)
+        try {
+          localStorage.setItem('loom-current-session', name)
+        } catch { }
+
+        setEntries(prev => [...prev, {
+          id: `system-${timestamp}`,
+          type: 'system',
+          content: `Session saved as "${name}" (${filtered.length} entries)`,
+          timestamp,
+        }])
+      } else {
+        setEntries(prev => [...prev, {
+          id: `error-${timestamp}`,
+          type: 'error',
+          content: `Failed to save session "${name}"`,
+          timestamp,
+        }])
+      }
+    })
   }, [entries])
 
   const handleNewSession = useCallback(() => {
+    // Clear current session - next autosave will create new auto-named session
+    setCurrentSessionName(null)
+    try {
+      localStorage.removeItem('loom-current-session')
+    } catch { }
+
     const timestamp = Date.now()
     setEntries([{
       id: `system-${timestamp}`,
@@ -1809,15 +2145,17 @@ export function TerminalFeed() {
   }, [])
 
   const handleDeleteSession = useCallback((name: string) => {
-    if (deleteSession(name)) {
+    deleteSessionAsync(name).then(success => {
       const timestamp = Date.now()
-      setEntries(prev => [...prev, {
-        id: `system-${timestamp}`,
-        type: 'system',
-        content: `Session "${name}" deleted`,
-        timestamp,
-      }])
-    }
+      if (success) {
+        setEntries(prev => [...prev, {
+          id: `system-${timestamp}`,
+          type: 'system',
+          content: `Session "${name}" deleted`,
+          timestamp,
+        }])
+      }
+    })
   }, [])
 
   // Handle image upload and analysis
@@ -1959,6 +2297,7 @@ export function TerminalFeed() {
         onNewSession={handleNewSession}
         onDeleteSession={handleDeleteSession}
         currentEntryCount={entries.length}
+        currentSessionName={currentSessionName}
       />
 
       {/* Main Terminal Area */}

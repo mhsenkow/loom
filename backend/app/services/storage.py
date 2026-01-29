@@ -45,6 +45,13 @@ def init_db() -> None:
                 model_slots TEXT NOT NULL,
                 saved_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS sessions (
+                name TEXT PRIMARY KEY,
+                entries TEXT NOT NULL,
+                media_files TEXT DEFAULT '[]',
+                entry_count INTEGER DEFAULT 0,
+                saved_at REAL NOT NULL
+            );
         """)
         conn.commit()
     finally:
@@ -260,3 +267,93 @@ def delete_circuit(name: str) -> bool:
         return cur.rowcount > 0
     finally:
         conn.close()
+
+
+# --- Sessions ---
+
+def get_sessions() -> dict[str, dict[str, Any]]:
+    """Return session index: { name: { savedAt, entryCount, mediaFiles } }."""
+    init_db()
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT name, entry_count, media_files, saved_at FROM sessions"
+        ).fetchall()
+        out = {}
+        for r in rows:
+            try:
+                media = json.loads(r["media_files"]) if r["media_files"] else []
+            except json.JSONDecodeError:
+                media = []
+            out[r["name"]] = {
+                "name": r["name"],
+                "entryCount": r["entry_count"],
+                "mediaFiles": media,
+                "savedAt": float(r["saved_at"]),
+            }
+        return out
+    finally:
+        conn.close()
+
+
+def get_session(name: str) -> Optional[dict[str, Any]]:
+    """Get a session with its full entries."""
+    init_db()
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT name, entries, media_files, entry_count, saved_at FROM sessions WHERE name = ?",
+            (name,),
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            entries = json.loads(row["entries"]) if row["entries"] else []
+            media = json.loads(row["media_files"]) if row["media_files"] else []
+        except json.JSONDecodeError:
+            entries = []
+            media = []
+        return {
+            "name": row["name"],
+            "entries": entries,
+            "mediaFiles": media,
+            "entryCount": row["entry_count"],
+            "savedAt": float(row["saved_at"]),
+        }
+    finally:
+        conn.close()
+
+
+def save_session(name: str, entries: list, media_files: list, saved_at: float) -> dict[str, Any]:
+    """Save or update a session."""
+    init_db()
+    conn = _get_conn()
+    try:
+        entry_count = len(entries)
+        conn.execute(
+            """INSERT INTO sessions (name, entries, media_files, entry_count, saved_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(name) DO UPDATE SET
+                 entries = excluded.entries,
+                 media_files = excluded.media_files,
+                 entry_count = excluded.entry_count,
+                 saved_at = excluded.saved_at""",
+            (name, json.dumps(entries), json.dumps(media_files), entry_count, saved_at),
+        )
+        conn.commit()
+        return get_session(name) or {}
+    finally:
+        conn.close()
+
+
+def delete_session(name: str) -> bool:
+    """Delete a session."""
+    init_db()
+    conn = _get_conn()
+    try:
+        cur = conn.execute("DELETE FROM sessions WHERE name = ?", (name,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+

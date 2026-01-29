@@ -12,12 +12,19 @@ import sys
 import os
 from pathlib import Path
 
+# Mac/Unix performance: Use uvloop for faster async I/O if available
+try:
+    import uvloop
+    uvloop.install()
+except ImportError:
+    pass  # uvloop not available, use default event loop
+
 # Ensure backend directory is in Python path for subprocess imports
 backend_dir = Path(__file__).parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-from app.routers import modules, images, files, circuits, search, remote, code_context, music
+from app.routers import modules, images, files, circuits, search, remote, code_context, music, sessions, web
 from app.services.ollama_client import ollama_client
 from app.services.vector_store import VectorStore
 from app.services.storage import get_module as storage_get_module, init_db as storage_init_db
@@ -39,11 +46,27 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# CORS middleware - Allow all origins for development
+# CORS middleware
+origins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+    "*"  # Keep wildcard for now but combined with creds=True in FastAPI handles it by reflection often, but explicit is better
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for development
-    allow_credentials=False,  # Must be False when using "*"
+    # Let's use the explicit list from above, but actually FastAPI's * with allow_credentials=True is invalid.
+    # So we must use the list.
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+        "*"
+    ],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
@@ -68,6 +91,8 @@ app.include_router(search.router, prefix="/api/search", tags=["search"])
 app.include_router(remote.router, prefix="/api/remote", tags=["remote"])
 app.include_router(code_context.router, prefix="/api/code-context", tags=["code-context"])
 app.include_router(music.router, prefix="/api/music", tags=["music"])
+app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
+app.include_router(web.router, prefix="/api/web", tags=["web"])
 
 # Initialize database on startup
 @app.on_event("startup")

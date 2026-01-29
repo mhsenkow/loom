@@ -262,7 +262,19 @@ class LocalImageGenerator:
             
             image = result.images[0]
             
-            # Convert to base64
+            # Save to disk for session persistence
+            import time
+            images_dir = Path(__file__).parent.parent.parent / "data" / "images"
+            images_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = int(time.time() * 1000)
+            prompt_hash = abs(hash(prompt)) % 10**8
+            filename = f"gen_{timestamp}_{prompt_hash}.png"
+            filepath = images_dir / filename
+            image.save(str(filepath), format="PNG")
+            file_url = f"/api/images/files/{filename}"
+            print(f"[LOOM] Image saved: {filepath}")
+            
+            # Convert to base64 for immediate display
             buffer = BytesIO()
             image.save(buffer, format="PNG")
             image_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
@@ -270,6 +282,8 @@ class LocalImageGenerator:
             return {
                 "status": "success",
                 "image": f"data:image/png;base64,{image_base64}",
+                "file_url": file_url,
+                "filename": filename,
                 "model": model,
                 "seed": seed,
             }

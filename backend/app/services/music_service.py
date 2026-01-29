@@ -6,6 +6,10 @@ import numpy as np
 import logging
 from fastapi import HTTPException
 
+# Mac MPS (Metal) optimization - allow full GPU memory usage
+if torch.backends.mps.is_available():
+    os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
+
 # Monkey-patch torchaudio.save to use soundfile backend (fixes torchcodec issue in torchaudio 2.10+)
 def _patched_torchaudio_save(filepath, audio_tensor, sample_rate, **kwargs):
     """Save audio using soundfile instead of torchaudio's broken torchcodec path."""

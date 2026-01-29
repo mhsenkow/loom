@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
 
 const SESSIONS_KEY = 'loom-terminal-sessions'
+const API_BASE = 'http://localhost:8000'
 
 interface SessionInfo {
   savedAt: number
   entryCount: number
+  mediaFiles?: string[]
 }
 
 interface SessionPanelProps {
@@ -15,6 +17,7 @@ interface SessionPanelProps {
   onNewSession: () => void
   onDeleteSession?: (name: string) => void
   currentEntryCount: number
+  currentSessionName?: string | null
 }
 
 export function SessionPanel({
@@ -25,12 +28,25 @@ export function SessionPanel({
   onNewSession,
   onDeleteSession,
   currentEntryCount,
+  currentSessionName,
 }: SessionPanelProps) {
   const [sessions, setSessions] = useState<Record<string, SessionInfo>>({})
   const [hoveredSession, setHoveredSession] = useState<string | null>(null)
 
-  // Load sessions index
-  const refreshSessions = useCallback(() => {
+  // Load sessions index (from backend with localStorage fallback)
+  const refreshSessions = useCallback(async () => {
+    try {
+      // Try backend first
+      const res = await fetch(`${API_BASE}/api/sessions`)
+      if (res.ok) {
+        const data = await res.json()
+        setSessions(data.sessions || {})
+        return
+      }
+    } catch (e) {
+      console.warn('[LOOM] Backend unavailable, using localStorage:', e)
+    }
+    // Fallback to localStorage
     try {
       const stored = localStorage.getItem(SESSIONS_KEY)
       if (stored) {
@@ -63,8 +79,8 @@ export function SessionPanel({
     window.addEventListener('loom:session-saved', handleSessionChange)
     window.addEventListener('loom:session-deleted', handleSessionChange)
 
-    // Reduced polling interval as backup (events are primary)
-    const interval = setInterval(refreshSessions, 10000)
+    // Reduced polling interval - autosave doesn't trigger events, so poll catches it
+    const interval = setInterval(refreshSessions, 5000)
 
     return () => {
       window.removeEventListener('storage', handleStorage)
@@ -116,13 +132,15 @@ export function SessionPanel({
 
       {/* Current Session Indicator */}
       {!isCollapsed && (
-        <div className="px-3 py-2 border-b border-terminal-border bg-slate/50" title="Auto-saved. Use SAVE to name it.">
+        <div className="px-3 py-2 border-b border-terminal-border bg-slate/50" title={currentSessionName || 'New Session'}>
           <div className="flex items-center gap-2">
             <span className="led led-success"></span>
-            <span className="text-[10px] text-phosphor tracking-wide">CURRENT</span>
+            <span className="text-[10px] text-phosphor tracking-wide truncate">
+              {currentSessionName || 'New Session'}
+            </span>
           </div>
           <div className="text-[9px] text-terminal-muted mt-1">
-            {currentEntryCount} entries
+            {currentEntryCount} entries • auto-saving
           </div>
         </div>
       )}
@@ -216,13 +234,31 @@ export function SessionPanel({
           >
             <span>▣</span> SAVE
           </button>
-          <button
-            onClick={onNewSession}
-            title="Start fresh (save first if you want to keep current)"
-            className="w-full text-[9px] text-terminal-muted hover:text-phosphor py-1.5 border border-terminal-border hover:border-phosphor transition-colors flex items-center justify-center gap-2"
-          >
-            <span>+</span> NEW
-          </button>
+          <div className="flex gap-1">
+            <button
+              onClick={onNewSession}
+              title="Start fresh (save first if you want to keep current)"
+              className="flex-1 text-[9px] text-terminal-muted hover:text-phosphor py-1.5 border border-terminal-border hover:border-phosphor transition-colors flex items-center justify-center gap-2"
+            >
+              <span>+</span> NEW
+            </button>
+            <button
+              onClick={async () => {
+                try {
+                  const res = await fetch('http://localhost:8000/api/sessions/open-folder', { method: 'POST' })
+                  if (!res.ok) {
+                    console.error('Failed to open folder')
+                  }
+                } catch (e) {
+                  console.error('Failed to open folder:', e)
+                }
+              }}
+              title="Open data folder in Finder"
+              className="text-[9px] text-terminal-muted hover:text-phosphor py-1.5 px-2 border border-terminal-border hover:border-phosphor transition-colors flex items-center justify-center"
+            >
+              📁
+            </button>
+          </div>
         </div>
       )}
 
@@ -242,6 +278,19 @@ export function SessionPanel({
             title="New session"
           >
             +
+          </button>
+          <button
+            onClick={async () => {
+              try {
+                await fetch('http://localhost:8000/api/sessions/open-folder', { method: 'POST' })
+              } catch (e) {
+                console.error('Failed to open folder:', e)
+              }
+            }}
+            className="w-full text-terminal-muted hover:text-phosphor p-1.5 flex items-center justify-center"
+            title="Open data folder in Finder"
+          >
+            📁
           </button>
         </div>
       )}
