@@ -1,7 +1,7 @@
-export type ModuleType = 
-  | 'log_entry' 
-  | 'ai_processor' 
-  | 'script_execution' 
+export type ModuleType =
+  | 'log_entry'
+  | 'ai_processor'
+  | 'script_execution'
   | 'data_input'
   | 'image_gen'
   | 'markdown'
@@ -11,6 +11,7 @@ export type ModuleType =
   | 'vector_index'
   | 'vector_search'
   | 'terminal_history'
+  | 'music_gen'
 
 export type ModuleStatus = 'idle' | 'running' | 'success' | 'error'
 
@@ -33,12 +34,15 @@ export interface Module {
 
 export interface LogEntry {
   id: string
-  type: 'user' | 'system' | 'ai' | 'error' | 'image'
+  type: 'user' | 'system' | 'ai' | 'error' | 'image' | 'audio'
   content: string
   timestamp: number
   status?: ModuleStatus
   imageUrl?: string
   imageAnalysis?: string
+  audioUrl?: string
+  audioPrompt?: string
+  audioDuration?: number
 }
 
 export interface SystemStatus {

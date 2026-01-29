@@ -7,5 +7,10 @@ declare global {
       maximize: () => void
       close: () => void
     }
+    electron?: {
+      showOpenDialog: (options: {
+        properties: string[]
+      }) => Promise<{ canceled: boolean; filePaths: string[] }>
+    }
   }
 }

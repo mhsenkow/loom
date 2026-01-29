@@ -15,6 +15,15 @@ transformers>=4.36.0
 accelerate>=0.25.0
 safetensors>=0.4.0
 
+# Audio Generation (ACE-Step)
+# Install ACE-Step for music generation:
+#   pip install git+https://github.com/ace-step/ACE-Step.git
+# Models auto-download to ~/.cache/ace-step/checkpoints on first use
+# The music service will work in mock mode without it
+scipy>=1.10.0
+soundfile>=0.12.1
+huggingface_hub>=0.20.0
+
 # File processing
 pymupdf>=1.23.0
 

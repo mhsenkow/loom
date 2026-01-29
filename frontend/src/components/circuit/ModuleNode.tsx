@@ -32,6 +32,7 @@ export const ModuleNode = memo(({ data, selected }: NodeProps<ModuleNodeData>) =
     vector_index: '📚',
     vector_search: '🔍',
     terminal_history: '📜',
+    music_gen: '🎵',
   }
 
   const headerColors: Record<ModuleType, string> = {
@@ -47,10 +48,11 @@ export const ModuleNode = memo(({ data, selected }: NodeProps<ModuleNodeData>) =
     vector_index: 'bg-emerald-600 text-white',
     vector_search: 'bg-indigo-600 text-white',
     terminal_history: 'bg-orange-600 text-white',
+    music_gen: 'bg-violet-600 text-white',
   }
 
   return (
-    <div 
+    <div
       className={`
         module-chip min-w-[180px]
         ${selected ? 'shadow-glow' : ''}

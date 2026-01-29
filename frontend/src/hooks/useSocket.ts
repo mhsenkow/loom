@@ -165,6 +165,7 @@ export function useSocket() {
     model: string = 'llama3.1:8b',
     onChunk?: AIChunkHandler,
     onStatus?: AIStatusHandler,
+    useCodeContext: boolean = false,
   ) => {
     const socket = getOrCreateSocket()
     
@@ -191,7 +192,12 @@ export function useSocket() {
       activeStatusHandlers.set(requestId, onStatus)
     }
 
-    socket.emit('chat', { prompt, model })
+    socket.emit('chat', { 
+      prompt, 
+      model,
+      use_code_context: useCodeContext,
+      code_context_collection: 'loom_code_context',
+    })
     return true
   }, [])
 

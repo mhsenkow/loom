@@ -6,13 +6,25 @@ import { DownloadPanel } from './DownloadPanel'
 import { ImageAnalysisPanel } from './ImageAnalysisPanel'
 import { ImageGenerationPanel } from './ImageGenerationPanel'
 import { ImageModal } from './ImageModal'
+import { FloatingToolbar } from './FloatingToolbar'
+import { CodeContextPanel } from './CodeContextPanel'
+import { MusicSetupPanel } from './MusicSetupPanel'
+import { MusicGenerationPanel } from './MusicGenerationPanel'
+import { MusicPlayerCard } from './MusicPlayerCard'
 import { useSocket } from '../../hooks/useSocket'
+
+// Recommended image generation models (matching ImageGenerationPanel)
+const RECOMMENDED_IMAGE_GEN_MODELS = [
+  { name: 'x/flux2-klein', description: 'FLUX.2 Klein - Fast, great text rendering, macOS only', size: '~5.7GB (4B) or ~12GB (9B)' },
+  { name: 'x/flux2-klein:4b', description: 'FLUX.2 Klein 4B - Smaller, faster version', size: '~5.7GB' },
+  { name: 'x/flux2-klein:9b', description: 'FLUX.2 Klein 9B - Higher quality version', size: '~12GB' },
+]
 import { useSystemStatus } from '../../hooks/useSystemStatus'
 import { terminalOutputBus, getCircuitContext } from '../../hooks/useTerminalOutput'
-import { 
-  useCircuitRunner, 
+import {
+  useCircuitRunner,
   useCircuitExecution,
-  getCircuitNames, 
+  getCircuitNames,
   loadSavedCircuits,
   saveCircuit,
   SavedCircuit,
@@ -53,12 +65,12 @@ function saveSession(name: string, entries: LogEntry[]): boolean {
   try {
     // Save the session data
     localStorage.setItem(`${SESSIONS_KEY}:${name}`, JSON.stringify(entries))
-    
+
     // Update the index
     const index = loadSessionsIndex()
     index[name] = { savedAt: Date.now(), entryCount: entries.length }
     localStorage.setItem(SESSIONS_KEY, JSON.stringify(index))
-    
+
     return true
   } catch (e) {
     console.warn('[LOOM] Failed to save session:', e)
@@ -83,11 +95,11 @@ function loadSession(name: string): LogEntry[] | null {
 function deleteSession(name: string): boolean {
   try {
     localStorage.removeItem(`${SESSIONS_KEY}:${name}`)
-    
+
     const index = loadSessionsIndex()
     delete index[name]
     localStorage.setItem(SESSIONS_KEY, JSON.stringify(index))
-    
+
     return true
   } catch (e) {
     console.warn('[LOOM] Failed to delete session:', e)
@@ -135,7 +147,7 @@ function loadEntries(): LogEntry[] {
   } catch (e) {
     console.warn('[LOOM] Failed to load terminal history:', e)
   }
-  
+
   // Default initial entries
   return [
     {
@@ -158,7 +170,7 @@ export function TerminalFeed() {
   const { status, models, fetchModels, setActiveModel, setVisionModel, setImageGenModel } = useSystemStatus()
   const { runCircuit, getRequiredInputs } = useCircuitRunner()
   const circuitExecution = useCircuitExecution()
-  
+
   const [entries, setEntries] = useState<LogEntry[]>(loadEntries)
   const [panelCollapsed, setPanelCollapsed] = useState(() => {
     try {
@@ -191,7 +203,7 @@ export function TerminalFeed() {
     prompt: string
     imageUrl?: string
     model: string
-    status: 'generating' | 'success' | 'error' | 'no-model'
+    status: 'generating' | 'success' | 'error' | 'no-model' | 'empty'
     error?: string
     progress?: number
     message?: string
@@ -209,16 +221,33 @@ export function TerminalFeed() {
     }
     canEdit?: boolean
   } | null>(null)
-  
+  const [codeContextPanelOpen, setCodeContextPanelOpen] = useState(false)
+  const [codeContextActive, setCodeContextActive] = useState(false)
+  const [codeContextFolder, setCodeContextFolder] = useState<string | null>(null)
+  const [codeContextFilesIndexed, setCodeContextFilesIndexed] = useState(0)
+  const [codeContextIndexing, setCodeContextIndexing] = useState(false)
+  const [musicSetupPanelOpen, setMusicSetupPanelOpen] = useState(false)
+  const [musicGeneration, setMusicGeneration] = useState<{
+    prompt: string
+    lyrics?: string
+    audioUrl?: string
+    duration: number
+    status: 'empty' | 'generating' | 'success' | 'error'
+    error?: string
+    progress?: number
+    message?: string
+  } | null>(null)
+
   const feedRef = useRef<HTMLDivElement>(null)
   const currentAIEntryRef = useRef<string | null>(null)
   const pendingImageUrlRef = useRef<string | null>(null)
-  
+  const commandInputEditorRef = useRef<any>(null)
+
   // Persist panel state
   useEffect(() => {
     try {
       localStorage.setItem(PANEL_COLLAPSED_KEY, String(panelCollapsed))
-    } catch {}
+    } catch { }
   }, [panelCollapsed])
 
   // Auto-scroll to bottom on new entries
@@ -239,7 +268,7 @@ export function TerminalFeed() {
         console.warn('[LOOM] Failed to save terminal history:', e)
       }
     }, 500) // Debounce 500ms
-    
+
     return () => clearTimeout(timeout)
   }, [entries])
 
@@ -279,7 +308,7 @@ export function TerminalFeed() {
       console.log('[LOOM] Models updated, refreshing list...')
       fetchModels()
     }
-    
+
     window.addEventListener('loom:models_updated', handleModelsUpdated)
     return () => {
       window.removeEventListener('loom:models_updated', handleModelsUpdated)
@@ -312,14 +341,115 @@ export function TerminalFeed() {
     }])
   }, [])
 
+  // Check code context status on mount and periodically
+  useEffect(() => {
+    const checkCodeContextStatus = async () => {
+      try {
+        const response = await fetch('http://localhost:8000/api/code-context/status')
+        if (!response.ok) {
+          // Endpoint might not exist yet or backend error
+          return
+        }
+        const data = await response.json()
+        setCodeContextActive(data.active || false)
+        setCodeContextFolder(data.folder_path || null)
+        setCodeContextFilesIndexed(data.files_indexed || 0)
+      } catch (e) {
+        // Backend not available or endpoint doesn't exist, ignore silently
+        console.debug('[LOOM] Code context status check failed (this is normal if backend is starting):', e)
+      }
+    }
+
+    // Only check if backend is connected
+    if (connected) {
+      checkCodeContextStatus()
+      const interval = setInterval(checkCodeContextStatus, 5000) // Check every 5 seconds
+      return () => clearInterval(interval)
+    }
+  }, [connected])
+
+  // Handle folder indexing
+  const handleIndexFolder = useCallback(async (folderPath: string, options?: any) => {
+    setCodeContextIndexing(true)
+    try {
+      // Check if backend is connected first
+      if (!connected) {
+        throw new Error('Backend not connected. Please wait for connection or restart the backend server.')
+      }
+
+      // Backend will handle path normalization (expanduser, resolve)
+      // Use AbortController for timeout (indexing can take a while for large folders)
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 300000) // 5 minute timeout
+
+      try {
+        const response = await fetch('http://localhost:8000/api/code-context/index-folder', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            folder_path: folderPath,
+            ...options,
+          }),
+          signal: controller.signal,
+        })
+
+        clearTimeout(timeoutId)
+
+        if (!response.ok) {
+          let errorMessage = 'Failed to index folder'
+          try {
+            const error = await response.json()
+            errorMessage = error.detail || error.message || errorMessage
+          } catch (e) {
+            // If response isn't JSON, use status text
+            errorMessage = `${errorMessage}: ${response.status} ${response.statusText}`
+          }
+          throw new Error(errorMessage)
+        }
+
+        const data = await response.json()
+        setCodeContextActive(true)
+        setCodeContextFolder(data.folder_path)
+        setCodeContextFilesIndexed(data.files_indexed || 0)
+
+        // Show success message
+        addSystemEntry(`✓ Folder indexed: ${data.files_indexed} files, ${data.chunks_created || 0} chunks created\n\nFolder context is now active. Code will be included in chat automatically.`, Date.now())
+      } finally {
+        clearTimeout(timeoutId)
+      }
+    } catch (error) {
+      let errorMessage = 'Unknown error'
+      if (error instanceof Error) {
+        errorMessage = error.message
+        // Provide helpful context for common errors
+        if (errorMessage.includes('Failed to fetch') || errorMessage.includes('NetworkError') || errorMessage.includes('fetch') || errorMessage.includes('aborted')) {
+          if (errorMessage.includes('aborted')) {
+            errorMessage = `Request timed out (indexing took too long).\n\nTry indexing a smaller folder or check backend logs.\n\nOriginal error: ${errorMessage}`
+          } else {
+            errorMessage = `Backend connection failed.\n\nPossible causes:\n- Backend not running (start with: cd backend && uvicorn app.main:socket_app --reload --port 8000)\n- CORS issue (check backend logs)\n- Network error\n\nOriginal error: ${errorMessage}`
+          }
+        } else if (errorMessage.includes('404')) {
+          errorMessage = `API endpoint not found (404).\n\nThe code-context router may not be loaded.\nCheck backend logs for import errors.\n\nError: ${errorMessage}`
+        } else if (errorMessage.includes('CORS')) {
+          errorMessage = `CORS error.\n\nCheck backend CORS configuration in app/main.py\n\nError: ${errorMessage}`
+        } else if (errorMessage.includes('Folder not found') || errorMessage.includes('Not a directory')) {
+          errorMessage = `Path error: ${errorMessage}\n\nCheck that the folder path is correct and exists.`
+        }
+      }
+      addErrorEntry(`Failed to index folder: ${errorMessage}`, Date.now())
+    } finally {
+      setCodeContextIndexing(false)
+    }
+  }, [addSystemEntry, addErrorEntry, connected])
+
   const handleAIRequest = useCallback((
-    prompt: string, 
-    timestamp: number, 
+    prompt: string,
+    timestamp: number,
     contextMode: 'input' | 'key' | 'full' = 'input'
   ) => {
     const entryId = `ai-${timestamp}`
     currentAIEntryRef.current = entryId
-    
+
     setEntries(prev => [...prev, {
       id: entryId,
       type: 'ai',
@@ -329,7 +459,7 @@ export function TerminalFeed() {
     }])
 
     const handleChunk = (chunk: { content: string }) => {
-      setEntries(prev => prev.map(entry => 
+      setEntries(prev => prev.map(entry =>
         entry.id === entryId
           ? { ...entry, content: entry.content + chunk.content }
           : entry
@@ -338,13 +468,13 @@ export function TerminalFeed() {
 
     const handleStatus = (statusData: { status: string; message: string }) => {
       if (statusData.status === 'success' || statusData.status === 'error') {
-        setEntries(prev => prev.map(entry => 
+        setEntries(prev => prev.map(entry =>
           entry.id === entryId
-            ? { 
-                ...entry, 
-                status: statusData.status as 'success' | 'error',
-                content: entry.content || (statusData.status === 'error' ? `Error: ${statusData.message}` : 'No response received.'),
-              }
+            ? {
+              ...entry,
+              status: statusData.status as 'success' | 'error',
+              content: entry.content || (statusData.status === 'error' ? `Error: ${statusData.message}` : 'No response received.'),
+            }
             : entry
         ))
         currentAIEntryRef.current = null
@@ -355,49 +485,49 @@ export function TerminalFeed() {
     const getChatModel = () => {
       const imageGenKeywords = ['flux', 'flux2', 'stable-diffusion', 'sdxl']
       const visionKeywords = ['llava', 'bakllava', 'moondream', 'vision']
-      
+
       // Check if current activeModel is actually a chat model
       if (status.activeModel) {
         const lower = status.activeModel.toLowerCase()
         const isImageGen = imageGenKeywords.some(k => lower.includes(k))
         const isVision = visionKeywords.some(k => lower.includes(k))
-        
+
         // If activeModel is a chat model, use it
         if (!isImageGen && !isVision) {
           return status.activeModel
         }
         // Otherwise, it's incorrectly set to an image gen or vision model, so we need to find a chat model
       }
-      
+
       // Filter out image generation and vision models from fallback
       const chatModels = models.filter(m => {
         const lower = m.toLowerCase()
         return !imageGenKeywords.some(k => lower.includes(k)) &&
-               !visionKeywords.some(k => lower.includes(k))
+          !visionKeywords.some(k => lower.includes(k))
       })
-      
+
       // If we found a chat model, use it and optionally update activeModel
       const chatModel = chatModels[0] || models[0] || 'llama3.1:8b'
-      
+
       // If activeModel was incorrectly set to a non-chat model, update it
       if (status.activeModel && chatModel !== status.activeModel) {
         const lowerActive = status.activeModel.toLowerCase()
-        if (imageGenKeywords.some(k => lowerActive.includes(k)) || 
-            visionKeywords.some(k => lowerActive.includes(k))) {
+        if (imageGenKeywords.some(k => lowerActive.includes(k)) ||
+          visionKeywords.some(k => lowerActive.includes(k))) {
           // Silently switch to a proper chat model
           setActiveModel(chatModel)
         }
       }
-      
+
       return chatModel
     }
-    
+
     const modelToUse = getChatModel()
     const circuitContext = getCircuitContext()
-    
+
     // Build prompt based on context mode
     let enhancedPrompt: string
-    
+
     if (contextMode === 'input') {
       enhancedPrompt = circuitContext
         ? `${circuitContext}\n\n---\n\nUser question: ${prompt}`
@@ -405,10 +535,10 @@ export function TerminalFeed() {
     } else {
       // Full or Key: include conversation history (entries not yet including this user message)
       // Also include image entries with their analysis
-      const relevant = entries.filter(e => 
+      const relevant = entries.filter(e =>
         e.type === 'user' || e.type === 'ai' || e.type === 'image'
       ).slice(-16)
-      
+
       const historyBlock = relevant.map(e => {
         if (e.type === 'user') {
           return `User: ${e.content}`
@@ -424,26 +554,29 @@ export function TerminalFeed() {
           return `Assistant: ${text}`
         }
       }).join('\n\n')
-      
+
       const withHistory = historyBlock
         ? `Previous conversation:\n\n${historyBlock}\n\nUser: ${prompt}`
         : `User: ${prompt}`
-      
+
       enhancedPrompt = circuitContext
         ? `${circuitContext}\n\n---\n\n${withHistory}`
         : withHistory
     }
-    
-    const sent = sendChat(enhancedPrompt, modelToUse, handleChunk, handleStatus)
-    
+
+    // Include code context if active
+    const useCodeContext = codeContextActive
+
+    const sent = sendChat(enhancedPrompt, modelToUse, handleChunk, handleStatus, useCodeContext)
+
     if (!sent) {
-      setEntries(prev => prev.map(entry => 
+      setEntries(prev => prev.map(entry =>
         entry.id === entryId
-          ? { 
-              ...entry, 
-              content: `[OFFLINE MODE]\n\nBackend not connected. Start the backend server:\n\ncd backend && uvicorn app.main:socket_app --reload --port 8000\n\nYour prompt was: "${prompt}"`,
-              status: 'error',
-            }
+          ? {
+            ...entry,
+            content: `[OFFLINE MODE]\n\nBackend not connected. Start the backend server:\n\ncd backend && uvicorn app.main:socket_app --reload --port 8000\n\nYour prompt was: "${prompt}"`,
+            status: 'error',
+          }
           : entry
       ))
     }
@@ -451,7 +584,7 @@ export function TerminalFeed() {
 
   const handleSlashCommand = useCallback((command: string, timestamp: number) => {
     const [cmd, ...args] = command.slice(1).split(' ')
-    
+
     switch (cmd.toLowerCase()) {
       case 'help':
         addSystemEntry([
@@ -491,12 +624,14 @@ export function TerminalFeed() {
           '  /load <name>        - Load a saved session (replaces current)',
           '  /delete <name>      - Delete a saved session',
           '',
-          'SYSTEM:',
           '  /status        - Show system status',
           '  /suggest       - Get model suggestions for your system',
           '  /image         - Upload and analyze an image (or click 📷 button)',
           '  /imagine <prompt> - Generate an image (uses Ollama flux2-klein)',
           '  /dream <prompt>   - Alias for /imagine',
+          '  /song <style>     - Generate a quick music track',
+          '  /compose          - Info on advanced composition',
+          '  /music-setup      - Setup/download music generation model',
           '  /help          - Show this message',
           '',
           'Current session auto-saves. Use SAVE in the Sessions panel or /saveas to name it.',
@@ -518,33 +653,13 @@ export function TerminalFeed() {
       case 'dream':
         const imagePrompt = args.join(' ')
         if (!imagePrompt) {
-          // Check for available image generation models
-          fetch(`${BACKEND_URL}/api/images/check-image-gen-models`)
-            .then(res => res.json())
-            .then(data => {
-              const available = data.available || []
-              const recommendations = data.recommendations || []
-              
-              let message = 'Usage: /imagine <your prompt>\n'
-              message += 'Example: /imagine a cat holding a sign that says hello world\n\n'
-              
-              if (available.length > 0) {
-                message += `Available models: ${available.join(', ')}\n`
-                message += `Current: ${status.imageGenModel || 'auto-detect'}\n\n`
-              } else {
-                message += 'No image generation models found.\n\n'
-                message += 'Recommended models:\n'
-                recommendations.forEach((rec: any) => {
-                  message += `  ${rec.name} - ${rec.description} (${rec.size})\n`
-                })
-                message += '\nInstall with: /pull x/flux2-klein\n'
-              }
-              
-              addSystemEntry(message, timestamp)
-            })
-            .catch(() => {
-              addSystemEntry('Usage: /imagine <your prompt>\nExample: /imagine a cat holding a sign that says hello world\n\nUses Ollama image generation (flux2-klein). Install with: /pull x/flux2-klein', timestamp)
-            })
+          // Open empty state panel
+          setImageGeneration({
+            prompt: '',
+            model: status.imageGenModel || 'auto-detecting',
+            status: 'empty',
+            availableModels: [],
+          })
         } else {
           console.log('[LOOM] Starting image generation for:', imagePrompt)
           addSystemEntry('⏳ Generating image... Opening panel. This may take 1–2 minutes.', timestamp)
@@ -557,14 +672,14 @@ export function TerminalFeed() {
             message: 'Starting...',
           })
           console.log('[LOOM] Image generation panel state set')
-          
+
           // First check if we have image generation models
           fetch(`${BACKEND_URL}/api/images/check-image-gen-models`)
             .then(res => res.json())
             .then(async (checkData) => {
               console.log('[LOOM] Image gen models check:', checkData)
               const available = checkData.available || []
-              
+
               if (available.length === 0 && !status.imageGenModel) {
                 // No models available - show recommendations in panel
                 const recommendations = checkData.recommendations || []
@@ -578,7 +693,7 @@ export function TerminalFeed() {
                 })
                 return
               }
-              
+
               console.log('[LOOM] Models available, proceeding with generation')
               setImageGeneration(prev => prev ? { ...prev, message: 'Rendering…' } : null)
               // Try Ollama first (flux2-klein), fallback to local
@@ -594,13 +709,13 @@ export function TerminalFeed() {
                 .then(async res => {
                   const data = await res.json()
                   console.log('[LOOM] Image generation response:', { status: res.status, data: { ...data, image: data.image ? `${data.image.substring(0, 50)}...` : 'none' } })
-                  
+
                   if (res.ok && data.status === 'success' && data.image) {
                     // Update image gen model in status if it was auto-detected
                     if (data.model && data.model !== status.imageGenModel) {
                       setImageGenModel(data.model)
                     }
-                    
+
                     // Show in panel
                     setImageGeneration({
                       prompt: imagePrompt,
@@ -659,7 +774,7 @@ export function TerminalFeed() {
                 status: 'generating',
                 progress: 0,
               })
-              
+
               // Try generation anyway
               fetch(`${BACKEND_URL}/api/images/generate`, {
                 method: 'POST',
@@ -719,7 +834,25 @@ export function TerminalFeed() {
             })
         }
         break
-        
+
+      case 'song':
+        // Open music generation panel
+        setMusicGeneration({
+          prompt: args.join(' ') || '',
+          lyrics: '',
+          duration: 30,
+          status: 'empty',
+        })
+        break
+
+      case 'compose':
+        addSystemEntry('🎹 To compose music with advanced controls (lyrics, duration, etc.), please switch to the Circuit Board view and add a Music Gen module.', timestamp)
+        break
+
+      case 'music-setup':
+        setMusicSetupPanelOpen(true)
+        break
+
       case 'clear': {
         stashBeforeClear(entries)
         setCircuitInputState(null)
@@ -751,7 +884,7 @@ export function TerminalFeed() {
         try {
           localStorage.removeItem(STORAGE_KEY)
           localStorage.removeItem(BEFORE_CLEAR_KEY)
-        } catch {}
+        } catch { }
         setCircuitInputState(null)
         setEntries([{
           id: `system-${timestamp}`,
@@ -767,28 +900,28 @@ export function TerminalFeed() {
           addErrorEntry('Usage: /saveas <name> [last:N]', timestamp)
           break
         }
-        
+
         // Check for last:N modifier
         const lastArg = args.find(a => a.startsWith('last:'))
         let entriesToSave = entries
-        
+
         if (lastArg) {
           const count = parseInt(lastArg.split(':')[1], 10)
           if (!isNaN(count) && count > 0) {
             entriesToSave = entries.slice(-count)
           }
         }
-        
+
         // Filter out system initialization messages for cleaner saves
-        const filtered = entriesToSave.filter(e => 
+        const filtered = entriesToSave.filter(e =>
           !(e.type === 'system' && (e.content.includes('INITIALIZED') || e.content.includes('BACKEND CONNECTED')))
         )
-        
+
         if (filtered.length === 0) {
           addErrorEntry('No entries to save', timestamp)
           break
         }
-        
+
         if (saveSession(nameArg, filtered)) {
           addSystemEntry(`Session saved as "${nameArg}" (${filtered.length} entries)`, timestamp)
         } else {
@@ -800,7 +933,7 @@ export function TerminalFeed() {
       case 'sessions': {
         const index = loadSessionsIndex()
         const names = Object.keys(index)
-        
+
         if (names.length === 0) {
           addSystemEntry('No saved sessions.\n\nUse /saveas <name> to save the current session.', timestamp)
         } else {
@@ -809,7 +942,7 @@ export function TerminalFeed() {
             const date = new Date(info.savedAt).toLocaleString()
             return `  ${name} (${info.entryCount} entries) - ${date}`
           }).join('\n')
-          
+
           addSystemEntry(`SAVED SESSIONS:\n\n${sessionList}\n\n/load <name> opens (replaces current).`, timestamp)
         }
         break
@@ -821,7 +954,7 @@ export function TerminalFeed() {
           addErrorEntry('Usage: /load <name>', timestamp)
           break
         }
-        
+
         const sessionEntries = loadSession(sessionName)
         if (sessionEntries) {
           setEntries([
@@ -845,7 +978,7 @@ export function TerminalFeed() {
           addErrorEntry('Usage: /delete <name>', timestamp)
           break
         }
-        
+
         if (deleteSession(sessionToDelete)) {
           addSystemEntry(`Session "${sessionToDelete}" deleted`, timestamp)
         } else {
@@ -853,7 +986,7 @@ export function TerminalFeed() {
         }
         break
       }
-        
+
       case 'ai':
         const prompt = args.join(' ')
         if (prompt) {
@@ -1004,25 +1137,25 @@ export function TerminalFeed() {
             const activeModel = status.activeModel
             const visionModel = status.visionModel
             const imageGenModel = status.imageGenModel
-            
+
             // Categorize models
             const visionKeywords = ['llava', 'bakllava', 'moondream', 'vision']
             const imageGenKeywords = ['flux', 'flux2', 'stable-diffusion']
-            
+
             const currentMarker = (m: string): string => {
               if (m === activeModel) return ' ← chat'
               if (m === visionModel) return ' ← vision'
               if (m === imageGenModel) return ' ← image-gen'
               return ''
             }
-            
+
             const typeMarker = (m: string): string => {
               const lower = m.toLowerCase()
               if (visionKeywords.some(k => lower.includes(k))) return ' [vision]'
               if (imageGenKeywords.some(k => lower.includes(k))) return ' [image-gen]'
               return ' [chat]'
             }
-            
+
             addSystemEntry(`Available models (${modelList.length}):\n  ${modelList.map((m: string) => m + typeMarker(m) + currentMarker(m)).join('\n  ')}`, Date.now())
           } else {
             addSystemEntry('No models found. Is Ollama running? Try: ollama list', Date.now())
@@ -1046,17 +1179,17 @@ export function TerminalFeed() {
                 addSystemEntry('Usage: /pull <model-name>\nExample: /pull llama3.1:8b', Date.now())
                 return
               }
-              
+
               const system = data.system || {}
               const suggestions = data.suggestions || []
-              
+
               let message = 'MODEL SUGGESTIONS FOR YOUR SYSTEM:\n\n'
               message += `System: ${system.platform || 'Unknown'} | ${system.ram_gb || '?'}GB RAM`
               if (system.gpu_available) {
                 message += ` | ${system.gpu_type || 'GPU'}`
               }
               message += '\n\n'
-              
+
               if (suggestions.length > 0) {
                 message += 'Recommended models:\n'
                 suggestions.slice(0, 8).forEach((sug: any, idx: number) => {
@@ -1070,7 +1203,7 @@ export function TerminalFeed() {
                 message += 'Popular models to try:\n'
                 message += '  llama3.1:8b\n  mistral\n  phi3:mini\n  tinyllama'
               }
-              
+
               addSystemEntry(message, Date.now())
             })
             .catch(err => {
@@ -1079,7 +1212,7 @@ export function TerminalFeed() {
             })
         } else {
           addSystemEntry(`Pulling model "${modelToPull}"...\nThis may take a while depending on model size.`, timestamp)
-          
+
           // Initialize download progress
           setDownloadProgress({
             model: modelToPull,
@@ -1088,10 +1221,10 @@ export function TerminalFeed() {
             total: 0,
             message: 'Initializing download...',
           })
-          
+
           // Track progress entry ID to update it
           let progressEntryId: string | null = null
-          
+
           pullModel(modelToPull, (progress: any) => {
             const progressTimestamp = Date.now()
             const status = progress.status || 'unknown'
@@ -1099,7 +1232,7 @@ export function TerminalFeed() {
             const percent = progress.percent
             const completed = progress.completed || 0
             const total = progress.total || 0
-            
+
             // Update download panel
             setDownloadProgress({
               model: modelToPull,
@@ -1110,23 +1243,23 @@ export function TerminalFeed() {
               message: message,
               error: progress.error,
             })
-            
+
             if (status === 'success') {
               addSystemEntry(`✓ Model "${modelToPull}" downloaded successfully!`, progressTimestamp)
               // Refresh models list
               fetchModels().then(() => {
                 // Check if this is a vision model and set it
                 const visionKeywords = ['llava', 'bakllava', 'moondream', 'vision']
-                const isVisionModel = visionKeywords.some(keyword => 
+                const isVisionModel = visionKeywords.some(keyword =>
                   modelToPull.toLowerCase().includes(keyword)
                 )
                 if (isVisionModel && !status.visionModel) {
                   setVisionModel(modelToPull)
                 }
-                
+
                 // Check if this is an image generation model and set it
                 const imageGenKeywords = ['flux', 'flux2', 'stable-diffusion']
-                const isImageGenModel = imageGenKeywords.some(keyword => 
+                const isImageGenModel = imageGenKeywords.some(keyword =>
                   modelToPull.toLowerCase().includes(keyword)
                 )
                 if (isImageGenModel && !status.imageGenModel) {
@@ -1140,7 +1273,7 @@ export function TerminalFeed() {
             } else if (status === 'error') {
               const errorMsg = progress.error || progress.message || 'Unknown error occurred'
               let errorText = `✗ Failed to download model "${modelToPull}"\n\nError: ${errorMsg}`
-              
+
               // Add helpful suggestions based on common errors
               if (errorMsg.includes('connection') || errorMsg.includes('refused')) {
                 errorText += '\n\nTip: Make sure Ollama is running. Try: ollama list'
@@ -1149,7 +1282,7 @@ export function TerminalFeed() {
               } else if (errorMsg.includes('permission') || errorMsg.includes('denied')) {
                 errorText += '\n\nTip: Check file permissions for Ollama model storage'
               }
-              
+
               addErrorEntry(errorText, progressTimestamp)
               // Keep error visible, user can close manually
             } else {
@@ -1162,11 +1295,11 @@ export function TerminalFeed() {
                 const mbTotal = (total / 1024 / 1024).toFixed(1)
                 progressText += ` ${mbCompleted}MB / ${mbTotal}MB`
               }
-              
+
               // Update or create progress entry
               if (progressEntryId) {
-                setEntries(prev => prev.map(entry => 
-                  entry.id === progressEntryId 
+                setEntries(prev => prev.map(entry =>
+                  entry.id === progressEntryId
                     ? { ...entry, content: `Downloading "${modelToPull}": ${progressText}` }
                     : entry
                 ))
@@ -1194,14 +1327,14 @@ export function TerminalFeed() {
               addErrorEntry(`Failed to get suggestions: ${data.error}`, Date.now())
               return
             }
-            
+
             const system = data.system || {}
             const suggestions = data.suggestions || []
-            
+
             let message = '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
             message += '  MODEL SUGGESTIONS FOR YOUR SYSTEM\n'
             message += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n'
-            
+
             message += 'SYSTEM SPECS:\n'
             message += `  Platform: ${system.platform || 'Unknown'} ${system.architecture || ''}\n`
             message += `  RAM: ${system.ram_gb || '?'}GB total, ${system.ram_available_gb || '?'}GB available\n`
@@ -1215,7 +1348,7 @@ export function TerminalFeed() {
               message += `  GPU: Not available (CPU-only mode)\n`
             }
             message += '\n'
-            
+
             if (suggestions.length > 0) {
               message += 'RECOMMENDED MODELS:\n\n'
               suggestions.forEach((sug: any, idx: number) => {
@@ -1233,7 +1366,7 @@ export function TerminalFeed() {
               message += '  /pull phi3:mini\n'
               message += '  /pull gemma:2b'
             }
-            
+
             addSystemEntry(message, Date.now())
           })
           .catch(err => {
@@ -1251,11 +1384,11 @@ export function TerminalFeed() {
             const hfModels = data.hf_models || data.huggingface || []
             const device = data.device || 'unknown'
             const current = data.current_model || 'none'
-            
+
             let message = `IMAGE GENERATION MODELS:\n\n`
             message += `Device: ${device.toUpperCase()}\n`
             message += `Current: ${current}\n\n`
-            
+
             if (localModels.length > 0) {
               message += 'LOCAL MODELS:\n'
               localModels.forEach((m: any) => {
@@ -1268,7 +1401,7 @@ export function TerminalFeed() {
               })
               message += '\n'
             }
-            
+
             if (hfModels.length > 0) {
               message += 'HUGGINGFACE API MODELS:\n'
               hfModels.forEach((name: string) => {
@@ -1276,7 +1409,7 @@ export function TerminalFeed() {
               })
               message += '\n'
             }
-            
+
             message += 'To download a model:\n'
             message += '  /pull-image <name>\n'
             message += 'Examples:\n'
@@ -1286,7 +1419,7 @@ export function TerminalFeed() {
             message += 'Note: Flux models require HuggingFace token.\n'
             message += 'Get token: https://huggingface.co/settings/tokens\n'
             message += 'Set it: /set-hf-token <your-token>'
-            
+
             addSystemEntry(message, Date.now())
           })
           .catch(err => {
@@ -1301,32 +1434,32 @@ export function TerminalFeed() {
           addSystemEntry('Usage: /pull-image <model-name>\n\nAvailable models:\n  flux-schnell (fast, needs HF token)\n  flux-dev (best quality, needs HF token)\n  sdxl (good quality, no token)\n  sdxl-turbo (very fast, no token)\n  sd-1.5 (small, fast, no token)\n\nGet HF token: https://huggingface.co/settings/tokens', timestamp)
         } else {
           addSystemEntry(`Preparing image model "${imageModelToPull}"...\nThis will download the model on first use.`, timestamp)
-          
+
           // Use socket to pull image model
           if (connected) {
             const socket = (window as any).loomSocket
             if (socket) {
               socket.emit('pull_image_model', { model: imageModelToPull })
-              
+
               // Listen for status updates
               const handler = (data: any) => {
                 if (data.model === imageModelToPull) {
                   const status = data.status || 'unknown'
                   const message = data.message || status
-                  
+
                   if (status === 'success') {
                     addSystemEntry(`✓ Image model "${imageModelToPull}" is ready!`, Date.now())
                     socket.off('pull_image_status', handler)
                   } else if (status === 'error') {
                     const errorMsg = data.error || data.message || 'Unknown error'
                     let errorText = `✗ Failed to prepare model "${imageModelToPull}"\n\nError: ${errorMsg}`
-                    
+
                     if (errorMsg.includes('token') || errorMsg.includes('authentication')) {
                       errorText += '\n\nThis model requires a HuggingFace token.\n'
                       errorText += 'Get one at: https://huggingface.co/settings/tokens\n'
                       errorText += 'Then set it with: /set-hf-token <your-token>'
                     }
-                    
+
                     addErrorEntry(errorText, Date.now())
                     socket.off('pull_image_status', handler)
                   } else {
@@ -1335,9 +1468,9 @@ export function TerminalFeed() {
                   }
                 }
               }
-              
+
               socket.on('pull_image_status', handler)
-              
+
               // Cleanup after 5 minutes
               setTimeout(() => {
                 socket.off('pull_image_status', handler)
@@ -1398,40 +1531,40 @@ export function TerminalFeed() {
       case 'circuits': {
         const circuitNames = getCircuitNames()
         const circuits = loadSavedCircuits()
-        
+
         // Build saved circuits list
-        const savedList = circuitNames.length > 0 
+        const savedList = circuitNames.length > 0
           ? circuitNames.map(name => {
-              const circuit = circuits[name]
-              const inputCount = circuit.cells.filter(c => c.type === 'data_input').length
-              const cellCount = circuit.cells.length
-              return `  /${name} (${cellCount} cells${inputCount > 0 ? `, ${inputCount} inputs` : ''})`
-            }).join('\n')
+            const circuit = circuits[name]
+            const inputCount = circuit.cells.filter(c => c.type === 'data_input').length
+            const cellCount = circuit.cells.length
+            return `  /${name} (${cellCount} cells${inputCount > 0 ? `, ${inputCount} inputs` : ''})`
+          }).join('\n')
           : '  (none yet)'
-        
+
         // Group templates by category
         const categories = ['thinking', 'writing', 'music', 'data', 'code', 'scripts'] as const
         const categoryLabels: Record<string, string> = {
           thinking: 'THINK',
-          writing: 'WRITE', 
+          writing: 'WRITE',
           music: 'MUSIC',
           data: 'DATA',
           code: 'CODE',
           scripts: 'SCRIPTS',
         }
-        
+
         const templatesByCategory = categories.map(cat => {
           const templates = NOTEBOOK_TEMPLATES.filter(t => t.category === cat)
           if (templates.length === 0) return ''
-          
+
           const list = templates.map(t => {
             const inputCount = t.cells.filter(c => c.type === 'data_input').length
             return `    /${t.id} - ${t.name}${inputCount > 0 ? ` (${inputCount} inputs)` : ''}`
           }).join('\n')
-          
+
           return `  ${categoryLabels[cat]}:\n${list}`
         }).filter(Boolean).join('\n\n')
-        
+
         addSystemEntry(
           `CIRCUITS:\n\n` +
           `YOUR SAVED:\n${savedList}\n\n` +
@@ -1448,16 +1581,16 @@ export function TerminalFeed() {
           addErrorEntry('Usage: /run <circuit-name>', timestamp)
           break
         }
-        
+
         // Check saved circuits first, then templates
         const circuitNames = getCircuitNames()
         const template = NOTEBOOK_TEMPLATES.find(t => t.id === circuitName)
-        
+
         if (!circuitNames.includes(circuitName) && !template) {
           addErrorEntry(`Circuit "${circuitName}" not found.\nUse /circuits to see available circuits.`, timestamp)
           break
         }
-        
+
         // If it's a template, save it as a circuit first
         if (template && !circuitNames.includes(circuitName)) {
           const savedCircuit: SavedCircuit = {
@@ -1466,15 +1599,15 @@ export function TerminalFeed() {
               ...cell,
               id: `cell-${Date.now()}-${idx}`,
             })),
-            modelSlots: { A: '', B: '', C: '' },
+            modelSlots: { A: '', B: '', C: '', IMAGE: '' },
             savedAt: Date.now(),
           }
           saveCircuit(savedCircuit)
         }
-        
+
         // Check if circuit needs inputs
         const requiredInputs = getRequiredInputs(circuitName)
-        
+
         if (requiredInputs.length > 0) {
           // Start input collection
           setCircuitInputState({
@@ -1483,7 +1616,7 @@ export function TerminalFeed() {
             collectedInputs: {},
             currentInputIndex: 0,
           })
-          
+
           addSystemEntry(
             `Running circuit: ${circuitName}\n\nPlease provide inputs:\n\n[${requiredInputs[0]}]:`,
             timestamp
@@ -1491,7 +1624,7 @@ export function TerminalFeed() {
         } else {
           // Run immediately
           addSystemEntry(`Running circuit: ${circuitName}...`, timestamp)
-          
+
           runCircuit(circuitName, {}).then(output => {
             setEntries(prev => [...prev, {
               id: `circuit-output-${Date.now()}`,
@@ -1506,12 +1639,12 @@ export function TerminalFeed() {
         }
         break
       }
-        
+
       default: {
         // Check if command matches a saved circuit or template
         const circuitNames = getCircuitNames()
         const template = NOTEBOOK_TEMPLATES.find(t => t.id === cmd)
-        
+
         if (circuitNames.includes(cmd) || template) {
           // If it's a template, save it as a circuit first
           if (template && !circuitNames.includes(cmd)) {
@@ -1521,15 +1654,15 @@ export function TerminalFeed() {
                 ...cell,
                 id: `cell-${Date.now()}-${idx}`,
               })),
-              modelSlots: { A: '', B: '', C: '' },
+              modelSlots: { A: '', B: '', C: '', IMAGE: '' },
               savedAt: Date.now(),
             }
             saveCircuit(savedCircuit)
           }
-          
+
           // Now run it
           const requiredInputs = getRequiredInputs(cmd)
-          
+
           if (requiredInputs.length > 0) {
             setCircuitInputState({
               circuitName: cmd,
@@ -1537,14 +1670,14 @@ export function TerminalFeed() {
               collectedInputs: {},
               currentInputIndex: 0,
             })
-            
+
             addSystemEntry(
               `Running circuit: ${cmd}\n\nProvide inputs:\n\n[${requiredInputs[0]}]:`,
               timestamp
             )
           } else {
             addSystemEntry(`Running circuit: ${cmd}...`, timestamp)
-            
+
             runCircuit(cmd, {}).then(output => {
               setEntries(prev => [...prev, {
                 id: `circuit-output-${Date.now()}`,
@@ -1566,23 +1699,23 @@ export function TerminalFeed() {
 
   const handleCommand = useCallback((command: string, contextMode: 'input' | 'key' | 'full' = 'input') => {
     const timestamp = Date.now()
-    
+
     const userEntry: LogEntry = {
       id: `user-${timestamp}`,
       type: 'user',
       content: command,
       timestamp,
     }
-    
+
     setEntries(prev => [...prev, userEntry])
 
     if (circuitInputState) {
       const { circuitName, requiredInputs, collectedInputs, currentInputIndex } = circuitInputState
       const currentLabel = requiredInputs[currentInputIndex]
-      
+
       // Store this input
       const newCollectedInputs = { ...collectedInputs, [currentLabel]: command }
-      
+
       if (currentInputIndex < requiredInputs.length - 1) {
         // More inputs needed
         const nextLabel = requiredInputs[currentInputIndex + 1]
@@ -1596,7 +1729,7 @@ export function TerminalFeed() {
         // All inputs collected, run the circuit
         setCircuitInputState(null)
         addSystemEntry(`All inputs collected. Running ${circuitName}...`, timestamp)
-        
+
         runCircuit(circuitName, newCollectedInputs).then(output => {
           setEntries(prev => [...prev, {
             id: `circuit-output-${Date.now()}`,
@@ -1638,10 +1771,10 @@ export function TerminalFeed() {
 
   const handleSaveSession = useCallback((name: string) => {
     // Filter out system initialization messages
-    const filtered = entries.filter(e => 
+    const filtered = entries.filter(e =>
       !(e.type === 'system' && (e.content.includes('INITIALIZED') || e.content.includes('BACKEND CONNECTED')))
     )
-    
+
     if (saveSession(name, filtered)) {
       const timestamp = Date.now()
       setEntries(prev => [...prev, {
@@ -1672,7 +1805,7 @@ export function TerminalFeed() {
   const handleImageUpload = useCallback(async (imageBase64: string) => {
     const imageUrl = imageBase64 // Store for display
     pendingImageUrlRef.current = imageUrl // Store for retry after model install
-    
+
     // Set analyzing state
     setImageAnalysis({
       imageUrl,
@@ -1681,65 +1814,65 @@ export function TerminalFeed() {
       status: 'analyzing',
     })
 
-      try {
-        const response = await fetch(`${BACKEND_URL}/api/images/analyze`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/images/analyze`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({
           image_base64: imageBase64,
           prompt: "Describe this image in detail. What do you see? List the key elements, objects, text, colors, composition, and any notable features. Be specific and thorough.",
           model: status.visionModel || undefined, // Use vision model if set, otherwise auto-detect
         }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: response.statusText }))
+        throw new Error(errorData.detail || errorData.error || `Analysis failed: ${response.statusText}`)
+      }
+
+      const data = await response.json()
+
+      if (data.success) {
+        const usedModel = data.model || 'auto-detected'
+        setImageAnalysis({
+          imageUrl,
+          analysis: data.analysis,
+          model: usedModel,
+          status: 'success',
+          availableVisionModels: data.available_vision_models || [],
         })
 
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ detail: response.statusText }))
-          throw new Error(errorData.detail || errorData.error || `Analysis failed: ${response.statusText}`)
+        // Update vision model in status if it was auto-detected or explicitly set
+        if (usedModel !== 'auto-detected' && !status.visionModel) {
+          setVisionModel(usedModel)
+        } else if (usedModel !== 'auto-detected') {
+          setVisionModel(usedModel)
         }
 
-        const data = await response.json()
-        
-        if (data.success) {
-          const usedModel = data.model || 'auto-detected'
-          setImageAnalysis({
-            imageUrl,
-            analysis: data.analysis,
-            model: usedModel,
-            status: 'success',
-            availableVisionModels: data.available_vision_models || [],
-          })
-          
-          // Update vision model in status if it was auto-detected or explicitly set
-          if (usedModel !== 'auto-detected' && !status.visionModel) {
-            setVisionModel(usedModel)
-          } else if (usedModel !== 'auto-detected') {
-            setVisionModel(usedModel)
-          }
-          
-          // Also add to terminal as a log entry
-          const timestamp = Date.now()
-          setEntries(prev => [...prev, {
-            id: `image-analysis-${timestamp}`,
-            type: 'system',
-            content: `Image analyzed: ${data.analysis.substring(0, 100)}...`,
-            timestamp,
-          }])
-        } else if (data.status === 'no-model') {
-          // No vision model available - show recommendations
-          setImageAnalysis({
-            imageUrl,
-            analysis: '',
-            model: '',
-            status: 'no-model',
-            error: data.error,
-            availableVisionModels: data.available_vision_models || [],
-            recommendedModels: data.recommended_models || [],
-          })
-        } else {
-          throw new Error(data.detail || data.error || 'Analysis failed')
-        }
+        // Also add to terminal as a log entry
+        const timestamp = Date.now()
+        setEntries(prev => [...prev, {
+          id: `image-analysis-${timestamp}`,
+          type: 'system',
+          content: `Image analyzed: ${data.analysis.substring(0, 100)}...`,
+          timestamp,
+        }])
+      } else if (data.status === 'no-model') {
+        // No vision model available - show recommendations
+        setImageAnalysis({
+          imageUrl,
+          analysis: '',
+          model: '',
+          status: 'no-model',
+          error: data.error,
+          availableVisionModels: data.available_vision_models || [],
+          recommendedModels: data.recommended_models || [],
+        })
+      } else {
+        throw new Error(data.detail || data.error || 'Analysis failed')
+      }
     } catch (error) {
       let errorMessage = 'Failed to analyze image'
       if (error instanceof Error) {
@@ -1749,10 +1882,10 @@ export function TerminalFeed() {
           try {
             const match = error.message.match(/detail[:\s]+(.+)/i)
             if (match) errorMessage = match[1]
-          } catch {}
+          } catch { }
         }
       }
-      
+
       setImageAnalysis({
         imageUrl,
         analysis: '',
@@ -1770,6 +1903,34 @@ export function TerminalFeed() {
 
   return (
     <div className="h-full flex relative">
+      {/* Floating Toolbar */}
+      <FloatingToolbar
+        onImageGenClick={() => {
+          // Populate /dream in chat input and focus it
+          if (commandInputEditorRef.current) {
+            const editor = commandInputEditorRef.current
+            editor.commands.setContent('/dream ')
+            // Focus the editor
+            setTimeout(() => {
+              editor.commands.focus('end')
+            }, 50)
+          }
+
+          // Open image generation panel with empty state
+          if (!imageGeneration) {
+            setImageGeneration({
+              prompt: '',
+              model: status.imageGenModel || 'auto-detecting',
+              status: 'empty',
+              availableModels: [],
+            })
+          }
+        }}
+        onFolderContextClick={() => setCodeContextPanelOpen(!codeContextPanelOpen)}
+        imageGenActive={!!imageGeneration}
+        folderContextActive={codeContextActive}
+      />
+
       {/* Session Panel */}
       <SessionPanel
         isCollapsed={panelCollapsed}
@@ -1779,19 +1940,19 @@ export function TerminalFeed() {
         onNewSession={handleNewSession}
         currentEntryCount={entries.length}
       />
-      
+
       {/* Main Terminal Area */}
-      <div className={`flex-1 flex flex-col transition-all duration-200 ${imageGeneration ? 'mr-96' : ''}`}>
+      <div className={`flex-1 flex flex-col transition-all duration-200 ${imageGeneration || musicGeneration ? 'mr-96' : ''}`}>
         {/* Terminal Feed */}
-        <div 
+        <div
           ref={feedRef}
           className="flex-1 overflow-y-auto p-4"
         >
           <div className="max-w-3xl mx-auto space-y-3">
             {entries.map((entry) => (
-              <LogEntryBlock 
-                key={entry.id} 
-                entry={entry} 
+              <LogEntryBlock
+                key={entry.id}
+                entry={entry}
                 formatTimestamp={formatTimestamp}
                 onImageClick={(imageUrl, metadata, canEdit) => {
                   setSelectedImageModal({ imageUrl, metadata, canEdit })
@@ -1804,32 +1965,36 @@ export function TerminalFeed() {
         {/* Command Input */}
         <div className="border-t border-terminal-border p-4">
           <div className="max-w-3xl mx-auto">
-            <CommandInput 
-              onSubmit={handleCommand} 
-              placeholder={circuitInputState 
+            <CommandInput
+              onSubmit={handleCommand}
+              placeholder={circuitInputState
                 ? `Enter value for [${circuitInputState.requiredInputs[circuitInputState.currentInputIndex]}]...`
                 : undefined
               }
               onImageUpload={handleImageUpload}
+              onEditorReady={(editor) => {
+                commandInputEditorRef.current = editor
+              }}
+              codeContextActive={codeContextActive}
             />
           </div>
         </div>
       </div>
-      
+
       {/* Circuit Execution Trace */}
       {circuitExecution && <CircuitTrace />}
-      
+
       {/* Download Panel */}
       {downloadProgress && (
-        <DownloadPanel 
-          progress={downloadProgress} 
+        <DownloadPanel
+          progress={downloadProgress}
           onClose={() => setDownloadProgress(null)}
         />
       )}
-      
+
       {/* Image Analysis Panel */}
       {imageAnalysis && (
-        <ImageAnalysisPanel 
+        <ImageAnalysisPanel
           analysis={imageAnalysis}
           onClose={() => setImageAnalysis(null)}
           allModels={models}
@@ -1841,7 +2006,7 @@ export function TerminalFeed() {
               model: modelName,
               status: 'analyzing',
             })
-            
+
             // Re-analyze with the selected model
             fetch(`${BACKEND_URL}/api/images/analyze`, {
               method: 'POST',
@@ -1899,7 +2064,7 @@ export function TerminalFeed() {
               const status = progress.status || 'unknown'
               const completed = progress.completed || 0
               const total = progress.total || 0
-              
+
               setDownloadProgress({
                 model: modelName,
                 status: status,
@@ -1909,13 +2074,13 @@ export function TerminalFeed() {
                 message: progress.message,
                 error: progress.error,
               })
-              
+
               // On success, refresh models and retry analysis
               if (status === 'success') {
                 fetchModels().then(() => {
                   // Set as vision model if it's a vision model
                   const visionKeywords = ['llava', 'bakllava', 'moondream', 'vision']
-                  const isVisionModel = visionKeywords.some(keyword => 
+                  const isVisionModel = visionKeywords.some(keyword =>
                     modelName.toLowerCase().includes(keyword)
                   )
                   if (isVisionModel) {
@@ -1945,14 +2110,14 @@ export function TerminalFeed() {
           onEditImage={(imageUrl, editPrompt) => {
             // Perform image-to-image editing
             if (!imageGeneration) return
-            
+
             setImageGeneration({
               prompt: editPrompt,
               model: imageGeneration.model || status.imageGenModel || 'auto-detecting',
               status: 'generating',
               progress: 0,
             })
-            
+
             // Call backend with input_image for img2img
             fetch(`${BACKEND_URL}/api/images/generate`, {
               method: 'POST',
@@ -2007,7 +2172,7 @@ export function TerminalFeed() {
               status: 'generating',
               progress: 0,
             })
-            
+
             fetch(`${BACKEND_URL}/api/images/generate`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -2074,7 +2239,7 @@ export function TerminalFeed() {
               const status = progress.status || 'unknown'
               const completed = progress.completed || 0
               const total = progress.total || 0
-              
+
               setDownloadProgress({
                 model: modelName,
                 status: status,
@@ -2084,13 +2249,13 @@ export function TerminalFeed() {
                 message: progress.message,
                 error: progress.error,
               })
-              
+
               // On success, refresh models and retry generation
               if (status === 'success') {
                 fetchModels().then(() => {
                   // Set as image gen model if it's an image gen model
                   const imageGenKeywords = ['flux', 'flux2', 'stable-diffusion']
-                  const isImageGenModel = imageGenKeywords.some(keyword => 
+                  const isImageGenModel = imageGenKeywords.some(keyword =>
                     modelName.toLowerCase().includes(keyword)
                   )
                   if (isImageGenModel) {
@@ -2133,13 +2298,107 @@ export function TerminalFeed() {
           allModels={models}
         />
       )}
-      
+
       {/* Save Session Modal */}
       <SaveSessionModal
         isOpen={showSaveModal}
         onClose={() => setShowSaveModal(false)}
         onSave={handleSaveSession}
       />
+
+      {/* Code Context Panel */}
+      <CodeContextPanel
+        isOpen={codeContextPanelOpen}
+        onClose={() => setCodeContextPanelOpen(false)}
+        onIndexFolder={handleIndexFolder}
+        activeFolder={codeContextFolder}
+        filesIndexed={codeContextFilesIndexed}
+        isIndexing={codeContextIndexing}
+      />
+
+      {/* Music Setup Panel */}
+      {musicSetupPanelOpen && (
+        <MusicSetupPanel
+          onClose={() => setMusicSetupPanelOpen(false)}
+          onModelReady={() => {
+            addSystemEntry('🎵 Music model is now ready! Try /song <style> to generate music.', Date.now())
+          }}
+        />
+      )}
+
+      {/* Music Generation Panel */}
+      {musicGeneration && (
+        <MusicGenerationPanel
+          generation={musicGeneration}
+          onClose={() => setMusicGeneration(null)}
+          onGenerate={(prompt, lyrics, duration) => {
+            // Update state to generating
+            setMusicGeneration({
+              prompt,
+              lyrics,
+              duration,
+              status: 'generating',
+              progress: 0,
+              message: 'Initializing model...',
+            })
+
+            // Call backend to generate
+            fetch(`${BACKEND_URL}/api/music/generate`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                prompt,
+                lyrics: lyrics || undefined,
+                use_lyrics: !!lyrics, // Important: backend requires this flag to use lyrics
+                duration,
+                guidance_scale: 7.0,
+                steps: 20,
+              }),
+            })
+              .then(async res => {
+                if (!res.ok) {
+                  const errData = await res.json().catch(() => ({}))
+                  throw new Error(errData.detail || 'Generation failed')
+                }
+                const data = await res.json()
+                if (data.status === 'success' && data.audio_url) {
+                  setMusicGeneration({
+                    prompt,
+                    lyrics,
+                    duration,
+                    audioUrl: `${BACKEND_URL}${data.audio_url}`,
+                    status: 'success',
+                  })
+                } else {
+                  throw new Error(data.message || 'Unknown error')
+                }
+              })
+              .catch(err => {
+                setMusicGeneration({
+                  prompt,
+                  lyrics,
+                  duration,
+                  status: 'error',
+                  error: err.message,
+                })
+              })
+          }}
+          onApproveToChat={(audioUrl, prompt, duration) => {
+            // Add audio message to chat
+            const timestamp = Date.now()
+            setEntries(prev => [...prev, {
+              id: `entry-${timestamp}`,
+              type: 'audio', // Use specific audio type
+              content: `Generated song: "${prompt}"`,
+              timestamp,
+              audioUrl,
+              audioPrompt: prompt,
+              audioDuration: duration,
+            }])
+            setMusicGeneration(null)
+          }}
+        />
+      )}
 
       {/* Image Modal for viewing/editing images in feed */}
       {selectedImageModal && (
@@ -2159,7 +2418,7 @@ export function TerminalFeed() {
               progress: 0,
               message: 'Editing image...',
             })
-            
+
             // Call backend with input_image for img2img
             fetch(`${BACKEND_URL}/api/images/generate`, {
               method: 'POST',
@@ -2208,18 +2467,20 @@ interface LogEntryBlockProps {
 function LogEntryBlock({ entry, formatTimestamp, onImageClick }: LogEntryBlockProps) {
   const typeStyles = {
     user: 'border-phosphor',
-    system: 'border-terminal-gray',
-    ai: 'border-phosphor shadow-glow-sm',
+    system: 'border-terminal-muted',
+    ai: 'border-phosphor',
     error: 'border-red-500',
     image: 'border-cyan-500',
+    audio: 'border-purple-500',
   }
 
   const typeLabels = {
-    user: 'INPUT',
-    system: 'SYS',
-    ai: 'AI',
-    error: 'ERR',
+    user: 'USER',
+    system: 'SYSTEM',
+    ai: 'ASSISTANT',
+    error: 'ERROR',
     image: 'IMAGE',
+    audio: 'MUSIC',
   }
 
   const textColors = {
@@ -2228,6 +2489,7 @@ function LogEntryBlock({ entry, formatTimestamp, onImageClick }: LogEntryBlockPr
     ai: 'text-phosphor',
     error: 'text-red-400',
     image: 'text-cyan-400',
+    audio: 'text-purple-400',
   }
 
   return (
@@ -2251,28 +2513,35 @@ function LogEntryBlock({ entry, formatTimestamp, onImageClick }: LogEntryBlockPr
           <span className="led led-error"></span>
         )}
       </div>
-      
+
       {/* Content */}
       <div className={`${textColors[entry.type]} whitespace-pre-wrap font-mono text-sm`}>
-        {entry.type === 'image' && entry.imageUrl ? (
+        {entry.type === 'audio' && entry.audioUrl ? (
+          <MusicPlayerCard
+            audioUrl={entry.audioUrl}
+            prompt={entry.audioPrompt || 'Generated Track'}
+            duration={entry.audioDuration}
+            timestamp={entry.timestamp}
+          />
+        ) : entry.type === 'image' && entry.imageUrl ? (
           <div className="space-y-3">
             <div className="border border-terminal-border bg-void p-3">
-              <img 
-                src={entry.imageUrl} 
+              <img
+                src={entry.imageUrl}
                 alt="Chat image"
                 className="max-w-full h-auto max-h-64 border border-terminal-border cursor-pointer hover:opacity-80 transition-opacity"
                 onClick={() => {
                   if (!onImageClick || !entry.imageUrl) return
-                  
+
                   // Extract prompt and model from entry
                   const prompt = entry.content || 'Generated image'
                   const modelMatch = entry.imageAnalysis?.match(/Generated using (.+)/)
                   const model = modelMatch ? modelMatch[1] : undefined
-                  
+
                   // Check if this was generated (has model info) - enable editing for generated images
                   // Enable editing if it has a model and is from a supported provider (flux, ollama, or local SDXL)
                   const canEdit = !!model && (model.toLowerCase().includes('flux') || model.toLowerCase().includes('ollama') || model.toLowerCase().includes('sdxl'))
-                  
+
                   // Open modal with metadata
                   onImageClick(entry.imageUrl, {
                     prompt,

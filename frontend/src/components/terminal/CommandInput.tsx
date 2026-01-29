@@ -9,6 +9,8 @@ interface CommandInputProps {
   onSubmit: (command: string, contextMode?: ExecContextMode) => void
   placeholder?: string
   onImageUpload?: (imageBase64: string) => void
+  onEditorReady?: (editor: any) => void
+  codeContextActive?: boolean
 }
 
 const CONTEXT_MODES: { mode: ExecContextMode; label: string; icon: string; title: string }[] = [
@@ -17,7 +19,7 @@ const CONTEXT_MODES: { mode: ExecContextMode; label: string; icon: string; title
   { mode: 'full', label: 'Full context', icon: '●', title: 'Full conversation history' },
 ]
 
-export function CommandInput({ onSubmit, placeholder, onImageUpload }: CommandInputProps) {
+export function CommandInput({ onSubmit, placeholder, onImageUpload, onEditorReady, codeContextActive = false }: CommandInputProps) {
   const defaultPlaceholder = 'Enter command or message... (try /help)'
   const [contextMode, setContextMode] = useState<ExecContextMode>('full')
   const [showContextMenu, setShowContextMenu] = useState(false)
@@ -50,6 +52,13 @@ export function CommandInput({ onSubmit, placeholder, onImageUpload }: CommandIn
       },
     },
   }, [placeholder])
+
+  // Expose editor to parent when ready
+  useEffect(() => {
+    if (editor && onEditorReady) {
+      onEditorReady(editor)
+    }
+  }, [editor, onEditorReady])
 
   // Close menu on outside click
   useEffect(() => {
@@ -190,11 +199,16 @@ export function CommandInput({ onSubmit, placeholder, onImageUpload }: CommandIn
         <span className="terminal-cursor"></span>
       </div>
       
-      <div className="flex-1">
+      <div className="flex-1 relative">
         <EditorContent 
           editor={editor} 
           className={isInputMode ? 'text-amber-400' : 'text-phosphor'}
         />
+        {codeContextActive && !isInputMode && (
+          <div className="absolute top-0 right-2 text-[8px] text-phosphor/50 font-mono pointer-events-none">
+            [CODE CONTEXT]
+          </div>
+        )}
       </div>
 
       {/* Image upload button */}

@@ -80,7 +80,7 @@ export function NotebookCell({
           if (response.ok) {
             const data = await response.json()
             const localModels = data.local || []
-            
+
             // Handle both dict format (from MODELS) and any other formats
             const models = localModels
               .map((m: any) => {
@@ -94,10 +94,10 @@ export function NotebookCell({
                 }
               })
               .filter((m: any) => m.name) // Filter out any invalid entries
-            
+
             setAvailableImageModels(models)
             setCurrentImageModel(data.current_model || null)
-            
+
             // If cell doesn't have a model set, use the current loaded model or first available
             if (!cell.model && models.length > 0) {
               const modelToUse = data.current_model || models[0].name
@@ -112,13 +112,13 @@ export function NotebookCell({
         }
       }
       fetchImageModels()
-      
+
       // Also listen for model updates
       const handleModelUpdate = () => {
         fetchImageModels()
       }
       window.addEventListener('loom:image_models_updated', handleModelUpdate)
-      
+
       return () => {
         window.removeEventListener('loom:image_models_updated', handleModelUpdate)
       }
@@ -139,33 +139,33 @@ export function NotebookCell({
     return () => ro.disconnect()
   }, [cell.output, cell.content, cell.error, cell.status, isExpanded])
 
-  const typeConfig: Record<ModuleType, { 
+  const typeConfig: Record<ModuleType, {
     icon: string
     color: string
     bgColor: string
     description: string
   }> = {
-    data_input: { 
-      icon: '▶', 
-      color: 'text-phosphor', 
+    data_input: {
+      icon: '▶',
+      color: 'text-phosphor',
       bgColor: 'bg-phosphor',
       description: 'Provides input text to the next cell',
     },
-    ai_processor: { 
-      icon: '◆', 
-      color: 'text-amber-500', 
+    ai_processor: {
+      icon: '◆',
+      color: 'text-amber-500',
       bgColor: 'bg-amber-500',
       description: 'Sends input to AI model, outputs response',
     },
-    script_execution: { 
-      icon: '⚙', 
-      color: 'text-cyan-500', 
+    script_execution: {
+      icon: '⚙',
+      color: 'text-cyan-500',
       bgColor: 'bg-cyan-500',
       description: 'Transforms input. Use {{input}} for interpolation',
     },
-    log_entry: { 
-      icon: '◀', 
-      color: 'text-phosphor-dim', 
+    log_entry: {
+      icon: '◀',
+      color: 'text-phosphor-dim',
       bgColor: 'bg-phosphor-dim',
       description: 'Displays output and sends to Terminal',
     },
@@ -216,6 +216,12 @@ export function NotebookCell({
       color: 'text-orange-400',
       bgColor: 'bg-orange-600',
       description: 'Query terminal conversation history. Enter search text or JSON query.',
+    },
+    music_gen: {
+      icon: '🎵',
+      color: 'text-violet-400',
+      bgColor: 'bg-violet-600',
+      description: 'Generates music tracks using ACE-Step. Supports lyrics and style control.',
     },
   }
 
@@ -269,6 +275,8 @@ export function NotebookCell({
         return 'Search query (e.g., "What are the main themes?")\n\nOr use {{input}} to search using previous cell output'
       case 'terminal_history':
         return 'JSON query: {"search": "keyword", "types": ["user", "ai"], "limit": 10}\n\nOr just text to search all terminal history'
+      case 'music_gen':
+        return 'Describe the music style (e.g., "Upbeat techno with synth leads", "Acoustic guitar ballad")...'
       default:
         return 'Enter content...'
     }
@@ -290,7 +298,7 @@ export function NotebookCell({
         <div className="flex items-center gap-3">
           {/* Input mode indicator */}
           {index > 0 && (
-            <span 
+            <span
               className="text-[8px] opacity-60"
               style={{ color: INPUT_MODE_INDICATORS[cell.inputMode || 'previous'].color }}
               title={`Input mode: ${cell.inputMode || 'previous'}`}
@@ -303,10 +311,10 @@ export function NotebookCell({
             [{index + 1}] {cell.label}
           </span>
           <span className={`led ${statusIndicator[cell.status]}`} />
-          
+
           {/* Show slot badge for AI cells */}
           {cell.type === 'ai_processor' && cell.modelSlot && (
-            <span 
+            <span
               className="text-[10px] font-bold px-1.5 py-0.5 bg-black/30"
               style={{ color: SLOT_COLORS[cell.modelSlot] }}
               title={`Using slot ${cell.modelSlot} (${SLOT_LABELS[cell.modelSlot]}): ${getResolvedModel()}`}
@@ -349,7 +357,7 @@ export function NotebookCell({
         {/* Type Description + Controls */}
         <div className="text-[10px] text-terminal-muted uppercase tracking-widest mb-3 flex items-center justify-between">
           <span>{config.description}</span>
-          
+
           {/* Slot Selector for AI cells */}
           {cell.type === 'ai_processor' && (
             <div className="flex items-center gap-2">
@@ -359,12 +367,11 @@ export function NotebookCell({
                   <button
                     key={slot}
                     onClick={() => onUpdate({ modelSlot: slot, model: undefined })}
-                    className={`px-2 py-0.5 text-[10px] font-bold transition-none ${
-                      cell.modelSlot === slot 
-                        ? 'bg-void' 
-                        : 'hover:bg-void/50'
-                    }`}
-                    style={{ 
+                    className={`px-2 py-0.5 text-[10px] font-bold transition-none ${cell.modelSlot === slot
+                      ? 'bg-void'
+                      : 'hover:bg-void/50'
+                      }`}
+                    style={{
                       color: cell.modelSlot === slot ? SLOT_COLORS[slot] : '#666',
                       borderRight: slot !== 'C' ? '1px solid #2a2a2a' : 'none',
                     }}
@@ -375,7 +382,7 @@ export function NotebookCell({
                 ))}
               </div>
               {cell.modelSlot && (
-                <span 
+                <span
                   className="text-[9px] normal-case"
                   style={{ color: SLOT_COLORS[cell.modelSlot] }}
                 >
@@ -384,12 +391,12 @@ export function NotebookCell({
               )}
             </div>
           )}
-          
+
           {/* Model Selector for Image cells - shows current slot selection */}
           {cell.type === 'image_gen' && (
             <div className="flex items-center gap-2">
               <span className="text-[9px] text-terminal-muted">Model:</span>
-              <span 
+              <span
                 className="text-[10px] font-bold px-1.5 py-0.5 bg-black/30"
                 style={{ color: '#ff69b4' }}
                 title={`Using image model slot: ${modelSlots.IMAGE || 'Default'}`}
@@ -401,7 +408,7 @@ export function NotebookCell({
               </span>
             </div>
           )}
-          
+
           {/* Read mode indicator for Data cells */}
           {cell.type === 'data_loader' && cell.readMode && (
             <span className="text-[10px] text-cyan-400">
@@ -427,387 +434,15 @@ export function NotebookCell({
             </button>
           )}
 
-        {/* Content Area - Special handling for data_loader */}
-        {cell.type === 'data_loader' && (
-          <>
-            {/* File selector UI */}
-            <div className="flex items-center gap-2 mb-2">
-              <button
-                onClick={() => setShowFilePicker(true)}
-                className="btn-terminal text-xs flex items-center gap-2"
-                style={{ borderColor: '#00bfff', color: '#00bfff' }}
-              >
-                📁 Browse Files
-              </button>
-              {cell.content && (
-                <span className="text-xs text-phosphor font-mono truncate flex-1">
-                  {cell.content}
-                </span>
-              )}
-            </div>
-            
-            {/* Manual path input */}
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                value={editContent}
-                onChange={(e) => {
-                  setEditContent(e.target.value)
-                  onUpdate({ content: e.target.value })
-                }}
-                placeholder="Or type path: data.csv, reports/summary.pdf"
-                className="flex-1 bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-cyan-500"
-              />
-            </div>
-            
-            {/* Read mode selector */}
-            <div className="mt-3 pt-3 border-t border-terminal-border">
-              <div className="text-[10px] text-terminal-muted mb-2">Read Mode:</div>
-              <div className="flex flex-wrap gap-1">
-                {(['raw', 'preview', 'summarize', 'structure', 'stats', 'extract'] as ReadMode[]).map((mode) => (
-                  <button
-                    key={mode}
-                    onClick={() => onUpdate({ readMode: mode })}
-                    className={`px-2 py-1 text-[10px] border ${
-                      cell.readMode === mode 
-                        ? 'border-cyan-500 bg-cyan-900/30 text-cyan-400' 
-                        : 'border-terminal-border text-terminal-muted hover:border-cyan-500/50'
-                    }`}
-                  >
-                    {READ_MODE_LABELS[mode]}
-                  </button>
-                ))}
-              </div>
-              <div className="text-[9px] text-terminal-muted mt-1">
-                {cell.readMode === 'summarize' && 'AI will summarize the document'}
-                {cell.readMode === 'structure' && 'AI will analyze the data structure'}
-                {cell.readMode === 'stats' && 'AI will compute statistics (best for CSV)'}
-                {cell.readMode === 'extract' && 'AI will extract key data points'}
-                {cell.readMode === 'preview' && 'First 50 lines only'}
-                {(!cell.readMode || cell.readMode === 'raw') && 'Full file content as-is'}
-              </div>
-            </div>
-            
-            {/* File Picker Modal */}
-            <FilePicker
-              isOpen={showFilePicker}
-              onClose={() => setShowFilePicker(false)}
-              onSelect={(path, mode) => {
-                setEditContent(path)
-                onUpdate({ content: path, readMode: mode })
-              }}
-            />
-          </>
-        )}
-
-        {/* Content Area - Conditional cell */}
-        {cell.type === 'conditional' && (
-          <>
-            <div className="mb-3">
-              <div className="text-[10px] text-terminal-muted mb-2">Condition Type:</div>
-              <div className="flex flex-wrap gap-1 mb-3">
-                {(['regex', 'keyword', 'length', 'contains', 'ai_check'] as const).map((type) => (
-                  <button
-                    key={type}
-                    onClick={() => onUpdate({ conditionType: type })}
-                    className={`px-2 py-1 text-[10px] border ${
-                      cell.conditionType === type 
-                        ? 'border-purple-500 bg-purple-900/30 text-purple-400' 
-                        : 'border-terminal-border text-terminal-muted hover:border-purple-500/50'
-                    }`}
-                  >
-                    {type === 'regex' && 'Regex'}
-                    {type === 'keyword' && 'Keyword'}
-                    {type === 'length' && 'Length'}
-                    {type === 'contains' && 'Contains'}
-                    {type === 'ai_check' && 'AI Check'}
-                  </button>
-                ))}
-              </div>
-              
-              {cell.conditionType && (
-                <div className="space-y-2">
-                  <div>
-                    <label className="text-[10px] text-terminal-muted block mb-1">
-                      {cell.conditionType === 'regex' && 'Pattern (regex):'}
-                      {cell.conditionType === 'keyword' && 'Keyword to match:'}
-                      {cell.conditionType === 'length' && 'Max length (characters):'}
-                      {cell.conditionType === 'contains' && 'Text to find:'}
-                      {cell.conditionType === 'ai_check' && 'AI prompt (e.g., "Is this a question? Answer YES or NO"):'}
-                    </label>
-                    <input
-                      type={cell.conditionType === 'length' ? 'number' : 'text'}
-                      value={cell.conditionValue || ''}
-                      onChange={(e) => onUpdate({ conditionValue: e.target.value })}
-                      placeholder={
-                        cell.conditionType === 'regex' ? 'e.g., \\?$' :
-                        cell.conditionType === 'keyword' ? 'e.g., urgent' :
-                        cell.conditionType === 'length' ? 'e.g., 1000' :
-                        cell.conditionType === 'contains' ? 'e.g., @example.com' :
-                        'e.g., Is this a question? Answer YES or NO'
-                      }
-                      className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-purple-500"
-                    />
-                  </div>
-                  
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-[10px] text-terminal-muted block mb-1">On Pass (default: input):</label>
-                      <input
-                        type="text"
-                        value={cell.onPass || ''}
-                        onChange={(e) => onUpdate({ onPass: e.target.value })}
-                        placeholder="Leave empty to pass input through"
-                        className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-purple-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] text-terminal-muted block mb-1">On Fail (default: empty):</label>
-                      <input
-                        type="text"
-                        value={cell.onFail || ''}
-                        onChange={(e) => onUpdate({ onFail: e.target.value })}
-                        placeholder="Output when condition fails"
-                        className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-purple-500"
-                      />
-                    </div>
-                  </div>
-                  
-                  <div className="grid grid-cols-2 gap-2 pt-2 border-t border-terminal-border/50">
-                    <div>
-                      <label className="text-[10px] text-terminal-muted block mb-1">On fail: loop back to cell # (0 = no loop):</label>
-                      <input
-                        type="number"
-                        min={0}
-                        max={index}
-                        value={cell.loopBackTo ?? 0}
-                        onChange={(e) => onUpdate({ loopBackTo: Math.max(0, parseInt(e.target.value) || 0) })}
-                        placeholder="0"
-                        className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-purple-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] text-terminal-muted block mb-1">Max loop passes:</label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={10}
-                        value={cell.loopBackMax ?? 3}
-                        onChange={(e) => onUpdate({ loopBackMax: Math.max(1, Math.min(10, parseInt(e.target.value) || 3)) })}
-                        className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-purple-500"
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-            
-            <div className="mt-3 pt-3 border-t border-terminal-border">
-              <textarea
-                value={editContent}
-                onChange={(e) => setEditContent(e.target.value)}
-                onBlur={handleSave}
-                onKeyDown={handleKeyDown}
-                placeholder={getPlaceholder()}
-                className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-purple-500 min-h-[60px]"
-              />
-            </div>
-          </>
-        )}
-
-        {/* Content Area - Web Fetch cell */}
-        {cell.type === 'web_fetch' && (
-          <>
-            <div className="mb-3">
-              <div className="text-[10px] text-terminal-muted mb-2">HTTP Method:</div>
-              <div className="flex flex-wrap gap-1 mb-3">
-                {(['GET', 'POST', 'PUT', 'DELETE'] as const).map((method) => (
-                  <button
-                    key={method}
-                    onClick={() => onUpdate({ fetchMethod: method })}
-                    className={`px-2 py-1 text-[10px] border ${
-                      (cell.fetchMethod || 'GET') === method 
-                        ? 'border-blue-500 bg-blue-900/30 text-blue-400' 
-                        : 'border-terminal-border text-terminal-muted hover:border-blue-500/50'
-                    }`}
-                  >
-                    {method}
-                  </button>
-                ))}
-              </div>
-              
-              <div className="space-y-2">
-                <div>
-                  <label className="text-[10px] text-terminal-muted block mb-1">URL (or use {'{{input}}'}):</label>
-                  <input
-                    type="text"
-                    value={editContent}
-                    onChange={(e) => {
-                      setEditContent(e.target.value)
-                      onUpdate({ content: e.target.value })
-                    }}
-                    placeholder="https://www.gutenberg.org/files/1342/1342-0.txt"
-                    className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-blue-500"
-                  />
-                  <div className="text-[9px] text-terminal-muted mt-1 space-y-0.5">
-                    <div>Quick examples:</div>
-                    <div className="flex flex-wrap gap-1">
-                      <button
-                        onClick={() => {
-                          setEditContent('https://www.gutenberg.org/files/1342/1342-0.txt')
-                          onUpdate({ content: 'https://www.gutenberg.org/files/1342/1342-0.txt' })
-                        }}
-                        className="px-1.5 py-0.5 border border-terminal-border hover:border-blue-500 text-[9px]"
-                        title="Pride and Prejudice from Project Gutenberg"
-                      >
-                        📚 Pride & Prejudice
-                      </button>
-                      <button
-                        onClick={() => {
-                          setEditContent('https://www.gutenberg.org/files/84/84-0.txt')
-                          onUpdate({ content: 'https://www.gutenberg.org/files/84/84-0.txt' })
-                        }}
-                        className="px-1.5 py-0.5 border border-terminal-border hover:border-blue-500 text-[9px]"
-                        title="Frankenstein from Project Gutenberg"
-                      >
-                        📚 Frankenstein
-                      </button>
-                      <button
-                        onClick={() => {
-                          setEditContent('https://api.github.com/repos/ollama/ollama')
-                          onUpdate({ content: 'https://api.github.com/repos/ollama/ollama' })
-                        }}
-                        className="px-1.5 py-0.5 border border-terminal-border hover:border-blue-500 text-[9px]"
-                        title="GitHub API example"
-                      >
-                        🔗 GitHub API
-                      </button>
-                      <button
-                        onClick={() => {
-                          setEditContent('https://api.data.gov/regulations/v3/documents.json?rpp=5')
-                          onUpdate({ content: 'https://api.data.gov/regulations/v3/documents.json?rpp=5' })
-                        }}
-                        className="px-1.5 py-0.5 border border-terminal-border hover:border-blue-500 text-[9px]"
-                        title="data.gov API example"
-                      >
-                        📊 data.gov
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                
-                {(cell.fetchMethod === 'POST' || cell.fetchMethod === 'PUT') && (
-                  <div>
-                    <label className="text-[10px] text-terminal-muted block mb-1">Body (can use {'{{input}}'}):</label>
-                    <textarea
-                      value={cell.fetchBody || ''}
-                      onChange={(e) => onUpdate({ fetchBody: e.target.value })}
-                      placeholder='{"key": "value"} or {{{{input}}}}'
-                      className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-blue-500 min-h-[60px]"
-                    />
-                  </div>
-                )}
-                
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-[10px] text-terminal-muted block mb-1">Headers (JSON or key:value):</label>
-                    <textarea
-                      value={cell.fetchHeaders || ''}
-                      onChange={(e) => onUpdate({ fetchHeaders: e.target.value })}
-                      placeholder='{"Authorization": "Bearer token"}'
-                      className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-blue-500 min-h-[40px]"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <div>
-                      <label className="text-[10px] text-terminal-muted block mb-1">Timeout (seconds):</label>
-                      <input
-                        type="number"
-                        value={cell.fetchTimeout || 30}
-                        onChange={(e) => onUpdate({ fetchTimeout: parseInt(e.target.value) || 30 })}
-                        className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-blue-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] text-terminal-muted block mb-1">Max Size (bytes, 8MB default):</label>
-                      <input
-                        type="number"
-                        value={cell.fetchMaxSize ?? 8388608}
-                        onChange={(e) => onUpdate({ fetchMaxSize: parseInt(e.target.value) || 8388608 })}
-                        placeholder="8388608"
-                        className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-blue-500"
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* Content Area - Vector Search cell */}
-        {cell.type === 'vector_search' && (
-          <>
-            <div className="mb-3">
-              <label className="text-[10px] text-terminal-muted block mb-1">Search Query (or use {'{{input}}'}):</label>
-              <textarea
-                value={editContent}
-                onChange={(e) => {
-                  setEditContent(e.target.value)
-                  onUpdate({ content: e.target.value })
-                }}
-                onKeyDown={handleKeyDown}
-                onBlur={handleSave}
-                placeholder='What are the main themes?'
-                className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-yellow-500 min-h-[60px] resize-none"
-              />
-              <div className="text-[9px] text-terminal-muted mt-1 space-y-0.5">
-                <div>Example queries:</div>
-                <div className="flex flex-wrap gap-1">
-                  <button
-                    onClick={() => {
-                      setEditContent('What are the main themes?')
-                      onUpdate({ content: 'What are the main themes?' })
-                    }}
-                    className="px-1.5 py-0.5 border border-terminal-border hover:border-yellow-500 text-[9px]"
-                  >
-                    Main themes
-                  </button>
-                  <button
-                    onClick={() => {
-                      setEditContent('Summarize key concepts')
-                      onUpdate({ content: 'Summarize key concepts' })
-                    }}
-                    className="px-1.5 py-0.5 border border-terminal-border hover:border-yellow-500 text-[9px]"
-                  >
-                    Key concepts
-                  </button>
-                  <button
-                    onClick={() => {
-                      setEditContent('Find relevant examples')
-                      onUpdate({ content: 'Find relevant examples' })
-                    }}
-                    className="px-1.5 py-0.5 border border-terminal-border hover:border-yellow-500 text-[9px]"
-                  >
-                    Examples
-                  </button>
-                </div>
-                <div className="text-[8px] mt-1">Tip: Use {'{{input}}'} to search using previous cell output</div>
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* Content Area - Vector Index cell */}
-        {cell.type === 'vector_index' && (
-          <>
-            <div className="mb-3">
-              <div className="text-[10px] text-terminal-muted mb-2">File to Index:</div>
+          {/* Content Area - Special handling for data_loader */}
+          {cell.type === 'data_loader' && (
+            <>
+              {/* File selector UI */}
               <div className="flex items-center gap-2 mb-2">
                 <button
                   onClick={() => setShowFilePicker(true)}
                   className="btn-terminal text-xs flex items-center gap-2"
-                  style={{ borderColor: '#00ff00', color: '#00ff00' }}
+                  style={{ borderColor: '#00bfff', color: '#00bfff' }}
                 >
                   📁 Browse Files
                 </button>
@@ -817,105 +452,570 @@ export function NotebookCell({
                   </span>
                 )}
               </div>
-              <input
-                type="text"
-                value={editContent}
-                onChange={(e) => {
-                  setEditContent(e.target.value)
-                  onUpdate({ content: e.target.value })
-                }}
-                placeholder="Enter file path (e.g., documents/guide.pdf)"
-                className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-green-500"
-              />
-              <div className="text-[9px] text-terminal-muted mt-1">
-                Files will be chunked and indexed for semantic search. Use INDEX before SEARCH.
+
+              {/* Manual path input */}
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={editContent}
+                  onChange={(e) => {
+                    setEditContent(e.target.value)
+                    onUpdate({ content: e.target.value })
+                  }}
+                  placeholder="Or type path: data.csv, reports/summary.pdf"
+                  className="flex-1 bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-cyan-500"
+                />
               </div>
+
+              {/* Read mode selector */}
+              <div className="mt-3 pt-3 border-t border-terminal-border">
+                <div className="text-[10px] text-terminal-muted mb-2">Read Mode:</div>
+                <div className="flex flex-wrap gap-1">
+                  {(['raw', 'preview', 'summarize', 'structure', 'stats', 'extract'] as ReadMode[]).map((mode) => (
+                    <button
+                      key={mode}
+                      onClick={() => onUpdate({ readMode: mode })}
+                      className={`px-2 py-1 text-[10px] border ${cell.readMode === mode
+                        ? 'border-cyan-500 bg-cyan-900/30 text-cyan-400'
+                        : 'border-terminal-border text-terminal-muted hover:border-cyan-500/50'
+                        }`}
+                    >
+                      {READ_MODE_LABELS[mode]}
+                    </button>
+                  ))}
+                </div>
+                <div className="text-[9px] text-terminal-muted mt-1">
+                  {cell.readMode === 'summarize' && 'AI will summarize the document'}
+                  {cell.readMode === 'structure' && 'AI will analyze the data structure'}
+                  {cell.readMode === 'stats' && 'AI will compute statistics (best for CSV)'}
+                  {cell.readMode === 'extract' && 'AI will extract key data points'}
+                  {cell.readMode === 'preview' && 'First 50 lines only'}
+                  {(!cell.readMode || cell.readMode === 'raw') && 'Full file content as-is'}
+                </div>
+              </div>
+
+              {/* File Picker Modal */}
               <FilePicker
                 isOpen={showFilePicker}
                 onClose={() => setShowFilePicker(false)}
-                onSelect={(path) => {
+                onSelect={(path, mode) => {
                   setEditContent(path)
-                  onUpdate({ content: path })
+                  onUpdate({ content: path, readMode: mode })
                 }}
               />
-            </div>
-          </>
-        )}
+            </>
+          )}
 
-        {/* Content Area - Regular cells */}
-        {cell.type !== 'log_entry' && cell.type !== 'data_loader' && cell.type !== 'conditional' && cell.type !== 'web_fetch' && cell.type !== 'vector_search' && cell.type !== 'vector_index' && (
-          <>
-            {isEditing ? (
-              <textarea
-                value={editContent}
-                onChange={(e) => setEditContent(e.target.value)}
-                onKeyDown={handleKeyDown}
-                onBlur={handleSave}
-                autoFocus
-                className="w-full h-24 bg-void border border-phosphor p-3 text-phosphor font-mono text-sm resize-none focus:outline-none focus:shadow-glow"
-                placeholder={getPlaceholder()}
-              />
-            ) : (
-              <div
-                onClick={() => setIsEditing(true)}
-                className="min-h-[60px] p-3 bg-void border border-terminal-border text-phosphor font-mono text-sm cursor-text hover:border-phosphor transition-colors whitespace-pre-wrap"
-              >
-                {cell.content || (
-                  <span className="text-terminal-muted italic">
-                    {getPlaceholder()}
-                  </span>
+          {/* Content Area - Conditional cell */}
+          {cell.type === 'conditional' && (
+            <>
+              <div className="mb-3">
+                <div className="text-[10px] text-terminal-muted mb-2">Condition Type:</div>
+                <div className="flex flex-wrap gap-1 mb-3">
+                  {(['regex', 'keyword', 'length', 'contains', 'ai_check'] as const).map((type) => (
+                    <button
+                      key={type}
+                      onClick={() => onUpdate({ conditionType: type })}
+                      className={`px-2 py-1 text-[10px] border ${cell.conditionType === type
+                        ? 'border-purple-500 bg-purple-900/30 text-purple-400'
+                        : 'border-terminal-border text-terminal-muted hover:border-purple-500/50'
+                        }`}
+                    >
+                      {type === 'regex' && 'Regex'}
+                      {type === 'keyword' && 'Keyword'}
+                      {type === 'length' && 'Length'}
+                      {type === 'contains' && 'Contains'}
+                      {type === 'ai_check' && 'AI Check'}
+                    </button>
+                  ))}
+                </div>
+
+                {cell.conditionType && (
+                  <div className="space-y-2">
+                    <div>
+                      <label className="text-[10px] text-terminal-muted block mb-1">
+                        {cell.conditionType === 'regex' && 'Pattern (regex):'}
+                        {cell.conditionType === 'keyword' && 'Keyword to match:'}
+                        {cell.conditionType === 'length' && 'Max length (characters):'}
+                        {cell.conditionType === 'contains' && 'Text to find:'}
+                        {cell.conditionType === 'ai_check' && 'AI prompt (e.g., "Is this a question? Answer YES or NO"):'}
+                      </label>
+                      <input
+                        type={cell.conditionType === 'length' ? 'number' : 'text'}
+                        value={cell.conditionValue || ''}
+                        onChange={(e) => onUpdate({ conditionValue: e.target.value })}
+                        placeholder={
+                          cell.conditionType === 'regex' ? 'e.g., \\?$' :
+                            cell.conditionType === 'keyword' ? 'e.g., urgent' :
+                              cell.conditionType === 'length' ? 'e.g., 1000' :
+                                cell.conditionType === 'contains' ? 'e.g., @example.com' :
+                                  'e.g., Is this a question? Answer YES or NO'
+                        }
+                        className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-purple-500"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] text-terminal-muted block mb-1">On Pass (default: input):</label>
+                        <input
+                          type="text"
+                          value={cell.onPass || ''}
+                          onChange={(e) => onUpdate({ onPass: e.target.value })}
+                          placeholder="Leave empty to pass input through"
+                          className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-purple-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-terminal-muted block mb-1">On Fail (default: empty):</label>
+                        <input
+                          type="text"
+                          value={cell.onFail || ''}
+                          onChange={(e) => onUpdate({ onFail: e.target.value })}
+                          placeholder="Output when condition fails"
+                          className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-purple-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 pt-2 border-t border-terminal-border/50">
+                      <div>
+                        <label className="text-[10px] text-terminal-muted block mb-1">On fail: loop back to cell # (0 = no loop):</label>
+                        <input
+                          type="number"
+                          min={0}
+                          max={index}
+                          value={cell.loopBackTo ?? 0}
+                          onChange={(e) => onUpdate({ loopBackTo: Math.max(0, parseInt(e.target.value) || 0) })}
+                          placeholder="0"
+                          className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-purple-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-terminal-muted block mb-1">Max loop passes:</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={10}
+                          value={cell.loopBackMax ?? 3}
+                          onChange={(e) => onUpdate({ loopBackMax: Math.max(1, Math.min(10, parseInt(e.target.value) || 3)) })}
+                          className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-purple-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
                 )}
               </div>
-            )}
-          </>
-        )}
 
-        {/* Output Section */}
-        {(cell.output || cell.status === 'running' || cell.error) && (
-          <div className={`mt-3 p-3 border ${cell.error ? 'bg-red-900/20 border-red-500' : 'bg-void/50 border-phosphor-dim'}`}>
-            <div className={`text-[10px] uppercase tracking-widest mb-2 ${cell.error ? 'text-red-400' : 'text-phosphor-dim'}`}>
-              {cell.error ? 'ERROR' : 'OUTPUT'}
-            </div>
-            
-            {/* Image output */}
-            {cell.type === 'image_gen' && cell.output?.startsWith('data:image') ? (
-              <div className="flex justify-center">
-                <img 
-                  src={cell.output} 
-                  alt="Generated" 
-                  className="max-w-full max-h-[400px] border border-phosphor-dim"
+              <div className="mt-3 pt-3 border-t border-terminal-border">
+                <textarea
+                  value={editContent}
+                  onChange={(e) => setEditContent(e.target.value)}
+                  onBlur={handleSave}
+                  onKeyDown={handleKeyDown}
+                  placeholder={getPlaceholder()}
+                  className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-purple-500 min-h-[60px]"
                 />
               </div>
-            ) : (
-              <div className={`font-mono text-sm whitespace-pre-wrap ${cell.error ? 'text-red-400' : 'text-phosphor'}`}>
-                {cell.error || cell.output || (cell.status === 'running' ? '...' : '')}
+            </>
+          )}
+
+          {/* Content Area - Web Fetch cell */}
+          {cell.type === 'web_fetch' && (
+            <>
+              <div className="mb-3">
+                <div className="text-[10px] text-terminal-muted mb-2">HTTP Method:</div>
+                <div className="flex flex-wrap gap-1 mb-3">
+                  {(['GET', 'POST', 'PUT', 'DELETE'] as const).map((method) => (
+                    <button
+                      key={method}
+                      onClick={() => onUpdate({ fetchMethod: method })}
+                      className={`px-2 py-1 text-[10px] border ${(cell.fetchMethod || 'GET') === method
+                        ? 'border-blue-500 bg-blue-900/30 text-blue-400'
+                        : 'border-terminal-border text-terminal-muted hover:border-blue-500/50'
+                        }`}
+                    >
+                      {method}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="space-y-2">
+                  <div>
+                    <label className="text-[10px] text-terminal-muted block mb-1">URL (or use {'{{input}}'}):</label>
+                    <input
+                      type="text"
+                      value={editContent}
+                      onChange={(e) => {
+                        setEditContent(e.target.value)
+                        onUpdate({ content: e.target.value })
+                      }}
+                      placeholder="https://www.gutenberg.org/files/1342/1342-0.txt"
+                      className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-blue-500"
+                    />
+                    <div className="text-[9px] text-terminal-muted mt-1 space-y-0.5">
+                      <div>Quick examples:</div>
+                      <div className="flex flex-wrap gap-1">
+                        <button
+                          onClick={() => {
+                            setEditContent('https://www.gutenberg.org/files/1342/1342-0.txt')
+                            onUpdate({ content: 'https://www.gutenberg.org/files/1342/1342-0.txt' })
+                          }}
+                          className="px-1.5 py-0.5 border border-terminal-border hover:border-blue-500 text-[9px]"
+                          title="Pride and Prejudice from Project Gutenberg"
+                        >
+                          📚 Pride & Prejudice
+                        </button>
+                        <button
+                          onClick={() => {
+                            setEditContent('https://www.gutenberg.org/files/84/84-0.txt')
+                            onUpdate({ content: 'https://www.gutenberg.org/files/84/84-0.txt' })
+                          }}
+                          className="px-1.5 py-0.5 border border-terminal-border hover:border-blue-500 text-[9px]"
+                          title="Frankenstein from Project Gutenberg"
+                        >
+                          📚 Frankenstein
+                        </button>
+                        <button
+                          onClick={() => {
+                            setEditContent('https://api.github.com/repos/ollama/ollama')
+                            onUpdate({ content: 'https://api.github.com/repos/ollama/ollama' })
+                          }}
+                          className="px-1.5 py-0.5 border border-terminal-border hover:border-blue-500 text-[9px]"
+                          title="GitHub API example"
+                        >
+                          🔗 GitHub API
+                        </button>
+                        <button
+                          onClick={() => {
+                            setEditContent('https://api.data.gov/regulations/v3/documents.json?rpp=5')
+                            onUpdate({ content: 'https://api.data.gov/regulations/v3/documents.json?rpp=5' })
+                          }}
+                          className="px-1.5 py-0.5 border border-terminal-border hover:border-blue-500 text-[9px]"
+                          title="data.gov API example"
+                        >
+                          📊 data.gov
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {(cell.fetchMethod === 'POST' || cell.fetchMethod === 'PUT') && (
+                    <div>
+                      <label className="text-[10px] text-terminal-muted block mb-1">Body (can use {'{{input}}'}):</label>
+                      <textarea
+                        value={cell.fetchBody || ''}
+                        onChange={(e) => onUpdate({ fetchBody: e.target.value })}
+                        placeholder='{"key": "value"} or {{{{input}}}}'
+                        className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-blue-500 min-h-[60px]"
+                      />
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] text-terminal-muted block mb-1">Headers (JSON or key:value):</label>
+                      <textarea
+                        value={cell.fetchHeaders || ''}
+                        onChange={(e) => onUpdate({ fetchHeaders: e.target.value })}
+                        placeholder='{"Authorization": "Bearer token"}'
+                        className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-blue-500 min-h-[40px]"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <div>
+                        <label className="text-[10px] text-terminal-muted block mb-1">Timeout (seconds):</label>
+                        <input
+                          type="number"
+                          value={cell.fetchTimeout || 30}
+                          onChange={(e) => onUpdate({ fetchTimeout: parseInt(e.target.value) || 30 })}
+                          className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-terminal-muted block mb-1">Max Size (bytes, 8MB default):</label>
+                        <input
+                          type="number"
+                          value={cell.fetchMaxSize ?? 8388608}
+                          onChange={(e) => onUpdate({ fetchMaxSize: parseInt(e.target.value) || 8388608 })}
+                          placeholder="8388608"
+                          className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
-            )}
-          </div>
-        )}
+            </>
+          )}
+
+
+
+          {/* Content Area - Music Gen cell */}
+          {cell.type === 'music_gen' && (
+            <div className="mb-4 space-y-4">
+              {/* Mode Toggle & Knobs */}
+              <div className="grid grid-cols-2 gap-4 p-3 bg-black/20 rounded border border-terminal-border">
+                <div>
+                  <label className="text-[10px] text-terminal-muted block mb-2 uppercase tracking-wider">Mode</label>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => onUpdate({ musicUseLyrics: false })}
+                      className={`px-3 py-1.5 text-xs font-bold border rounded ${!cell.musicUseLyrics ? 'bg-violet-600 border-violet-500 text-white' : 'bg-transparent border-terminal-border text-terminal-muted hover:border-violet-500/50'}`}
+                    >
+                      Instrumental
+                    </button>
+                    <button
+                      onClick={() => onUpdate({ musicUseLyrics: true })}
+                      className={`px-3 py-1.5 text-xs font-bold border rounded ${cell.musicUseLyrics ? 'bg-violet-600 border-violet-500 text-white' : 'bg-transparent border-terminal-border text-terminal-muted hover:border-violet-500/50'}`}
+                    >
+                      Lyrical
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <div className="flex justify-between text-[10px] text-terminal-muted mb-1">
+                      <span>Duration</span>
+                      <span className="text-violet-400">{cell.musicDuration || 10}s</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="5"
+                      max="300"
+                      step="5"
+                      value={cell.musicDuration || 10}
+                      onChange={(e) => onUpdate({ musicDuration: parseInt(e.target.value) })}
+                      className="w-full accent-violet-500 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <div className="flex justify-between text-[10px] text-terminal-muted mb-1">
+                        <span>Guidance</span>
+                        <span className="text-violet-400">{cell.musicGuidance || 7.0}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="1"
+                        max="15"
+                        step="0.5"
+                        value={cell.musicGuidance || 7.0}
+                        onChange={(e) => onUpdate({ musicGuidance: parseFloat(e.target.value) })}
+                        className="w-full accent-violet-500 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                      />
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-[10px] text-terminal-muted mb-1">
+                        <span>Steps</span>
+                        <span className="text-violet-400">{cell.musicSteps || 20}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="10"
+                        max="50"
+                        step="1"
+                        value={cell.musicSteps || 20}
+                        onChange={(e) => onUpdate({ musicSteps: parseInt(e.target.value) })}
+                        className="w-full accent-violet-500 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Lyrics Input */}
+              {cell.musicUseLyrics && (
+                <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+                  <label className="text-[10px] text-terminal-muted block mb-1">Lyrics</label>
+                  <textarea
+                    value={cell.musicLyrics || ''}
+                    onChange={(e) => onUpdate({ musicLyrics: e.target.value })}
+                    placeholder="Enter lyrics here..."
+                    className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-violet-500 min-h-[80px]"
+                  />
+                </div>
+              )}
+
+              <div className="text-[10px] text-terminal-muted">Music Style / Prompt:</div>
+            </div>
+          )}
+
+          {/* Content Area - Vector Search cell */}
+          {cell.type === 'vector_search' && (
+            <>
+              <div className="mb-3">
+                <label className="text-[10px] text-terminal-muted block mb-1">Search Query (or use {'{{input}}'}):</label>
+                <textarea
+                  value={editContent}
+                  onChange={(e) => {
+                    setEditContent(e.target.value)
+                    onUpdate({ content: e.target.value })
+                  }}
+                  onKeyDown={handleKeyDown}
+                  onBlur={handleSave}
+                  placeholder='What are the main themes?'
+                  className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-yellow-500 min-h-[60px] resize-none"
+                />
+                <div className="text-[9px] text-terminal-muted mt-1 space-y-0.5">
+                  <div>Example queries:</div>
+                  <div className="flex flex-wrap gap-1">
+                    <button
+                      onClick={() => {
+                        setEditContent('What are the main themes?')
+                        onUpdate({ content: 'What are the main themes?' })
+                      }}
+                      className="px-1.5 py-0.5 border border-terminal-border hover:border-yellow-500 text-[9px]"
+                    >
+                      Main themes
+                    </button>
+                    <button
+                      onClick={() => {
+                        setEditContent('Summarize key concepts')
+                        onUpdate({ content: 'Summarize key concepts' })
+                      }}
+                      className="px-1.5 py-0.5 border border-terminal-border hover:border-yellow-500 text-[9px]"
+                    >
+                      Key concepts
+                    </button>
+                    <button
+                      onClick={() => {
+                        setEditContent('Find relevant examples')
+                        onUpdate({ content: 'Find relevant examples' })
+                      }}
+                      className="px-1.5 py-0.5 border border-terminal-border hover:border-yellow-500 text-[9px]"
+                    >
+                      Examples
+                    </button>
+                  </div>
+                  <div className="text-[8px] mt-1">Tip: Use {'{{input}}'} to search using previous cell output</div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* Content Area - Vector Index cell */}
+          {cell.type === 'vector_index' && (
+            <>
+              <div className="mb-3">
+                <div className="text-[10px] text-terminal-muted mb-2">File to Index:</div>
+                <div className="flex items-center gap-2 mb-2">
+                  <button
+                    onClick={() => setShowFilePicker(true)}
+                    className="btn-terminal text-xs flex items-center gap-2"
+                    style={{ borderColor: '#00ff00', color: '#00ff00' }}
+                  >
+                    📁 Browse Files
+                  </button>
+                  {cell.content && (
+                    <span className="text-xs text-phosphor font-mono truncate flex-1">
+                      {cell.content}
+                    </span>
+                  )}
+                </div>
+                <input
+                  type="text"
+                  value={editContent}
+                  onChange={(e) => {
+                    setEditContent(e.target.value)
+                    onUpdate({ content: e.target.value })
+                  }}
+                  placeholder="Enter file path (e.g., documents/guide.pdf)"
+                  className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-green-500"
+                />
+                <div className="text-[9px] text-terminal-muted mt-1">
+                  Files will be chunked and indexed for semantic search. Use INDEX before SEARCH.
+                </div>
+                <FilePicker
+                  isOpen={showFilePicker}
+                  onClose={() => setShowFilePicker(false)}
+                  onSelect={(path) => {
+                    setEditContent(path)
+                    onUpdate({ content: path })
+                  }}
+                />
+              </div>
+            </>
+          )}
+
+          {/* Content Area - Regular cells */}
+          {cell.type !== 'log_entry' && cell.type !== 'data_loader' && cell.type !== 'conditional' && cell.type !== 'web_fetch' && cell.type !== 'vector_search' && cell.type !== 'vector_index' && (
+            <>
+              {isEditing ? (
+                <textarea
+                  value={editContent}
+                  onChange={(e) => setEditContent(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  onBlur={handleSave}
+                  autoFocus
+                  className="w-full h-24 bg-void border border-phosphor p-3 text-phosphor font-mono text-sm resize-none focus:outline-none focus:shadow-glow"
+                  placeholder={getPlaceholder()}
+                />
+              ) : (
+                <div
+                  onClick={() => setIsEditing(true)}
+                  className="min-h-[60px] p-3 bg-void border border-terminal-border text-phosphor font-mono text-sm cursor-text hover:border-phosphor transition-colors whitespace-pre-wrap"
+                >
+                  {cell.content || (
+                    <span className="text-terminal-muted italic">
+                      {getPlaceholder()}
+                    </span>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Output Section */}
+          {(cell.output || cell.status === 'running' || cell.error) && (
+            <div className={`mt-3 p-3 border ${cell.error ? 'bg-red-900/20 border-red-500' : 'bg-void/50 border-phosphor-dim'}`}>
+              <div className={`text-[10px] uppercase tracking-widest mb-2 ${cell.error ? 'text-red-400' : 'text-phosphor-dim'}`}>
+                {cell.error ? 'ERROR' : 'OUTPUT'}
+              </div>
+
+              {/* Image output */}
+              {cell.type === 'image_gen' && cell.output?.startsWith('data:image') ? (
+                <div className="flex justify-center">
+                  <img
+                    src={cell.output}
+                    alt="Generated"
+                    className="max-w-full max-h-[400px] border border-phosphor-dim"
+                  />
+                </div>
+              ) : (
+                <div className={`font-mono text-sm whitespace-pre-wrap ${cell.error ? 'text-red-400' : 'text-phosphor'}`}>
+                  {cell.error || cell.output || (cell.status === 'running' ? '...' : '')}
+                </div>
+              )}
+            </div>
+          )}
 
         </div>
 
-        {isExpanded && onCollapse && (
-          <button
-            type="button"
-            onClick={onCollapse}
-            className="fixed right-6 top-1/2 -translate-y-1/2 z-[100] p-2 border border-phosphor bg-void text-phosphor text-xs hover:bg-phosphor hover:text-void transition-colors"
-            title="Collapse to max height"
-          >
-            ◫
-          </button>
-        )}
+        {
+          isExpanded && onCollapse && (
+            <button
+              type="button"
+              onClick={onCollapse}
+              className="fixed right-6 top-1/2 -translate-y-1/2 z-[100] p-2 border border-phosphor bg-void text-phosphor text-xs hover:bg-phosphor hover:text-void transition-colors"
+              title="Collapse to max height"
+            >
+              ◫
+            </button>
+          )
+        }
 
         {/* Footer */}
         <div className="mt-4 pt-3 border-t border-terminal-border flex items-center justify-between">
           <div className="text-[10px] text-terminal-muted">
             STATUS:{' '}
             <span className={
-              cell.status === 'error' ? 'text-red-400' : 
-              cell.status === 'running' ? 'text-amber-500' :
-              cell.status === 'success' ? 'text-phosphor' :
-              'text-terminal-muted'
+              cell.status === 'error' ? 'text-red-400' :
+                cell.status === 'running' ? 'text-amber-500' :
+                  cell.status === 'success' ? 'text-phosphor' :
+                    'text-terminal-muted'
             }>
               {cell.status.toUpperCase()}
             </span>
@@ -932,7 +1032,7 @@ export function NotebookCell({
             {cell.status === 'running' ? 'RUNNING...' : '▶ RUN'}
           </button>
         </div>
-      </div>
-    </div>
+      </div >
+    </div >
   )
 }

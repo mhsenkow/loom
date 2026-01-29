@@ -5,7 +5,7 @@ interface ImageGeneration {
   prompt: string
   imageUrl?: string
   model: string
-  status: 'generating' | 'success' | 'error' | 'no-model'
+  status: 'generating' | 'success' | 'error' | 'no-model' | 'empty'
   error?: string
   progress?: number
   message?: string
@@ -55,6 +55,7 @@ export function ImageGenerationPanel({
   const [frameIndex, setFrameIndex] = useState(0)
   const [selectedModel, setSelectedModel] = useState<string>('')
   const [showModelSelector, setShowModelSelector] = useState(false)
+  const [promptInput, setPromptInput] = useState<string>('')
 
   // Filter to only image generation models
   const imageGenKeywords = ['flux', 'flux2', 'stable-diffusion']
@@ -125,13 +126,111 @@ export function ImageGenerationPanel({
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {/* Prompt */}
-        <div>
-          <div className="text-[10px] text-terminal-muted tracking-widest mb-2">PROMPT</div>
-          <div className="text-xs text-phosphor font-mono bg-void/30 p-2 border border-terminal-border/30">
-            {generation.prompt}
+        {/* Empty State */}
+        {generation.status === 'empty' && (
+          <div className="space-y-4">
+            {/* Placeholder Image - Retro Terminal ASCII Art */}
+            <div className="border border-phosphor/30 bg-void/50 p-6 flex items-center justify-center min-h-[240px] font-mono">
+              <div className="text-center space-y-2 text-phosphor/40 text-[10px] leading-tight">
+                <div className="whitespace-pre">
+{`╔═══════════════════════════════════╗
+║  LOOM IMAGE GENERATION        ║
+╠═══════════════════════════════════╣
+║                                   ║
+║   ██████╗ ██╗   ██╗███████╗      ║
+║   ██╔══██╗██║   ██║██╔════╝      ║
+║   ██████╔╝██║   ██║█████╗        ║
+║   ██╔══██╗██║   ██║██╔══╝        ║
+║   ██║  ██║╚██████╔╝███████╗      ║
+║   ╚═╝  ╚═╝ ╚═════╝ ╚══════╝      ║
+║                                   ║
+║   [RETRO TERMINAL AESTHETIC]      ║
+║                                   ║
+║   Type /dream in chat to begin    ║
+╚═══════════════════════════════════╝`}
+                </div>
+              </div>
+            </div>
+
+            {/* Prompting Advice */}
+            <div className="border-l-2 border-phosphor/50 pl-3 space-y-3">
+              <div className="text-xs text-phosphor font-bold">PROMPTING GUIDE</div>
+              
+              <div className="space-y-2 text-[10px] text-terminal-muted">
+                <div>
+                  <span className="text-phosphor/70 font-bold">✓ Be Specific:</span>
+                  <div className="mt-1 ml-4 font-mono text-[9px]">
+                    "a retro terminal with green phosphor text on black background, 1980s computer aesthetic"
+                  </div>
+                </div>
+                
+                <div>
+                  <span className="text-phosphor/70 font-bold">✓ Include Style:</span>
+                  <div className="mt-1 ml-4 font-mono text-[9px]">
+                    "cassette futurism", "cyberpunk", "vaporwave", "brutalist"
+                  </div>
+                </div>
+                
+                <div>
+                  <span className="text-phosphor/70 font-bold">✓ Add Details:</span>
+                  <div className="mt-1 ml-4 font-mono text-[9px]">
+                    lighting, colors, mood, composition, era
+                  </div>
+                </div>
+                
+                <div>
+                  <span className="text-phosphor/70 font-bold">✓ Use Negative Prompts:</span>
+                  <div className="mt-1 ml-4 font-mono text-[9px]">
+                    "blurry, low quality, distorted, watermark"
+                  </div>
+                </div>
+              </div>
+
+              <div className="border-t border-terminal-border/30 pt-2 mt-3">
+                <div className="text-[9px] text-terminal-muted">
+                  Example: <span className="text-phosphor font-mono">/dream a retro terminal with green phosphor text, 1980s aesthetic</span>
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
+        )}
+
+        {/* Prompt */}
+        {generation.status !== 'empty' && (
+          <div>
+            <div className="text-[10px] text-terminal-muted tracking-widest mb-2">PROMPT</div>
+            {!generation.prompt && generation.status === 'generating' ? (
+              <div className="space-y-2">
+                <textarea
+                  value={promptInput}
+                  onChange={(e) => setPromptInput(e.target.value)}
+                  placeholder="Enter image generation prompt..."
+                  className="w-full bg-void border border-terminal-border text-phosphor text-xs px-2 py-1.5 resize-none focus:outline-none focus:border-phosphor placeholder:text-terminal-muted/50 font-mono"
+                  rows={3}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey && promptInput.trim()) {
+                      e.preventDefault()
+                      onRetryGeneration?.(promptInput.trim(), generation.model)
+                    }
+                  }}
+                />
+                {onRetryGeneration && (
+                  <button
+                    onClick={() => promptInput.trim() && onRetryGeneration(promptInput.trim(), generation.model)}
+                    disabled={!promptInput.trim()}
+                    className="w-full bg-phosphor text-void px-4 py-2 text-xs font-bold hover:bg-phosphor/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    GENERATE
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="text-xs text-phosphor font-mono bg-void/30 p-2 border border-terminal-border/30">
+                {generation.prompt || '(No prompt)'}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Generating State */}
         {generation.status === 'generating' && (

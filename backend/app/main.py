@@ -17,12 +17,13 @@ backend_dir = Path(__file__).parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-from app.routers import modules, images, files, circuits, search, remote
+from app.routers import modules, images, files, circuits, search, remote, code_context, music
 from app.services.ollama_client import ollama_client
 from app.services.vector_store import VectorStore
 from app.services.storage import get_module as storage_get_module, init_db as storage_init_db
 from app.services.module_executor import run_module as execute_module_logic
 from app.services.file_loader import file_loader
+
 
 # Create Socket.IO server
 sio = socketio.AsyncServer(
@@ -38,16 +39,14 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# CORS middleware - Allow all origins for network access (mobile, Vite dev, etc.)
-# Reverted to original: ["*"] so localhost loads. If you see CORS errors from :5173, we can add explicit origins next.
+# CORS middleware - Allow all origins for development
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_origins=["*"],  # Allow all origins for development
+    allow_credentials=False,  # Must be False when using "*"
+    allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
-    max_age=0,
 )
 
 # Initialize services
@@ -67,6 +66,8 @@ app.include_router(files.router, prefix="/api/files", tags=["files"])
 app.include_router(circuits.router, prefix="/api/circuits", tags=["circuits"])
 app.include_router(search.router, prefix="/api/search", tags=["search"])
 app.include_router(remote.router, prefix="/api/remote", tags=["remote"])
+app.include_router(code_context.router, prefix="/api/code-context", tags=["code-context"])
+app.include_router(music.router, prefix="/api/music", tags=["music"])
 
 # Initialize database on startup
 @app.on_event("startup")
@@ -402,44 +403,82 @@ async def disconnect(sid):
 
 @sio.event
 async def chat(sid, data):
-    """Handle chat/AI processing requests with optional RAG"""
+    """Handle chat/AI processing requests with optional RAG and code context"""
     prompt = data.get('prompt', '')
     model = data.get('model', 'llama3.1:8b')
     use_rag = data.get('use_rag', False)  # Enable RAG retrieval
     rag_collection = data.get('rag_collection', None)
     rag_n_results = data.get('rag_n_results', 5)
+    use_code_context = data.get('use_code_context', False)  # Enable code context
+    code_context_collection = data.get('code_context_collection', 'loom_code_context')
     
-    print(f"[LOOM] Chat request from {sid}: {prompt[:50]}... (RAG: {use_rag})")
+    print(f"[LOOM] Chat request from {sid}: {prompt[:50]}... (RAG: {use_rag}, Code: {use_code_context})")
     
     # Emit processing start
     await sio.emit('ai_status', {'status': 'running', 'message': 'Processing...'}, room=sid)
     
     try:
-        # Retrieve relevant context if RAG is enabled
+        # Retrieve relevant context if RAG or code context is enabled
         final_prompt = prompt
+        context_parts = []
+        
+        # Code context (priority - more specific)
+        if use_code_context and vector_store.is_connected():
+            try:
+                print(f"[LOOM] Searching code context collection: {code_context_collection}")
+                code_context = await vector_store.search_for_rag(
+                    query=prompt,
+                    n_results=5,
+                    collection_name=code_context_collection,
+                )
+                if code_context:
+                    print(f"[LOOM] Found code context: {len(code_context)} chars")
+                    context_parts.append(f"Code Context:\n{code_context}")
+                    await sio.emit('ai_status', {
+                        'status': 'running',
+                        'message': 'Retrieved code context'
+                    }, room=sid)
+                else:
+                    print(f"[LOOM] No code context found for query: {prompt[:50]}")
+            except Exception as e:
+                print(f"[LOOM] Code context retrieval error: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # General RAG context
         if use_rag and vector_store.is_connected():
             try:
-                context = await vector_store.search_for_rag(
+                rag_context = await vector_store.search_for_rag(
                     query=prompt,
                     n_results=rag_n_results,
                     collection_name=rag_collection,
                 )
-                if context:
-                    final_prompt = f"""Use the following context to answer the question. If the context doesn't contain relevant information, use your general knowledge.
-
-Context:
-{context}
-
-Question: {prompt}
-
-Answer:"""
+                if rag_context:
+                    context_parts.append(f"Document Context:\n{rag_context}")
                     await sio.emit('ai_status', {
                         'status': 'running',
                         'message': f'Retrieved {rag_n_results} relevant documents'
                     }, room=sid)
             except Exception as e:
                 print(f"[LOOM] RAG retrieval error: {e}")
-                # Continue without RAG context
+        
+        # Combine contexts if any
+        if context_parts:
+            context_block = "\n\n---\n\n".join(context_parts)
+            final_prompt = f"""You have access to the following code context from the user's project. Use this information to answer their question accurately. If the context contains relevant information, prioritize it over general knowledge.
+
+{context_block}
+
+---
+
+User Question: {prompt}
+
+Instructions:
+- If the code context contains relevant information about the project structure, files, or code, use it to provide specific, accurate answers.
+- You can reference specific files, functions, and code patterns from the context.
+- If the context doesn't contain relevant information, you can use your general knowledge, but mention that the specific information wasn't found in the project context.
+
+Answer:"""
         
         # Stream response from Ollama
         async for chunk in ollama_client.stream_chat(final_prompt, model):

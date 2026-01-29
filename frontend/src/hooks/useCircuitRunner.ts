@@ -94,7 +94,7 @@ export function saveCircuit(circuit: SavedCircuit): boolean {
         cells: circuit.cells,
         modelSlots: circuit.modelSlots,
       }),
-    }).catch(() => {})
+    }).catch(() => { })
     return true
   } catch (e) {
     console.warn('[LOOM] Failed to save circuit:', e)
@@ -108,7 +108,7 @@ export function deleteCircuit(name: string): boolean {
     const circuits = loadSavedCircuits()
     delete circuits[name]
     localStorage.setItem(CIRCUITS_KEY, JSON.stringify(circuits))
-    fetch(`${API_BASE}/api/circuits/${encodeURIComponent(name)}`, { method: 'DELETE' }).catch(() => {})
+    fetch(`${API_BASE}/api/circuits/${encodeURIComponent(name)}`, { method: 'DELETE' }).catch(() => { })
     return true
   } catch (e) {
     console.warn('[LOOM] Failed to delete circuit:', e)
@@ -153,10 +153,10 @@ export function saveModelSlots(slots: ModelSlotConfig): void {
 export function useCircuitRunner() {
   const { sendChat, connected } = useSocket()
   const { status, models } = useSystemStatus()
-  
+
   const resolveModel = useCallback((
     slots: ModelSlotConfig,
-    slot?: ModelSlot, 
+    slot?: ModelSlot,
     directModel?: string
   ): string => {
     if (directModel) return directModel
@@ -167,22 +167,22 @@ export function useCircuitRunner() {
 
   // Gather input for a cell based on its inputMode
   const gatherInput = useCallback((
-    cellIndex: number, 
+    cellIndex: number,
     cells: CellData[],
     outputs: Map<string, string>
   ): string => {
     const cell = cells[cellIndex]
     const inputMode: InputMode = cell.inputMode || 'previous'
-    
+
     if (cellIndex === 0 || inputMode === 'none') {
       return cell.content || ''
     }
-    
+
     if (inputMode === 'previous') {
       const prevCell = cells[cellIndex - 1]
       return outputs.get(prevCell.id) || prevCell.content || ''
     }
-    
+
     // 'all' mode
     const contextParts: string[] = []
     for (let i = 0; i < cellIndex; i++) {
@@ -203,19 +203,19 @@ export function useCircuitRunner() {
     onProgress?: (output: string) => void
   ): Promise<string | { loopBackTo: number }> => {
     const modelToUse = resolveModel(slots, cell.modelSlot, cell.model)
-    
+
     switch (cell.type) {
       case 'data_input':
         return cell.content || input
-      
+
       case 'ai_processor':
-        const prompt = cell.content 
+        const prompt = cell.content
           ? `${cell.content}\n\n---\n\n${input}`
           : input
-          
+
         return new Promise((resolve, reject) => {
           let response = ''
-          
+
           const sent = sendChat(
             prompt,
             modelToUse,
@@ -231,33 +231,33 @@ export function useCircuitRunner() {
               }
             }
           )
-          
+
           if (!sent) {
             reject(new Error('Backend not connected'))
           }
         })
-      
+
       case 'script_execution':
         if (cell.content.includes('{{input}}')) {
           return cell.content.replace(/\{\{input\}\}/g, input)
         }
         return cell.content || input
-      
+
       case 'log_entry':
         return input
-        
+
       case 'markdown':
         return input
-      
+
       case 'data_loader':
         const filePath = cell.content.trim()
         if (!filePath) {
           throw new Error('No file path specified')
         }
-        
+
         const fileReadMode = cell.readMode || 'raw'
         const maxChars = fileReadMode === 'preview' ? 5000 : 100000
-        
+
         const response = await fetch('http://localhost:8000/api/files/read', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -267,31 +267,31 @@ export function useCircuitRunner() {
             max_chars: maxChars,
           }),
         })
-        
+
         if (!response.ok) {
           const errData = await response.json()
           throw new Error(errData.detail || 'Failed to load file')
         }
-        
+
         const result = await response.json()
         let fileContent = result.content
-        
+
         if (fileReadMode === 'preview') {
           const lines = fileContent.split('\n').slice(0, 50)
           return `[Preview of ${filePath}]\n\n${lines.join('\n')}`
         }
-        
+
         // For AI-based modes, process through the model
         if (['summarize', 'structure', 'stats', 'extract'].includes(fileReadMode)) {
           const aiModel = resolveModel(slots, cell.modelSlot, cell.model)
-          
+
           const prompts: Record<string, string> = {
             summarize: `Summarize this document concisely:\n\n${fileContent}`,
             structure: `Analyze the structure of this data:\n\n${fileContent}`,
             stats: `Analyze this data and provide key statistics:\n\n${fileContent}`,
             extract: `Extract key data points:\n\n${fileContent}`,
           }
-          
+
           return new Promise((resolve, reject) => {
             let aiResponse = ''
             const sent = sendChat(
@@ -312,15 +312,15 @@ export function useCircuitRunner() {
             if (!sent) reject(new Error('Backend not connected'))
           })
         }
-        
+
         return fileContent
-      
+
       case 'conditional':
         // Evaluate condition and return appropriate output
         const conditionType = cell.conditionType || 'contains'
         const conditionValue = cell.conditionValue || ''
         let conditionPassed = false
-        
+
         try {
           if (conditionType === 'regex') {
             const regex = new RegExp(conditionValue)
@@ -337,7 +337,7 @@ export function useCircuitRunner() {
             const aiModel = resolveModel(slots, cell.modelSlot, cell.model)
             const checkPrompt = conditionValue || 'Does this text meet the condition? Answer only YES or NO.'
             const fullPrompt = `${checkPrompt}\n\nText: ${input}\n\nAnswer:`
-            
+
             return new Promise((resolve, reject) => {
               let aiResponse = ''
               const sent = sendChat(
@@ -365,7 +365,7 @@ export function useCircuitRunner() {
               if (!sent) reject(new Error('Backend not connected'))
             })
           }
-          
+
           // For non-AI conditions
           if (conditionPassed) return cell.onPass || input
           if ((cell.loopBackTo ?? 0) >= 1) return { loopBackTo: cell.loopBackTo! }
@@ -373,7 +373,7 @@ export function useCircuitRunner() {
         } catch (e) {
           throw new Error(`Condition evaluation error: ${e instanceof Error ? e.message : e}`)
         }
-      
+
       case 'web_fetch':
         // Fetch from URL
         let url = cell.content.trim()
@@ -383,11 +383,11 @@ export function useCircuitRunner() {
         if (!url) {
           throw new Error('No URL specified')
         }
-        
+
         const method = cell.fetchMethod || 'GET'
         const timeout = (cell.fetchTimeout || 30) * 1000
         const maxSize = cell.fetchMaxSize ?? 8388608
-        
+
         try {
           // Parse headers
           let headers: Record<string, string> = {}
@@ -405,14 +405,14 @@ export function useCircuitRunner() {
               }
             }
           }
-          
+
           // Prepare body for POST/PUT
           let body: string | undefined = undefined
           if ((method === 'POST' || method === 'PUT') && cell.fetchBody) {
-            const bodyTemplate = cell.fetchBody.includes('{{input}}') 
+            const bodyTemplate = cell.fetchBody.includes('{{input}}')
               ? cell.fetchBody.replace(/\{\{input\}\}/g, input)
               : cell.fetchBody
-            
+
             // Try to parse as JSON, otherwise use as-is
             try {
               JSON.parse(bodyTemplate)
@@ -421,11 +421,11 @@ export function useCircuitRunner() {
               body = bodyTemplate
             }
           }
-          
+
           // Create abort controller for timeout
           const controller = new AbortController()
           const timeoutId = setTimeout(() => controller.abort(), timeout)
-          
+
           const response = await fetch(url, {
             method,
             headers: {
@@ -435,24 +435,24 @@ export function useCircuitRunner() {
             body: body,
             signal: controller.signal,
           })
-          
+
           clearTimeout(timeoutId)
-          
+
           if (!response.ok) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`)
           }
-          
+
           // Check content length
           const contentLength = response.headers.get('content-length')
           if (contentLength && parseInt(contentLength) > maxSize) {
             throw new Error(`Response too large: ${contentLength} bytes (max: ${maxSize})`)
           }
-          
+
           const text = await response.text()
           if (text.length > maxSize) {
             throw new Error(`Response too large: ${text.length} bytes (max: ${maxSize})`)
           }
-          
+
           return text
         } catch (e) {
           if (e instanceof Error && e.name === 'AbortError') {
@@ -460,16 +460,16 @@ export function useCircuitRunner() {
           }
           throw new Error(`Fetch error: ${e instanceof Error ? e.message : e}`)
         }
-      
+
       case 'vector_index':
         // Index a file into the vector store
         const filePathToIndex = (input || cell.content || '').trim()
         if (!filePathToIndex) {
           throw new Error('No file path specified. Enter a file path in the cell content or connect from previous cell.')
         }
-        
+
         console.log(`[LOOM] Indexing file: ${filePathToIndex}`)
-        
+
         try {
           const response = await fetch('http://localhost:8000/api/search/index/file', {
             method: 'POST',
@@ -479,12 +479,12 @@ export function useCircuitRunner() {
               chunk_strategy: 'sentence',
             }),
           })
-          
+
           if (!response.ok) {
             const errData = await response.json()
             throw new Error(errData.detail || 'Failed to index file')
           }
-          
+
           const result = await response.json()
           if (result.success) {
             const chunkCount = result.chunk_count || 0
@@ -496,16 +496,16 @@ export function useCircuitRunner() {
         } catch (e) {
           throw new Error(`Vector indexing failed: ${e instanceof Error ? e.message : e}`)
         }
-      
+
       case 'vector_search':
         // Search the vector store
         const searchQuery = (input || cell.content || '').trim()
         if (!searchQuery) {
           throw new Error('No search query specified. Enter a query in the cell content or connect from previous cell.')
         }
-        
+
         console.log(`[LOOM] Searching vector store: ${searchQuery}`)
-        
+
         try {
           const response = await fetch('http://localhost:8000/api/search/search', {
             method: 'POST',
@@ -516,55 +516,55 @@ export function useCircuitRunner() {
               collection: 'loom_files', // Default to files collection
             }),
           })
-          
+
           if (!response.ok) {
             const errData = await response.json()
             throw new Error(errData.detail || 'Search failed')
           }
-          
+
           const result = await response.json()
           const results = result.results || []
-          
+
           if (results.length === 0) {
             return `🔍 No results found for: '${searchQuery}'\n\nMake sure you have indexed some documents first using the INDEX cell.`
           }
-          
+
           // Format results nicely
           const outputLines = [`🔍 Found ${results.length} results for: '${searchQuery}'\n`]
-          
+
           for (let i = 0; i < results.length; i++) {
             const r = results[i]
             const similarity = r.similarity || 0
             const contentPreview = (r.content || '').substring(0, 200)
             const metadata = r.metadata || {}
             const source = metadata.file_path || metadata.source || 'unknown'
-            
+
             outputLines.push(`\n[${i + 1}] Similarity: ${(similarity * 100).toFixed(1)}%`)
             outputLines.push(`📄 Source: ${source}`)
             outputLines.push(`💬 Preview: ${contentPreview}...`)
           }
-          
+
           // Also include full content for RAG context
-          const fullContext = results.map((r: any, i: number) => 
+          const fullContext = results.map((r: any, i: number) =>
             `[${i + 1}] ${r.content || ''}`
           ).join('\n\n---\n\n')
-          
+
           return outputLines.join('\n') + '\n\n---\n\n' + fullContext
         } catch (e) {
           throw new Error(`Vector search failed: ${e instanceof Error ? e.message : e}`)
         }
-      
+
       case 'terminal_history':
         // Query terminal conversation history
         // Cell content can be JSON query or simple text search
         // Format: JSON query like {"search": "keyword", "types": ["user", "ai"], "limit": 10}
         // Or simple text: "keyword" (searches all entries)
         const { queryTerminalHistory } = await import('./useTerminalOutput')
-        
+
         try {
           let query: any = {}
           const content = (input || cell.content || '').trim()
-          
+
           if (content) {
             // Try to parse as JSON query
             try {
@@ -574,7 +574,7 @@ export function useCircuitRunner() {
               query = { search: content }
             }
           }
-          
+
           // Parse query parameters from cell properties if available
           // Support: terminalHistoryTypes, terminalHistoryLimit, terminalHistorySince, terminalHistoryBefore
           const cellQuery: any = {
@@ -585,21 +585,21 @@ export function useCircuitRunner() {
             before: query.before || (cell as any).terminalHistoryBefore,
             sessionName: query.sessionName || (cell as any).terminalHistorySession,
           }
-          
+
           // Clean up undefined values
           Object.keys(cellQuery).forEach(key => {
             if (cellQuery[key] === undefined) delete cellQuery[key]
           })
-          
+
           const entries = queryTerminalHistory(cellQuery)
-          
+
           if (entries.length === 0) {
             return `📜 No terminal history entries found matching query.\n\nQuery: ${JSON.stringify(cellQuery, null, 2)}`
           }
-          
+
           // Format entries nicely
           const outputLines = [`📜 Found ${entries.length} terminal history entries:\n`]
-          
+
           for (let i = 0; i < entries.length; i++) {
             const entry = entries[i]
             const time = new Date(entry.timestamp).toLocaleString()
@@ -609,26 +609,27 @@ export function useCircuitRunner() {
               system: '⚙️',
               error: '❌',
               image: '🖼️',
+              audio: '🎵',
             }[entry.type] || '○'
-            
-            const contentPreview = entry.content.length > 200 
+
+            const contentPreview = entry.content.length > 200
               ? entry.content.substring(0, 200) + '...'
               : entry.content
-            
+
             outputLines.push(`\n[${i + 1}] ${typeIcon} [${entry.type.toUpperCase()}] ${time}`)
             outputLines.push(`${contentPreview}`)
           }
-          
+
           // Also include full content for processing
-          const fullContext = entries.map((e, i) => 
+          const fullContext = entries.map((e, i) =>
             `[${i + 1}] [${e.type}] ${new Date(e.timestamp).toISOString()}\n${e.content}`
           ).join('\n\n---\n\n')
-          
+
           return outputLines.join('\n') + '\n\n---\n\nFull Context:\n\n' + fullContext
         } catch (e) {
           throw new Error(`Terminal history query failed: ${e instanceof Error ? e.message : e}`)
         }
-      
+
       default:
         return input
     }
@@ -641,24 +642,24 @@ export function useCircuitRunner() {
   ): Promise<string> => {
     const circuits = loadSavedCircuits()
     const circuit = circuits[circuitName]
-    
+
     if (!circuit) {
       throw new Error(`Circuit "${circuitName}" not found`)
     }
-    
+
     // Build cells with provided inputs
     const cells: CellData[] = circuit.cells.map((cell, index) => {
       const fullCell: CellData = {
         ...cell,
         id: `run-${index}`,
         status: 'idle',
-        content: cell.type === 'data_input' && inputs[cell.label] 
-          ? inputs[cell.label] 
+        content: cell.type === 'data_input' && inputs[cell.label]
+          ? inputs[cell.label]
           : cell.content,
       }
       return fullCell
     })
-    
+
     // Initialize execution state
     const execution: CircuitExecution = {
       circuitName,
@@ -672,35 +673,35 @@ export function useCircuitRunner() {
         status: 'pending',
       })),
     }
-    
+
     circuitExecutionBus.emit(execution)
-    
+
     const outputs = new Map<string, string>()
     const loopCounts = new Map<string, number>()
     let finalOutput = ''
-    
+
     try {
       for (let i = 0; i < cells.length; i++) {
         const cell = cells[i]
-        
+
         // Update step status
         execution.steps[i].status = 'running'
         circuitExecutionBus.emit({ ...execution })
-        
+
         const input = gatherInput(i, cells, outputs)
-        
+
         const result = await executeCell(
-          cell, 
-          input, 
+          cell,
+          input,
           circuit.modelSlots,
           (progress) => {
             execution.steps[i].output = progress
             circuitExecutionBus.emit({ ...execution })
           }
         )
-        
+
         let output: string
-        
+
         if (typeof result === 'object' && result !== null && 'loopBackTo' in result) {
           const r = result as { loopBackTo: number }
           const count = loopCounts.get(cell.id) ?? 0
@@ -716,38 +717,38 @@ export function useCircuitRunner() {
         } else {
           output = result as string
         }
-        
+
         outputs.set(cell.id, output)
         execution.steps[i].status = 'success'
         execution.steps[i].output = output
         finalOutput = output
-        
+
         circuitExecutionBus.emit({ ...execution })
       }
-      
+
       execution.status = 'success'
       execution.finalOutput = finalOutput
       circuitExecutionBus.emit({ ...execution })
-      
+
       // Clear after a delay
       setTimeout(() => {
         circuitExecutionBus.emit(null)
       }, 5000)
-      
+
       return finalOutput
     } catch (e) {
       const errorMsg = e instanceof Error ? e.message : 'Unknown error'
-      
+
       // Mark current step as error
       const runningStep = execution.steps.find(s => s.status === 'running')
       if (runningStep) {
         runningStep.status = 'error'
         runningStep.error = errorMsg
       }
-      
+
       execution.status = 'error'
       circuitExecutionBus.emit({ ...execution })
-      
+
       throw e
     }
   }, [executeCell, gatherInput])
@@ -756,9 +757,9 @@ export function useCircuitRunner() {
   const getRequiredInputs = useCallback((circuitName: string): string[] => {
     const circuits = loadSavedCircuits()
     const circuit = circuits[circuitName]
-    
+
     if (!circuit) return []
-    
+
     return circuit.cells
       .filter(cell => cell.type === 'data_input')
       .map(cell => cell.label)
@@ -774,11 +775,11 @@ export function useCircuitRunner() {
 // Hook to subscribe to circuit execution updates
 export function useCircuitExecution() {
   const [execution, setExecution] = useState<CircuitExecution | null>(null)
-  
+
   useEffect(() => {
     const unsubscribe = circuitExecutionBus.subscribe(setExecution)
     return () => { unsubscribe() }
   }, [])
-  
+
   return execution
 }

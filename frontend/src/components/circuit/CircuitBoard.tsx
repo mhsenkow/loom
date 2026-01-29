@@ -86,6 +86,13 @@ export interface CellData {
   fetchBody?: string  // Body template (can use {{input}})
   fetchTimeout?: number  // Timeout in seconds (default: 30)
   fetchMaxSize?: number  // Max response size in bytes (default: 8388608 = 8MB)
+  // Music cell parameters
+  musicStyle?: string
+  musicLyrics?: string
+  musicUseLyrics?: boolean
+  musicDuration?: number
+  musicGuidance?: number
+  musicSteps?: number
 }
 
 // Initial demo cells with better defaults
@@ -146,7 +153,7 @@ function cellsToNodes(cells: CellData[]): Node[] {
 // Generate edges between sequential nodes + loop-back edges
 function generateEdges(cells: CellData[]): Edge[] {
   const edges: Edge[] = []
-  
+
   // Forward edges (sequential flow)
   for (let i = 0; i < cells.length - 1; i++) {
     edges.push({
@@ -156,7 +163,7 @@ function generateEdges(cells: CellData[]): Edge[] {
       ...defaultEdgeOptions,
     })
   }
-  
+
   // Loop-back edges (from conditional cells with loopBackTo)
   for (let i = 0; i < cells.length; i++) {
     const cell = cells[i]
@@ -179,7 +186,7 @@ function generateEdges(cells: CellData[]): Edge[] {
       }
     }
   }
-  
+
   return edges
 }
 
@@ -192,18 +199,18 @@ export function CircuitBoard() {
   const [showModelConfig, setShowModelConfig] = useState(false)
   const [circuitName, setCircuitName] = useState<string>('')
   const [showSaveSuccess, setShowSaveSuccess] = useState(false)
-  
+
   const { sendChat } = useSocket()
   const { status, models } = useSystemStatus()
   const sendToTerminal = useSendToTerminal()
-  
+
   // Model slot configuration - maps slots to actual model names
   const [modelSlots, setModelSlots] = useState<ModelSlotConfig>(() => loadModelSlots())
-  
+
   // Fetch available image models
   const [imageModels, setImageModels] = useState<Array<{ name: string; vram?: string }>>([])
   const [currentImageModel, setCurrentImageModel] = useState<string | null>(null)
-  
+
   useEffect(() => {
     const fetchImageModels = async () => {
       try {
@@ -219,10 +226,10 @@ export function CircuitBoard() {
               type: m.type || 'unknown',
             }))
             .filter((m: any) => m.name) // Filter out any invalid entries
-          
+
           setImageModels(models)
           setCurrentImageModel(data.current_model || null)
-          
+
           // If IMAGE slot is not set, use current model or first available
           if (!modelSlots.IMAGE && models.length > 0) {
             setModelSlots(prev => ({
@@ -236,18 +243,18 @@ export function CircuitBoard() {
       }
     }
     fetchImageModels()
-    
+
     // Listen for model updates
     const handleModelUpdate = () => {
       fetchImageModels()
     }
     window.addEventListener('loom:image_models_updated', handleModelUpdate)
-    
+
     return () => {
       window.removeEventListener('loom:image_models_updated', handleModelUpdate)
     }
   }, [modelSlots.IMAGE])
-  
+
   // Persist model slots when they change
   useEffect(() => {
     saveModelSlots(modelSlots)
@@ -263,7 +270,7 @@ export function CircuitBoard() {
     loadModulesFromBackend().then((loadedModules) => {
       if (mounted && loadedModules.length > 0) {
         // Only load if we have modules from backend and current cells are just initial cells
-        const isInitialState = cells.length === initialCells.length && 
+        const isInitialState = cells.length === initialCells.length &&
           cells.every((cell, idx) => cell.id === initialCells[idx]?.id)
         if (isInitialState) {
           // Extract positions and clean up temporary _position field
@@ -307,7 +314,7 @@ export function CircuitBoard() {
     }
     return getNodePosition(index, cells)
   }, [cells, nodes, viewMode])
-  
+
   // Save the current circuit
   const handleSaveCircuit = useCallback(() => {
     const name = circuitName.trim().toLowerCase().replace(/\s+/g, '-')
@@ -315,28 +322,28 @@ export function CircuitBoard() {
       alert('Please enter a circuit name')
       return
     }
-    
+
     const circuit: SavedCircuit = {
       name,
       cells: cells.map(({ status, output, error, ...rest }) => rest),
       modelSlots,
       savedAt: Date.now(),
     }
-    
+
     if (saveCircuit(circuit)) {
       setShowSaveSuccess(true)
       setTimeout(() => setShowSaveSuccess(false), 2000)
     }
   }, [circuitName, cells, modelSlots])
-  
+
   // Resolve a slot to an actual model name
   const resolveModel = useCallback((slot?: ModelSlot, directModel?: string): string => {
     // Direct model override takes precedence
     if (directModel) return directModel
-    
+
     // Then check slot
     if (slot && modelSlots[slot]) return modelSlots[slot]
-    
+
     // Default to slot A, then first available, then fallback
     if (modelSlots.A) return modelSlots.A
     return status.activeModel || models[0] || 'llama3.1:8b'
@@ -372,7 +379,7 @@ export function CircuitBoard() {
     setNodes(cellsToNodes(cells))
     setEdges(generateEdges(cells))
   }, [cells, setNodes, setEdges])
-  
+
   // Create a new empty circuit
   const newCircuit = useCallback(() => {
     const newCells: CellData[] = [
@@ -430,6 +437,7 @@ export function CircuitBoard() {
       vector_index: 'INDEX',
       vector_search: 'SEARCH',
       terminal_history: 'HISTORY',
+      music_gen: 'MUSIC',
     }
 
     // Default content based on cell type - using real public data sources
@@ -439,6 +447,7 @@ export function CircuitBoard() {
       script_execution: 'Extract the first 200 characters:\n\n{{input}}',
       log_entry: '',
       image_gen: 'blurry, low quality, distorted',
+      music_gen: 'An upbeat techno track with synth melodies',
       markdown: '# Notes\n\nDocument your workflow here...',
       data_loader: '',
       conditional: '',
@@ -517,6 +526,14 @@ export function CircuitBoard() {
             content: '',
             inputMode: 'previous',
           }
+        case 'music_gen':
+          return {
+            content: 'An upbeat techno track with synth melodies',
+            musicDuration: 10,
+            musicGuidance: 7.0,
+            musicSteps: 20,
+            inputMode: 'none',
+          }
         case 'markdown':
           return {
             content: '# Documentation\n\nDescribe what this circuit does...',
@@ -538,12 +555,12 @@ export function CircuitBoard() {
       status: 'idle',
       ...getDefaultConfig(),
     }
-    
+
     setCells((prev) => {
       const updated = [...prev, newCell]
       // Persist to backend (async, don't wait)
       setTimeout(() => {
-        const pos = viewMode === 'canvas' 
+        const pos = viewMode === 'canvas'
           ? getNodePosition(updated.length - 1, updated)
           : { x: 0, y: 0 }
         saveModuleToBackend(newCell, pos).catch(() => {
@@ -552,7 +569,7 @@ export function CircuitBoard() {
       }, 0)
       return updated
     })
-    
+
     if (viewMode === 'canvas') {
       setNodes((prev) => {
         const newCells = [...cells, newCell]
@@ -633,10 +650,10 @@ export function CircuitBoard() {
       if (index === -1) return prev
       if (direction === 'up' && index === 0) return prev
       if (direction === 'down' && index === prev.length - 1) return prev
-      
+
       const newCells = [...prev]
       const swapIndex = direction === 'up' ? index - 1 : index + 1
-      ;[newCells[index], newCells[swapIndex]] = [newCells[swapIndex], newCells[index]]
+        ;[newCells[index], newCells[swapIndex]] = [newCells[swapIndex], newCells[index]]
       return newCells
     })
   }
@@ -645,15 +662,15 @@ export function CircuitBoard() {
   const gatherInput = useCallback((cellIndex: number, cells: CellData[]): { input: string; originalQuestion: string } => {
     const cell = cells[cellIndex]
     const inputMode = cell.inputMode || 'previous'
-    
+
     // First cell or 'none' mode: use own content
     if (cellIndex === 0 || inputMode === 'none') {
-      return { 
-        input: cell.content || '', 
+      return {
+        input: cell.content || '',
         originalQuestion: cell.type === 'data_input' ? cell.content || '' : ''
       }
     }
-    
+
     let originalQuestion = ''
     // Find original question by walking back to first INPUT cell
     for (let i = cellIndex - 1; i >= 0; i--) {
@@ -662,16 +679,16 @@ export function CircuitBoard() {
         break
       }
     }
-    
+
     // 'previous' mode: just the last cell's output
     if (inputMode === 'previous') {
       const prevCell = cells[cellIndex - 1]
-      return { 
-        input: prevCell.output || prevCell.content || '', 
-        originalQuestion 
+      return {
+        input: prevCell.output || prevCell.content || '',
+        originalQuestion
       }
     }
-    
+
     // 'all' mode: concatenate all previous cell outputs with labels
     const contextParts: string[] = []
     for (let i = 0; i < cellIndex; i++) {
@@ -681,24 +698,24 @@ export function CircuitBoard() {
         contextParts.push(`[${prevCell.label || `Cell ${i + 1}`}]\n${output}`)
       }
     }
-    return { 
-      input: contextParts.join('\n\n---\n\n'), 
-      originalQuestion 
+    return {
+      input: contextParts.join('\n\n---\n\n'),
+      originalQuestion
     }
   }, [])
 
   // Execute a single cell with input from previous cell(s). Conditional can return { loopBackTo } to request a loop.
   const executeCell = useCallback(async (
-    cell: CellData, 
+    cell: CellData,
     input: string,
     originalQuestion?: string
   ): Promise<string | { loopBackTo: number }> => {
     const modelToUse = resolveModel(cell.modelSlot, cell.model)
-    
+
     switch (cell.type) {
       case 'data_input':
         return cell.content || input
-      
+
       case 'ai_processor':
         // Build prompt: if cell has content, use it as system instruction
         // Support {{input}} placeholder for explicit input insertion
@@ -710,10 +727,10 @@ export function CircuitBoard() {
         } else {
           prompt = input
         }
-          
+
         return new Promise((resolve, reject) => {
           let response = ''
-          
+
           const sent = sendChat(
             prompt,
             modelToUse,
@@ -729,12 +746,12 @@ export function CircuitBoard() {
               }
             }
           )
-          
+
           if (!sent) {
             reject(new Error('Backend not connected'))
           }
         })
-      
+
       case 'script_execution':
         try {
           if (cell.content.includes('{{input}}')) {
@@ -744,7 +761,7 @@ export function CircuitBoard() {
         } catch (e) {
           throw new Error(`Script error: ${e}`)
         }
-      
+
       case 'log_entry':
         sendToTerminal(input, 'Circuit Notebook', {
           question: originalQuestion || 'Circuit notebook output',
@@ -755,15 +772,15 @@ export function CircuitBoard() {
       case 'image_gen':
         // Use IMAGE slot from modelSlots, or cell.model, or default
         const imageModel = cell.model || modelSlots.IMAGE || 'sdxl'
-        updateCell(cell.id, { 
+        updateCell(cell.id, {
           output: `Loading model "${imageModel}"...`,
           status: 'running'
         })
-        
+
         try {
           // First ensure model is loaded
           updateCell(cell.id, { output: `Loading model "${imageModel}" & preparing...` })
-          
+
           const response = await fetch('http://localhost:8000/api/images/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -777,17 +794,17 @@ export function CircuitBoard() {
               steps: 30,
             }),
           })
-          
+
           if (!response.ok) {
             const errorData = await response.json().catch(() => ({ detail: `HTTP ${response.status}: ${response.statusText}` }))
             const errorMsg = errorData.detail || errorData.error || errorData.message || 'Image generation failed'
             throw new Error(errorMsg)
           }
-          
+
           const result = await response.json()
-          
+
           if (result.status === 'success' && result.image) {
-            updateCell(cell.id, { 
+            updateCell(cell.id, {
               output: result.image,
               status: 'success'
             })
@@ -799,30 +816,71 @@ export function CircuitBoard() {
           }
         } catch (e) {
           const errorMsg = e instanceof Error ? e.message : String(e)
-          updateCell(cell.id, { 
+          updateCell(cell.id, {
             error: errorMsg,
             status: 'error'
           })
-          throw new Error(`Image generation error: ${errorMsg}`)
+          throw e
+        }
+
+      case 'music_gen':
+        updateCell(cell.id, {
+          output: `Generating music...`,
+          status: 'running'
+        })
+
+        try {
+          const response = await fetch('http://localhost:8000/api/music/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              prompt: cell.musicStyle || input || 'Techno',
+              lyrics: cell.musicLyrics || '',
+              use_lyrics: cell.musicUseLyrics || false,
+              duration: cell.musicDuration || 10,
+              guidance_scale: cell.musicGuidance || 7.0,
+              steps: cell.musicSteps || 20,
+            }),
+          })
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}))
+            throw new Error(errorData.detail || 'Music generation failed')
+          }
+
+          const result = await response.json()
+          if (result.status === 'success' && result.audio_url) {
+            updateCell(cell.id, { output: result.audio_url, status: 'success' })
+            return result.audio_url
+          } else {
+            throw new Error('No audio URL returned')
+          }
+        } catch (e) {
+          const errorMsg = e instanceof Error ? e.message : String(e)
+          updateCell(cell.id, {
+            error: errorMsg,
+            status: 'error'
+          })
+          throw e
         }
 
       case 'markdown':
         return input
-      
+
       case 'data_loader':
         // DATA cells load files from the data folder
         const filePath = cell.content.trim()
         if (!filePath) {
           throw new Error('No file path specified. Click "Browse" to select a file.')
         }
-        
+
         const fileReadMode = cell.readMode || 'raw'
         updateCell(cell.id, { output: `Loading ${filePath}...` })
-        
+
         try {
           // Determine max chars based on read mode
           const maxChars = fileReadMode === 'preview' ? 5000 : 100000
-          
+
           const response = await fetch('http://localhost:8000/api/files/read', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -832,34 +890,34 @@ export function CircuitBoard() {
               max_chars: maxChars,
             }),
           })
-          
+
           if (!response.ok) {
             const errData = await response.json()
             throw new Error(errData.detail || 'Failed to load file')
           }
-          
+
           const result = await response.json()
           let fileContent = result.content
-          
+
           // For preview mode, just return first N lines
           if (fileReadMode === 'preview') {
             const lines = fileContent.split('\n').slice(0, 50)
             return `[Preview of ${filePath}]\n\n${lines.join('\n')}${lines.length >= 50 ? '\n...(truncated)' : ''}`
           }
-          
+
           // For AI-based modes, process through the model
           if (['summarize', 'structure', 'stats', 'extract'].includes(fileReadMode)) {
             const aiModel = resolveModel(cell.modelSlot, cell.model)
-            
+
             const prompts: Record<string, string> = {
               summarize: `Summarize this document concisely. Key points and main takeaways:\n\n${fileContent}`,
               structure: `Analyze the structure of this data. What are the fields/columns? Data types? Key patterns?\n\n${fileContent}`,
               stats: `Analyze this data and provide key statistics: counts, averages, min/max, distributions, notable patterns:\n\n${fileContent}`,
               extract: `Extract and list the key data points from this file in a structured format:\n\n${fileContent}`,
             }
-            
+
             updateCell(cell.id, { output: `Processing with AI (${fileReadMode})...` })
-            
+
             return new Promise((resolve, reject) => {
               let aiResponse = ''
               const sent = sendChat(
@@ -880,19 +938,19 @@ export function CircuitBoard() {
               if (!sent) reject(new Error('Backend not connected'))
             })
           }
-          
+
           // Raw mode - just return the content
           return fileContent
         } catch (e) {
           throw new Error(`File load error: ${e instanceof Error ? e.message : e}`)
         }
-      
+
       case 'conditional':
         // Evaluate condition and return appropriate output
         const conditionType = cell.conditionType || 'contains'
         const conditionValue = cell.conditionValue || ''
         let conditionPassed = false
-        
+
         try {
           if (conditionType === 'regex') {
             const regex = new RegExp(conditionValue)
@@ -909,7 +967,7 @@ export function CircuitBoard() {
             const aiModel = resolveModel(cell.modelSlot, cell.model)
             const checkPrompt = conditionValue || 'Does this text meet the condition? Answer only YES or NO.'
             const fullPrompt = `${checkPrompt}\n\nText: ${input}\n\nAnswer:`
-            
+
             return new Promise((resolve, reject) => {
               let aiResponse = ''
               const sent = sendChat(
@@ -936,7 +994,7 @@ export function CircuitBoard() {
               if (!sent) reject(new Error('Backend not connected'))
             })
           }
-          
+
           // For non-AI conditions
           if (conditionPassed) return cell.onPass || input
           if ((cell.loopBackTo ?? 0) >= 1) return { loopBackTo: cell.loopBackTo! }
@@ -944,7 +1002,7 @@ export function CircuitBoard() {
         } catch (e) {
           throw new Error(`Condition evaluation error: ${e instanceof Error ? e.message : e}`)
         }
-      
+
       case 'web_fetch':
         // Fetch from URL
         let url = cell.content.trim()
@@ -954,13 +1012,13 @@ export function CircuitBoard() {
         if (!url) {
           throw new Error('No URL specified')
         }
-        
+
         const method = cell.fetchMethod || 'GET'
         const timeout = (cell.fetchTimeout || 30) * 1000
         const maxSize = cell.fetchMaxSize ?? 8388608
-        
+
         updateCell(cell.id, { output: `Fetching ${method} ${url}...` })
-        
+
         try {
           // Parse headers
           let headers: Record<string, string> = {}
@@ -978,14 +1036,14 @@ export function CircuitBoard() {
               }
             }
           }
-          
+
           // Prepare body for POST/PUT
           let body: string | undefined = undefined
           if ((method === 'POST' || method === 'PUT') && cell.fetchBody) {
-            const bodyTemplate = cell.fetchBody.includes('{{input}}') 
+            const bodyTemplate = cell.fetchBody.includes('{{input}}')
               ? cell.fetchBody.replace(/\{\{input\}\}/g, input)
               : cell.fetchBody
-            
+
             // Try to parse as JSON, otherwise use as-is
             try {
               JSON.parse(bodyTemplate)
@@ -994,11 +1052,11 @@ export function CircuitBoard() {
               body = bodyTemplate
             }
           }
-          
+
           // Create abort controller for timeout
           const controller = new AbortController()
           const timeoutId = setTimeout(() => controller.abort(), timeout)
-          
+
           const response = await fetch(url, {
             method,
             headers: {
@@ -1008,24 +1066,24 @@ export function CircuitBoard() {
             body: body,
             signal: controller.signal,
           })
-          
+
           clearTimeout(timeoutId)
-          
+
           if (!response.ok) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`)
           }
-          
+
           // Check content length
           const contentLength = response.headers.get('content-length')
           if (contentLength && parseInt(contentLength) > maxSize) {
             throw new Error(`Response too large: ${contentLength} bytes (max: ${maxSize})`)
           }
-          
+
           const text = await response.text()
           if (text.length > maxSize) {
             throw new Error(`Response too large: ${text.length} bytes (max: ${maxSize})`)
           }
-          
+
           return text
         } catch (e) {
           if (e instanceof Error && e.name === 'AbortError') {
@@ -1033,16 +1091,16 @@ export function CircuitBoard() {
           }
           throw new Error(`Fetch error: ${e instanceof Error ? e.message : e}`)
         }
-      
+
       case 'vector_index':
         // Index a file into the vector store
         const filePathToIndex = (input || cell.content || '').trim()
         if (!filePathToIndex) {
           throw new Error('No file path specified. Enter a file path in the cell content or connect from previous cell.')
         }
-        
+
         updateCell(cell.id, { output: `Indexing ${filePathToIndex}...` })
-        
+
         try {
           const response = await fetch('http://localhost:8000/api/search/index/file', {
             method: 'POST',
@@ -1052,12 +1110,12 @@ export function CircuitBoard() {
               chunk_strategy: 'sentence',
             }),
           })
-          
+
           if (!response.ok) {
             const errData = await response.json()
             throw new Error(errData.detail || 'Failed to index file')
           }
-          
+
           const result = await response.json()
           if (result.success) {
             const chunkCount = result.chunk_count || 0
@@ -1069,16 +1127,16 @@ export function CircuitBoard() {
         } catch (e) {
           throw new Error(`Vector indexing failed: ${e instanceof Error ? e.message : e}`)
         }
-      
+
       case 'vector_search':
         // Search the vector store
         const searchQuery = (input || cell.content || '').trim()
         if (!searchQuery) {
           throw new Error('No search query specified. Enter a query in the cell content or connect from previous cell.')
         }
-        
+
         updateCell(cell.id, { output: `Searching: ${searchQuery}...` })
-        
+
         try {
           const response = await fetch('http://localhost:8000/api/search/search', {
             method: 'POST',
@@ -1089,54 +1147,54 @@ export function CircuitBoard() {
               collection: 'loom_files', // Default to files collection
             }),
           })
-          
+
           if (!response.ok) {
             const errData = await response.json()
             throw new Error(errData.detail || 'Search failed')
           }
-          
+
           const result = await response.json()
           const results = result.results || []
-          
+
           if (results.length === 0) {
             return `🔍 No results found for: '${searchQuery}'\n\nMake sure you have indexed some documents first using the INDEX cell.`
           }
-          
+
           // Format results nicely
           const outputLines = [`🔍 Found ${results.length} results for: '${searchQuery}'\n`]
-          
+
           for (let i = 0; i < results.length; i++) {
             const r = results[i]
             const similarity = r.similarity || 0
             const contentPreview = (r.content || '').substring(0, 200)
             const metadata = r.metadata || {}
             const source = metadata.file_path || metadata.source || 'unknown'
-            
+
             outputLines.push(`\n[${i + 1}] Similarity: ${(similarity * 100).toFixed(1)}%`)
             outputLines.push(`📄 Source: ${source}`)
             outputLines.push(`💬 Preview: ${contentPreview}...`)
           }
-          
+
           // Also include full content for RAG context
-          const fullContext = results.map((r: any, i: number) => 
+          const fullContext = results.map((r: any, i: number) =>
             `[${i + 1}] ${r.content || ''}`
           ).join('\n\n---\n\n')
-          
+
           return outputLines.join('\n') + '\n\n---\n\n' + fullContext
         } catch (e) {
           throw new Error(`Vector search failed: ${e instanceof Error ? e.message : e}`)
         }
-      
+
       case 'terminal_history':
         // Query terminal conversation history
         const { queryTerminalHistory } = await import('../../hooks/useTerminalOutput')
-        
+
         updateCell(cell.id, { output: 'Querying terminal history...' })
-        
+
         try {
           let query: any = {}
           const content = (input || cell.content || '').trim()
-          
+
           if (content) {
             // Try to parse as JSON query
             try {
@@ -1146,7 +1204,7 @@ export function CircuitBoard() {
               query = { search: content }
             }
           }
-          
+
           // Parse query parameters from cell properties if available
           const cellQuery: any = {
             search: query.search || (cell as any).terminalHistorySearch,
@@ -1156,21 +1214,21 @@ export function CircuitBoard() {
             before: query.before || (cell as any).terminalHistoryBefore,
             sessionName: query.sessionName || (cell as any).terminalHistorySession,
           }
-          
+
           // Clean up undefined values
           Object.keys(cellQuery).forEach(key => {
             if (cellQuery[key] === undefined) delete cellQuery[key]
           })
-          
+
           const entries = queryTerminalHistory(cellQuery)
-          
+
           if (entries.length === 0) {
             return `📜 No terminal history entries found matching query.\n\nQuery: ${JSON.stringify(cellQuery, null, 2)}`
           }
-          
+
           // Format entries nicely
           const outputLines = [`📜 Found ${entries.length} terminal history entries:\n`]
-          
+
           for (let i = 0; i < entries.length; i++) {
             const entry = entries[i]
             const time = new Date(entry.timestamp).toLocaleString()
@@ -1180,26 +1238,27 @@ export function CircuitBoard() {
               system: '⚙️',
               error: '❌',
               image: '🖼️',
+              audio: '🎵',
             }[entry.type] || '○'
-            
-            const contentPreview = entry.content.length > 200 
+
+            const contentPreview = entry.content.length > 200
               ? entry.content.substring(0, 200) + '...'
               : entry.content
-            
+
             outputLines.push(`\n[${i + 1}] ${typeIcon} [${entry.type.toUpperCase()}] ${time}`)
             outputLines.push(`${contentPreview}`)
           }
-          
+
           // Also include full content for processing
-          const fullContext = entries.map((e, i) => 
+          const fullContext = entries.map((e, i) =>
             `[${i + 1}] [${e.type}] ${new Date(e.timestamp).toISOString()}\n${e.content}`
           ).join('\n\n---\n\n')
-          
+
           return outputLines.join('\n') + '\n\n---\n\nFull Context:\n\n' + fullContext
         } catch (e) {
           throw new Error(`Terminal history query failed: ${e instanceof Error ? e.message : e}`)
         }
-      
+
       default:
         return input
     }
@@ -1209,12 +1268,12 @@ export function CircuitBoard() {
   const runCell = useCallback(async (id: string) => {
     const cellIndex = cells.findIndex((c) => c.id === id)
     if (cellIndex === -1) return
-    
+
     const cell = cells[cellIndex]
     const { input, originalQuestion } = gatherInput(cellIndex, cells)
-    
+
     updateCell(id, { status: 'running', output: undefined, error: undefined })
-    
+
     try {
       const result = await executeCell(cell, input, originalQuestion)
       const output = typeof result === 'object' && result !== null && 'loopBackTo' in result
@@ -1222,9 +1281,9 @@ export function CircuitBoard() {
         : (result as string)
       updateCell(id, { status: 'success', output })
     } catch (e) {
-      updateCell(id, { 
-        status: 'error', 
-        error: e instanceof Error ? e.message : 'Unknown error' 
+      updateCell(id, {
+        status: 'error',
+        error: e instanceof Error ? e.message : 'Unknown error'
       })
     }
   }, [cells, executeCell, updateCell, gatherInput])
@@ -1305,9 +1364,9 @@ export function CircuitBoard() {
               <span className="text-[10px] text-terminal-muted tracking-widest">MODEL SLOTS</span>
               {(['A', 'B', 'C'] as ModelSlot[]).map((slot) => (
                 <div key={slot} className="flex items-center gap-2">
-                  <span 
+                  <span
                     className="text-xs font-bold w-5 h-5 flex items-center justify-center border"
-                    style={{ 
+                    style={{
                       color: SLOT_LABELS[slot].color,
                       borderColor: SLOT_LABELS[slot].color,
                     }}
@@ -1329,9 +1388,9 @@ export function CircuitBoard() {
               ))}
               {/* Image Model Slot */}
               <div className="flex items-center gap-2">
-                <span 
+                <span
                   className="text-xs font-bold w-5 h-5 flex items-center justify-center border"
-                  style={{ 
+                  style={{
                     color: '#ff69b4',
                     borderColor: '#ff69b4',
                   }}
@@ -1364,21 +1423,19 @@ export function CircuitBoard() {
             <div className="flex border border-terminal-border">
               <button
                 onClick={() => handleViewModeChange('linear')}
-                className={`px-3 py-1 text-xs font-bold tracking-wider transition-none ${
-                  viewMode === 'linear'
-                    ? 'bg-phosphor text-void'
-                    : 'text-terminal-muted hover:text-phosphor'
-                }`}
+                className={`px-3 py-1 text-xs font-bold tracking-wider transition-none ${viewMode === 'linear'
+                  ? 'bg-phosphor text-void'
+                  : 'text-terminal-muted hover:text-phosphor'
+                  }`}
               >
                 LINEAR
               </button>
               <button
                 onClick={() => handleViewModeChange('canvas')}
-                className={`px-3 py-1 text-xs font-bold tracking-wider transition-none ${
-                  viewMode === 'canvas'
-                    ? 'bg-phosphor text-void'
-                    : 'text-terminal-muted hover:text-phosphor'
-                }`}
+                className={`px-3 py-1 text-xs font-bold tracking-wider transition-none ${viewMode === 'canvas'
+                  ? 'bg-phosphor text-void'
+                  : 'text-terminal-muted hover:text-phosphor'
+                  }`}
               >
                 CANVAS
               </button>
@@ -1389,11 +1446,10 @@ export function CircuitBoard() {
             {/* Model Slots Toggle */}
             <button
               onClick={() => setShowModelConfig(!showModelConfig)}
-              className={`text-xs px-2 py-1 border transition-none ${
-                showModelConfig 
-                  ? 'border-phosphor text-phosphor' 
-                  : 'border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor'
-              }`}
+              className={`text-xs px-2 py-1 border transition-none ${showModelConfig
+                ? 'border-phosphor text-phosphor'
+                : 'border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor'
+                }`}
               title="Configure model slots"
             >
               <span className="font-bold" style={{ color: SLOT_LABELS.A.color }}>A</span>
@@ -1443,14 +1499,14 @@ export function CircuitBoard() {
           </div>
 
           <div className="flex items-center gap-2">
-            <button 
-              onClick={clearOutputs} 
+            <button
+              onClick={clearOutputs}
               className="text-xs text-terminal-muted hover:text-phosphor px-2 py-1 border border-terminal-border"
             >
               CLEAR
             </button>
-            <button 
-              onClick={runAllCells} 
+            <button
+              onClick={runAllCells}
               disabled={isRunning}
               className="btn-terminal text-sm px-6 disabled:opacity-50"
             >
@@ -1503,12 +1559,12 @@ export function CircuitBoard() {
                       eds.map((edge) =>
                         edge.id === oldEdge.id
                           ? {
-                              ...edge,
-                              source: newConnection.source!,
-                              target: newConnection.target!,
-                              sourceHandle: newConnection.sourceHandle ?? edge.sourceHandle,
-                              targetHandle: newConnection.targetHandle ?? edge.targetHandle,
-                            }
+                            ...edge,
+                            source: newConnection.source!,
+                            target: newConnection.target!,
+                            sourceHandle: newConnection.sourceHandle ?? edge.sourceHandle,
+                            targetHandle: newConnection.targetHandle ?? edge.targetHandle,
+                          }
                           : edge
                       )
                     )
