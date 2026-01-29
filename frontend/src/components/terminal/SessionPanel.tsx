@@ -13,6 +13,7 @@ interface SessionPanelProps {
   onLoadSession: (name: string) => void
   onSaveSession: () => void
   onNewSession: () => void
+  onDeleteSession?: (name: string) => void
   currentEntryCount: number
 }
 
@@ -22,6 +23,7 @@ export function SessionPanel({
   onLoadSession,
   onSaveSession,
   onNewSession,
+  onDeleteSession,
   currentEntryCount,
 }: SessionPanelProps) {
   const [sessions, setSessions] = useState<Record<string, SessionInfo>>({})
@@ -44,20 +46,30 @@ export function SessionPanel({
 
   useEffect(() => {
     refreshSessions()
-    
+
     // Refresh on storage changes (from other tabs or commands)
     const handleStorage = (e: StorageEvent) => {
       if (e.key === SESSIONS_KEY) {
         refreshSessions()
       }
     }
+
+    // Refresh immediately on session save/delete events
+    const handleSessionChange = () => {
+      refreshSessions()
+    }
+
     window.addEventListener('storage', handleStorage)
-    
-    // Also refresh periodically (for same-tab updates)
-    const interval = setInterval(refreshSessions, 2000)
-    
+    window.addEventListener('loom:session-saved', handleSessionChange)
+    window.addEventListener('loom:session-deleted', handleSessionChange)
+
+    // Reduced polling interval as backup (events are primary)
+    const interval = setInterval(refreshSessions, 10000)
+
     return () => {
       window.removeEventListener('storage', handleStorage)
+      window.removeEventListener('loom:session-saved', handleSessionChange)
+      window.removeEventListener('loom:session-deleted', handleSessionChange)
       clearInterval(interval)
     }
   }, [refreshSessions])
@@ -69,7 +81,7 @@ export function SessionPanel({
     const date = new Date(ts)
     const now = new Date()
     const diffDays = Math.floor((now.getTime() - ts) / (1000 * 60 * 60 * 24))
-    
+
     if (diffDays === 0) {
       return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     } else if (diffDays === 1) {
@@ -82,10 +94,9 @@ export function SessionPanel({
   }
 
   return (
-    <div 
-      className={`h-full bg-void border-r border-terminal-border transition-all duration-200 flex flex-col ${
-        isCollapsed ? 'w-10' : 'w-44'
-      }`}
+    <div
+      className={`h-full bg-void border-r border-terminal-border transition-all duration-200 flex flex-col ${isCollapsed ? 'w-10' : 'w-44'
+        }`}
     >
       {/* Header */}
       <div className="border-b border-terminal-border flex items-center">
@@ -115,7 +126,7 @@ export function SessionPanel({
           </div>
         </div>
       )}
-      
+
       {/* Collapsed: Just show icons */}
       {isCollapsed && (
         <div className="flex-1 flex flex-col items-center py-2 gap-1">
@@ -147,30 +158,48 @@ export function SessionPanel({
           ) : (
             <div className="py-1">
               {sessionList.map(([name, info]) => (
-                <button
+                <div
                   key={name}
-                  onClick={() => onLoadSession(name)}
                   onMouseEnter={() => setHoveredSession(name)}
                   onMouseLeave={() => setHoveredSession(null)}
-                  title={`Load "${name}" (replaces current)`}
-                  className={`w-full text-left px-3 py-2 transition-colors group ${
-                    hoveredSession === name ? 'bg-slate' : ''
-                  }`}
+                  className={`w-full text-left px-3 py-2 transition-colors group ${hoveredSession === name ? 'bg-slate' : ''
+                    }`}
                 >
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] text-terminal-muted group-hover:text-phosphor truncate flex-1">
+                    <button
+                      onClick={() => onLoadSession(name)}
+                      title={`Load "${name}" (replaces current)`}
+                      className="text-[10px] text-terminal-muted group-hover:text-phosphor truncate flex-1 text-left"
+                    >
                       {name}
-                    </span>
+                    </button>
+                    {onDeleteSession && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onDeleteSession(name)
+                        }}
+                        className="opacity-0 group-hover:opacity-100 text-[10px] text-terminal-muted hover:text-red-400 px-1 transition-opacity"
+                        title={`Delete "${name}"`}
+                      >
+                        ✕
+                      </button>
+                    )}
                   </div>
-                  <div className="flex items-center justify-between mt-0.5">
-                    <span className="text-[8px] text-terminal-muted/60">
-                      {info.entryCount} entries
-                    </span>
-                    <span className="text-[8px] text-terminal-muted/60">
-                      {formatDate(info.savedAt)}
-                    </span>
-                  </div>
-                </button>
+                  <button
+                    onClick={() => onLoadSession(name)}
+                    className="w-full"
+                  >
+                    <div className="flex items-center justify-between mt-0.5">
+                      <span className="text-[8px] text-terminal-muted/60">
+                        {info.entryCount} entries
+                      </span>
+                      <span className="text-[8px] text-terminal-muted/60">
+                        {formatDate(info.savedAt)}
+                      </span>
+                    </div>
+                  </button>
+                </div>
               ))}
             </div>
           )}
@@ -251,7 +280,7 @@ export function SaveSessionModal({ isOpen, onClose, onSave, defaultName }: SaveM
     <div className="fixed inset-0 bg-void/80 flex items-center justify-center z-50">
       <div className="bg-slate border border-phosphor p-4 w-72 shadow-glow">
         <div className="text-[10px] text-phosphor tracking-widest mb-3">SAVE SESSION</div>
-        
+
         <form onSubmit={handleSubmit}>
           <input
             type="text"
@@ -261,7 +290,7 @@ export function SaveSessionModal({ isOpen, onClose, onSave, defaultName }: SaveM
             autoFocus
             className="w-full bg-void border border-terminal-border px-3 py-2 text-phosphor font-mono text-xs focus:outline-none focus:border-phosphor"
           />
-          
+
           <div className="flex gap-2 mt-3">
             <button
               type="button"

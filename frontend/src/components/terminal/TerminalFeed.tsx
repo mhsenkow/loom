@@ -71,6 +71,9 @@ function saveSession(name: string, entries: LogEntry[]): boolean {
     index[name] = { savedAt: Date.now(), entryCount: entries.length }
     localStorage.setItem(SESSIONS_KEY, JSON.stringify(index))
 
+    // Dispatch custom event to notify SessionPanel immediately
+    window.dispatchEvent(new CustomEvent('loom:session-saved', { detail: { name } }))
+
     return true
   } catch (e) {
     console.warn('[LOOM] Failed to save session:', e)
@@ -99,6 +102,9 @@ function deleteSession(name: string): boolean {
     const index = loadSessionsIndex()
     delete index[name]
     localStorage.setItem(SESSIONS_KEY, JSON.stringify(index))
+
+    // Dispatch custom event to notify SessionPanel immediately
+    window.dispatchEvent(new CustomEvent('loom:session-deleted', { detail: { name } }))
 
     return true
   } catch (e) {
@@ -236,6 +242,7 @@ export function TerminalFeed() {
     error?: string
     progress?: number
     message?: string
+    seed?: number
   } | null>(null)
 
   const feedRef = useRef<HTMLDivElement>(null)
@@ -1801,6 +1808,18 @@ export function TerminalFeed() {
     }])
   }, [])
 
+  const handleDeleteSession = useCallback((name: string) => {
+    if (deleteSession(name)) {
+      const timestamp = Date.now()
+      setEntries(prev => [...prev, {
+        id: `system-${timestamp}`,
+        type: 'system',
+        content: `Session "${name}" deleted`,
+        timestamp,
+      }])
+    }
+  }, [])
+
   // Handle image upload and analysis
   const handleImageUpload = useCallback(async (imageBase64: string) => {
     const imageUrl = imageBase64 // Store for display
@@ -1938,6 +1957,7 @@ export function TerminalFeed() {
         onLoadSession={handleLoadSession}
         onSaveSession={() => setShowSaveModal(true)}
         onNewSession={handleNewSession}
+        onDeleteSession={handleDeleteSession}
         currentEntryCount={entries.length}
       />
 
@@ -2331,7 +2351,7 @@ export function TerminalFeed() {
         <MusicGenerationPanel
           generation={musicGeneration}
           onClose={() => setMusicGeneration(null)}
-          onGenerate={(prompt, lyrics, duration) => {
+          onGenerate={(prompt, lyrics, duration, guidanceScale, steps, seed) => {
             // Update state to generating
             setMusicGeneration({
               prompt,
@@ -2340,6 +2360,7 @@ export function TerminalFeed() {
               status: 'generating',
               progress: 0,
               message: 'Initializing model...',
+              seed,
             })
 
             // Call backend to generate
@@ -2351,8 +2372,9 @@ export function TerminalFeed() {
                 lyrics: lyrics || undefined,
                 use_lyrics: !!lyrics, // Important: backend requires this flag to use lyrics
                 duration,
-                guidance_scale: 7.0,
-                steps: 20,
+                guidance_scale: guidanceScale,
+                steps: steps,
+                seed,
               }),
             })
               .then(async res => {
@@ -2368,6 +2390,7 @@ export function TerminalFeed() {
                     duration,
                     audioUrl: `${BACKEND_URL}${data.audio_url}`,
                     status: 'success',
+                    seed: data.seed,
                   })
                 } else {
                   throw new Error(data.message || 'Unknown error')
