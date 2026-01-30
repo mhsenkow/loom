@@ -7,11 +7,13 @@ Set ORPHEUS_TTS_URL to your Orpheus/Baseten inference URL, or pass endpointOverr
 import asyncio
 import logging
 import os
+import re
+from pathlib import Path
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, BackgroundTasks
-from fastapi.responses import Response
+from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File, Form
+from fastapi.responses import Response, FileResponse
 from pydantic import BaseModel, Field
 
 from app.services.tts_service import (
@@ -21,8 +23,28 @@ from app.services.tts_service import (
     run_local_orpheus_cpp_sync,
     run_local_orpheus_sync,
 )
+from app.services.prosody_engine import (
+    naturalize_text,
+    get_dynamic_temperature,
+    get_pause_duration_ms,
+)
 
 router = APIRouter()
+
+# Long-term storage: backend/data/tts/ (same pattern as data/images, data/music)
+def _tts_data_dir() -> Path:
+    base = Path(__file__).resolve().parent.parent.parent
+    d = base / "data" / "tts"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _safe_entry_id(entry_id: str) -> str:
+    """Allow only safe chars for filenames (alphanumeric, dash, underscore). No dots."""
+    if not entry_id or len(entry_id) > 200:
+        return ""
+    return re.sub(r"[^a-zA-Z0-9_\-]", "", entry_id) or ""
+
 
 ORPHEUS_TTS_URL = os.environ.get("ORPHEUS_TTS_URL", "").strip()
 # Optional: for Baseten (and similar) use ORPHEUS_TTS_API_KEY; sent as Authorization: Api-Key <key>
@@ -38,6 +60,10 @@ class OrpheusParams(BaseModel):
         description="neutral | expressive | calm | sick (sniffling) | unsure | angry | sad — strong temp override + emotive tags",
     )
     endpoint_override: Optional[str] = Field(None, description="Override ORPHEUS_TTS_URL for this request")
+    # Naturalization: makes speech more human-like
+    naturalize: bool = Field(True, description="Enable prosody engine: emotive tags, breath pauses, natural cadence")
+    breath_frequency: float = Field(0.35, ge=0.0, le=1.0, description="How often to insert breath pauses (0-1)")
+    dynamic_temperature: bool = Field(True, description="Auto-adjust temperature based on text emotion")
 
 
 class TTSSpeakRequest(BaseModel):
@@ -62,24 +88,54 @@ async def tts_speak(request: TTSSpeakRequest):
         voice = request.orpheus.voice
         temperature = request.orpheus.temperature
         repetition_penalty = request.orpheus.repetition_penalty
-        # Reading style: strong temperature override + Orpheus emotive tags (see Orpheus README)
         style = (request.orpheus.reading_style or "neutral").strip().lower()
+        
+        # === PROSODY ENGINE: Naturalize text for human-like speech ===
         text_for_prompt = request.text
+        prosody_metadata = {}
+        
+        if request.orpheus.naturalize:
+            # Apply prosody engine: emotive tags, breath pauses, emphasis pauses
+            text_for_prompt, prosody_metadata = naturalize_text(
+                text_for_prompt,
+                reading_style=style if style != "neutral" else None,
+                enable_emotion_detection=True,
+                breath_frequency=request.orpheus.breath_frequency,
+                thoughtfulness=0.3 if style in ("calm", "unsure") else 0.15,
+            )
+            logging.getLogger(__name__).debug(
+                "Prosody engine: %s -> %s chars, emotion=%s, transforms=%s",
+                prosody_metadata.get('original_length'),
+                prosody_metadata.get('final_length'),
+                prosody_metadata.get('detected_emotion'),
+                prosody_metadata.get('applied_transforms'),
+            )
+        
+        # === DYNAMIC TEMPERATURE: Adjust based on text emotion ===
+        if request.orpheus.dynamic_temperature:
+            temperature = get_dynamic_temperature(text_for_prompt, temperature, style if style != "neutral" else None)
+        
+        # === READING STYLE: Strong temperature overrides (after dynamic adjustment) ===
         if style == "expressive":
             temperature = max(temperature, 1.45)
         elif style == "calm":
             temperature = min(temperature, 0.22)
         elif style == "sick":
-            text_for_prompt = "<sniffle> <sniffle> " + request.text
+            # Prosody engine already adds <sniffle> tags, but ensure at least one
+            if "<sniffle>" not in text_for_prompt:
+                text_for_prompt = "<sniffle> " + text_for_prompt
             temperature = min(temperature, 0.5)
         elif style == "unsure":
-            text_for_prompt = "<sigh> " + request.text
+            if "<sigh>" not in text_for_prompt:
+                text_for_prompt = "<sigh> " + text_for_prompt
             temperature = max(temperature, 1.35)
         elif style == "angry":
             temperature = max(temperature, 1.5)
         elif style == "sad":
-            text_for_prompt = "<sigh> " + request.text
+            if "<sigh>" not in text_for_prompt and "<sob>" not in text_for_prompt:
+                text_for_prompt = "<sigh> " + text_for_prompt
             temperature = min(temperature, 0.28)
+        
         # Orpheus prompt format: "{voice}: {text}"
         prompt = f"{voice}: {text_for_prompt}"
 
@@ -191,3 +247,46 @@ async def tts_download_model(background_tasks: BackgroundTasks):
         return {"status": "already_cached", "message": "Orpheus model is already downloaded."}
     background_tasks.add_task(download_orpheus_model)
     return {"status": "started", "message": "Orpheus model download started. Check GET /api/tts/status for progress."}
+
+
+# --- Prosody hints for streaming TTS ---
+
+class PauseHintRequest(BaseModel):
+    sentence: str = Field(..., min_length=1)
+
+
+@router.post("/pause-hint")
+async def tts_pause_hint(request: PauseHintRequest):
+    """Return suggested pause duration (ms) after a sentence for natural pacing."""
+    duration = get_pause_duration_ms(request.sentence)
+    return {"pause_ms": duration, "sentence": request.sentence}
+
+
+# --- Long-term TTS recordings (data/tts folder) ---
+
+@router.post("/files")
+async def tts_save_file(entry_id: str = Form(...), file: UploadFile = File(...)):
+    """Save a TTS WAV recording for an entry. Stored under data/tts/{entry_id}.wav."""
+    safe_id = _safe_entry_id(entry_id)
+    if not safe_id:
+        raise HTTPException(status_code=400, detail="Invalid entry_id")
+    path = _tts_data_dir() / f"{safe_id}.wav"
+    try:
+        content = await file.read()
+        path.write_bytes(content)
+        return {"status": "saved", "entry_id": entry_id, "path": str(path)}
+    except Exception as e:
+        logging.getLogger(__name__).exception("TTS save file failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/files/{entry_id}")
+async def tts_get_file(entry_id: str):
+    """Return a saved TTS WAV file for an entry, or 404."""
+    safe_id = _safe_entry_id(entry_id)
+    if not safe_id:
+        raise HTTPException(status_code=400, detail="Invalid entry_id")
+    path = _tts_data_dir() / f"{safe_id}.wav"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="No TTS recording for this entry")
+    return FileResponse(path, media_type="audio/wav")

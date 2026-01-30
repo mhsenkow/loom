@@ -1,6 +1,7 @@
 import { useCallback, useState, useEffect } from 'react'
 import { AvatarContainer } from './AvatarContainer'
 import { AvatarLibrary } from './AvatarLibrary'
+import { TTSBackendLoader } from './TTSBackendLoader'
 import type { AvatarConfig, AvatarSoundVisualParams } from '../../types/avatar'
 import type { AudioAnalyzerState } from '../../hooks/useAudioAnalyzer'
 import type { LogEntry } from '../../types/module'
@@ -21,6 +22,7 @@ const SOUND_PRESETS: { id: OrpheusSoundPreset; label: string }[] = [
   { id: 'warm', label: 'Warm (more bass)' },
   { id: 'bright', label: 'Bright (more treble)' },
   { id: 'radio', label: 'Radio' },
+  { id: 'vintage', label: '80s Retro (tape + warmth)' },
 ]
 
 function CollapsibleSection({
@@ -66,11 +68,23 @@ export interface AvatarPanelProps {
   listening: boolean
   onSpeak: (text: string) => void
   onStop: () => void
+  /** When on, TTS is generated as soon as an AI response arrives (Orpheus only); cached for replay */
+  autoGenerateAudio?: boolean
+  onAutoGenerateAudioChange?: (v: boolean) => void
   /** AI entries to choose from for "Read aloud" */
   aiEntries: LogEntry[]
   /** Currently selected entry id for Read aloud */
   selectedEntryId: string | null
   onSelectEntry: (entryId: string | null) => void
+  /** Cached audio blob for the selected entry (Orpheus); enables Play button */
+  cachedAudioBlob?: Blob
+  /** Entry id currently being generated (show "Generating…") */
+  generatingEntryId?: string | null
+  isOrpheusGenerating?: boolean
+  /** Trigger generate for selected entry (Orpheus); when done, cache and play */
+  onGenerateForSelected?: () => void
+  /** Play cached blob for selected entry */
+  onPlayCached?: () => void
   /** Voice controls from useSpeechSynthesis */
   voices: SpeechSynthesisVoice[]
   selectedVoice: SpeechSynthesisVoice | null
@@ -118,9 +132,16 @@ export function AvatarPanel({
   listening,
   onSpeak,
   onStop,
+  autoGenerateAudio = false,
+  onAutoGenerateAudioChange,
   aiEntries,
   selectedEntryId,
   onSelectEntry,
+  cachedAudioBlob,
+  generatingEntryId = null,
+  isOrpheusGenerating = false,
+  onGenerateForSelected,
+  onPlayCached,
   voices,
   selectedVoice,
   onVoiceChange,
@@ -175,8 +196,9 @@ export function AvatarPanel({
 
   return (
     <div className="fixed right-0 top-0 bottom-0 w-96 bg-slate border-l-2 border-phosphor z-40 flex flex-col overflow-hidden">
-      {/* Avatar view – tall, centered, so orb rarely hits cut-off */}
+      {/* Avatar view – tall, centered; floating TTS loader to the left when generating */}
       <div className="absolute top-0 left-0 right-0 h-[480px] flex items-center justify-center pointer-events-none overflow-hidden opacity-65">
+        <TTSBackendLoader active={!!isOrpheusGenerating} />
         <AvatarContainer
           config={config}
           audio={audio}
@@ -212,13 +234,31 @@ export function AvatarPanel({
         {/* Spacer pushes sections to bottom so avatar has room at top */}
         <div className="flex-1 min-h-[280px]" />
         <div className="flex flex-col gap-3 pb-4">
-        {/* Select response to read */}
+        {/* Select response to read / play */}
         <CollapsibleSection
           id="read-aloud"
-          title="Response to read aloud"
+          title={autoGenerateAudio ? 'Response audio' : 'Response to read aloud'}
           defaultOpen={true}
           className="bg-void/80 backdrop-blur-sm p-3 -mx-4 px-4 border-y border-terminal-border/30"
         >
+          {onAutoGenerateAudioChange && (
+            <label className="flex items-center gap-2 mb-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={autoGenerateAudio}
+                onChange={(e) => onAutoGenerateAudioChange(e.target.checked)}
+                className="rounded border-terminal-border bg-void text-phosphor"
+              />
+              <span className="text-[10px] text-phosphor">Automatically generate audio</span>
+            </label>
+          )}
+          <p className="text-[9px] text-terminal-muted mb-2">
+            {autoGenerateAudio && ttsModelType === 'orpheus'
+              ? 'Full response is generated as one chunk when the AI finishes; use Play to replay.'
+              : autoGenerateAudio
+                ? 'Use Orpheus-TTS (below) for generated recordings and replay.'
+                : 'Select a response, then Read or Generate.'}
+          </p>
           <div className="border border-terminal-border bg-void max-h-32 overflow-y-auto">
             {list.length === 0 ? (
               <div className="p-3 text-terminal-muted text-[10px]">No AI responses yet</div>
@@ -244,16 +284,42 @@ export function AvatarPanel({
               </ul>
             )}
           </div>
-          <div className="flex gap-2 mt-2 flex-wrap">
-            <button
-              type="button"
-              onClick={handleReadAloud}
-              disabled={speaking || !selectedContent.trim()}
-              className="btn-terminal text-xs px-3 py-1.5 disabled:opacity-50"
-              title="Read selected response aloud"
-            >
-              🔊 Read
-            </button>
+          <div className="flex gap-2 mt-2 flex-wrap items-center">
+            {generatingEntryId === selectedEntryId && isOrpheusGenerating ? (
+              <span className="text-xs text-phosphor px-3 py-1.5" title="Audio is being generated">
+                Generating…
+              </span>
+            ) : cachedAudioBlob && onPlayCached ? (
+              <button
+                type="button"
+                onClick={onPlayCached}
+                disabled={speaking}
+                className="btn-terminal text-xs px-3 py-1.5 disabled:opacity-50"
+                title="Play saved recording"
+              >
+                ▶ Play
+              </button>
+            ) : onGenerateForSelected && selectedContent.trim() ? (
+              <button
+                type="button"
+                onClick={onGenerateForSelected}
+                disabled={speaking || isOrpheusGenerating || !selectedContent.trim()}
+                className="btn-terminal text-xs px-3 py-1.5 disabled:opacity-50"
+                title="Generate and play audio (Orpheus)"
+              >
+                Generate
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleReadAloud}
+                disabled={speaking || !selectedContent.trim()}
+                className="btn-terminal text-xs px-3 py-1.5 disabled:opacity-50"
+                title="Read selected response aloud"
+              >
+                🔊 Read
+              </button>
+            )}
             {speaking && (
               <button
                 type="button"
@@ -276,11 +342,11 @@ export function AvatarPanel({
           </div>
         </CollapsibleSection>
 
-        {/* TTS model type: Browser vs Orpheus */}
+        {/* TTS model type: Browser vs Orpheus — collapsed when auto-generate is on */}
         <CollapsibleSection
           id="tts-model"
           title="TTS model"
-          defaultOpen={false}
+          defaultOpen={!autoGenerateAudio}
           className="bg-void/70 backdrop-blur-sm p-3 -mx-4 px-4 border-y border-terminal-border/50"
         >
           <div className="space-y-2">

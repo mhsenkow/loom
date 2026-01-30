@@ -40,6 +40,7 @@ import {
 } from '../../hooks/useCircuitRunner'
 import { NOTEBOOK_TEMPLATES } from '../circuit/TemplatesSidebar'
 import type { LogEntry } from '../../types/module'
+import { buildConversationContext, buildEnhancedPrompt } from '../../utils/conversationContext'
 
 const BACKEND_URL = 'http://localhost:8000'
 const STORAGE_KEY = 'loom-terminal-history'
@@ -436,7 +437,7 @@ export function TerminalFeed() {
     return { ...DEFAULT_ORPHEUS_PARAMS }
   })
 
-  const { speak: speakOrpheus, stop: stopOrpheus, isSpeaking: isSpeakingOrpheus } = useOrpheusTTS(orpheusParams, { backendUrl: BACKEND_URL })
+  const { speak: speakOrpheus, stop: stopOrpheus, isSpeaking: isSpeakingOrpheus, generate: generateOrpheus, playBlob: playOrpheusBlob, isGenerating: isOrpheusGenerating } = useOrpheusTTS(orpheusParams, { backendUrl: BACKEND_URL })
 
   const isSpeaking = ttsModelType === 'browser' ? isSpeakingBrowser : isSpeakingOrpheus
   const speakTTSUnified = useCallback((text: string) => {
@@ -447,6 +448,46 @@ export function TerminalFeed() {
     if (ttsModelType === 'browser') stopTTS()
     else stopOrpheus()
   }, [ttsModelType, stopTTS, stopOrpheus])
+
+  const [autoGenerateAudio, setAutoGenerateAudio] = useState(() => {
+    try {
+      const v = localStorage.getItem('loom-auto-generate-audio')
+      return v === 'true'
+    } catch { }
+    return false
+  })
+  const [audioCacheByEntryId, setAudioCacheByEntryId] = useState<Record<string, Blob>>({})
+  const [generatingEntryId, setGeneratingEntryId] = useState<string | null>(null)
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('loom-auto-generate-audio', String(autoGenerateAudio))
+    } catch { }
+  }, [autoGenerateAudio])
+
+  /** Persist TTS blob to backend data/tts folder (long-term). Fire-and-forget. */
+  const saveTTSBlobToBackend = useCallback((entryId: string, blob: Blob) => {
+    const form = new FormData()
+    form.append('entry_id', entryId)
+    form.append('file', blob, 'audio.wav')
+    fetch(`${BACKEND_URL}/api/tts/files`, { method: 'POST', body: form }).catch(() => {})
+  }, [])
+
+  /** When selected entry has no in-memory cache, try to load from backend data/tts (long-term). */
+  useEffect(() => {
+    if (ttsModelType !== 'orpheus' || !selectedAiEntryId || audioCacheByEntryId[selectedAiEntryId]) return
+    let cancelled = false
+    fetch(`${BACKEND_URL}/api/tts/files/${encodeURIComponent(selectedAiEntryId)}`)
+      .then(res => {
+        if (!res.ok || cancelled) return null
+        return res.blob()
+      })
+      .then(blob => {
+        if (blob && !cancelled) setAudioCacheByEntryId(prev => ({ ...prev, [selectedAiEntryId]: blob }))
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [ttsModelType, selectedAiEntryId, audioCacheByEntryId])
 
   const {
     startRecording,
@@ -591,6 +632,8 @@ export function TerminalFeed() {
 
   const feedRef = useRef<HTMLDivElement>(null)
   const currentAIEntryRef = useRef<string | null>(null)
+  /** Accumulated content for the current AI stream (so handleStatus has full text for TTS) */
+  const currentAIContentRef = useRef<string>('')
   const pendingImageUrlRef = useRef<string | null>(null)
   const commandInputEditorRef = useRef<any>(null)
 
@@ -832,6 +875,7 @@ export function TerminalFeed() {
   ) => {
     const entryId = `ai-${timestamp}`
     currentAIEntryRef.current = entryId
+    currentAIContentRef.current = ''
 
     setEntries(prev => [...prev, {
       id: entryId,
@@ -842,6 +886,7 @@ export function TerminalFeed() {
     }])
 
     const handleChunk = (chunk: { content: string }) => {
+      currentAIContentRef.current += chunk.content
       setEntries(prev => prev.map(entry =>
         entry.id === entryId
           ? { ...entry, content: entry.content + chunk.content }
@@ -851,25 +896,41 @@ export function TerminalFeed() {
 
     const handleStatus = (statusData: { status: string; message: string }) => {
       if (statusData.status === 'success' || statusData.status === 'error') {
+        const isSuccess = statusData.status === 'success'
+        const content = (currentAIContentRef.current || '').trim()
+        // Full-chunk TTS: generate once response is complete (fast, reliable)
+        if (isSuccess && content && autoGenerateAudio && ttsModelType === 'orpheus') {
+          setGeneratingEntryId(entryId)
+          setSelectedAiEntryId(entryId)
+          generateOrpheus(content).then(blob => {
+            setAudioCacheByEntryId(prev => ({ ...prev, [entryId]: blob }))
+            saveTTSBlobToBackend(entryId, blob)
+            setGeneratingEntryId(null)
+            playOrpheusBlob(blob)
+          }).catch(() => setGeneratingEntryId(null))
+        }
         setEntries(prev => {
-          const entry = prev.find(e => e.id === entryId)
           if (speakNextAiResponseRef.current) {
             speakNextAiResponseRef.current = false
             setVoiceChatWaitingForAi(false)
-            if (entry && statusData.status === 'success') {
-              const content = entry.content || ''
-              setLastAiSaid(content)
-              setTimeout(() => speakTTSUnified(content), 0)
+            if (isSuccess) {
+              const text = currentAIContentRef.current || ''
+              setLastAiSaid(text)
+              if (!(autoGenerateAudio && ttsModelType === 'orpheus')) {
+                setTimeout(() => speakTTSUnified(text), 0)
+              }
             }
           }
-          return prev.map(entry =>
-            entry.id === entryId
+          return prev.map(ent =>
+            ent.id === entryId
               ? {
-                ...entry,
+                ...ent,
                 status: statusData.status as 'success' | 'error',
-                content: entry.content || (statusData.status === 'error' ? `Error: ${statusData.message}` : 'No response received.'),
+                content: statusData.status === 'error'
+                  ? (ent.content || `Error: ${statusData.message}`)
+                  : (currentAIContentRef.current || ent.content || 'No response received.'),
               }
-              : entry
+              : ent
           )
         })
         currentAIEntryRef.current = null
@@ -928,37 +989,8 @@ export function TerminalFeed() {
         ? `${circuitContext}\n\n---\n\nUser question: ${prompt}`
         : prompt
     } else {
-      // Full or Key: include conversation history (entries not yet including this user message)
-      // Also include image entries with their analysis
-      const relevant = entries.filter(e =>
-        e.type === 'user' || e.type === 'ai' || e.type === 'image' || e.type === 'system'
-      ).slice(-16)
-
-      const historyBlock = relevant.map(e => {
-        if (e.type === 'user') {
-          return `User: ${e.content}`
-        } else if (e.type === 'image') {
-          // Include image analysis in context
-          const analysis = e.imageAnalysis || 'Image added to conversation'
-          return `[Image Context]\n${analysis}`
-        } else if (e.type === 'system') {
-          return `[System Event]: ${e.content}`
-        } else {
-          const text = e.content || ''
-          if (contextMode === 'key') {
-            return `Assistant: ${text.slice(0, 120)}${text.length > 120 ? '...' : ''}`
-          }
-          return `Assistant: ${text}`
-        }
-      }).join('\n\n')
-
-      const withHistory = historyBlock
-        ? `Previous conversation:\n\n${historyBlock}\n\nUser: ${prompt}`
-        : `User: ${prompt}`
-
-      enhancedPrompt = circuitContext
-        ? `${circuitContext}\n\n---\n\n${withHistory}`
-        : withHistory
+      const conversationBlock = buildConversationContext(entries, { contextMode, maxTurns: 16 })
+      enhancedPrompt = buildEnhancedPrompt(prompt, conversationBlock, circuitContext)
     }
 
     // Include code context if active
@@ -977,7 +1009,7 @@ export function TerminalFeed() {
           : entry
       ))
     }
-  }, [sendChat, status.activeModel, models, entries, speakTTSUnified])
+  }, [sendChat, status.activeModel, models, entries, speakTTSUnified, autoGenerateAudio, ttsModelType, generateOrpheus, playOrpheusBlob, saveTTSBlobToBackend, setGeneratingEntryId, setAudioCacheByEntryId, setSelectedAiEntryId])
 
   useEffect(() => {
     handleAIRequestRef.current = handleAIRequest
@@ -2681,6 +2713,8 @@ export function TerminalFeed() {
           listening={isMicRecording}
           onSpeak={speakTTSUnified}
           onStop={stopTTSUnified}
+          autoGenerateAudio={autoGenerateAudio}
+          onAutoGenerateAudioChange={setAutoGenerateAudio}
           ttsModelType={ttsModelType}
           onTTSModelTypeChange={setTTSModelType}
           orpheusParams={orpheusParams}
@@ -2688,6 +2722,22 @@ export function TerminalFeed() {
           aiEntries={entries}
           selectedEntryId={selectedAiEntryId}
           onSelectEntry={setSelectedAiEntryId}
+          cachedAudioBlob={selectedAiEntryId ? audioCacheByEntryId[selectedAiEntryId] : undefined}
+          generatingEntryId={generatingEntryId}
+          isOrpheusGenerating={isOrpheusGenerating}
+          onGenerateForSelected={ttsModelType === 'orpheus' ? (() => {
+            const id = selectedAiEntryId
+            const text = entries.find(e => e.id === id)?.content?.trim()
+            if (!id || !text) return
+            setGeneratingEntryId(id)
+            generateOrpheus(text).then(blob => {
+              setAudioCacheByEntryId(prev => ({ ...prev, [id]: blob }))
+              saveTTSBlobToBackend(id, blob)
+              setGeneratingEntryId(null)
+              playOrpheusBlob(blob)
+            }).catch(() => setGeneratingEntryId(null))
+          }) : undefined}
+          onPlayCached={selectedAiEntryId && audioCacheByEntryId[selectedAiEntryId] ? () => playOrpheusBlob(audioCacheByEntryId[selectedAiEntryId]) : undefined}
           voices={voices}
           selectedVoice={selectedVoice}
           onVoiceChange={setSelectedVoice}

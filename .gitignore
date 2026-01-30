@@ -47,6 +47,7 @@ backend/data/chromadb/
 backend/data/loom.db
 backend/data/images/
 backend/data/music/
+backend/data/tts/
 *.sqlite3
 
 # Source maps (optional - uncomment to include)

@@ -11,8 +11,8 @@ export type OrpheusReadingStyle =
   | 'angry'
   | 'sad'     // <sigh>
 
-/** Post-playback sound character: EQ-style presets (bass/treble) */
-export type OrpheusSoundPreset = 'neutral' | 'warm' | 'bright' | 'radio'
+/** Post-playback sound character: EQ-style presets (bass/treble); vintage = 80s retro */
+export type OrpheusSoundPreset = 'neutral' | 'warm' | 'bright' | 'radio' | 'vintage'
 
 /** Orpheus-TTS parameters (see https://github.com/canopyai/Orpheus-TTS) */
 export interface OrpheusTTSParams {
@@ -30,15 +30,16 @@ export interface OrpheusTTSParams {
   endpointOverride?: string
 }
 
+/** Voice IDs + 80s retro–themed display names */
 export const ORPHEUS_VOICES = [
-  { id: 'tara', name: 'Tara' },
-  { id: 'leah', name: 'Leah' },
-  { id: 'jess', name: 'Jess' },
-  { id: 'leo', name: 'Leo' },
-  { id: 'dan', name: 'Dan' },
-  { id: 'mia', name: 'Mia' },
-  { id: 'zac', name: 'Zac' },
-  { id: 'zoe', name: 'Zoe' },
+  { id: 'tara', name: 'Tara · Synthwave' },
+  { id: 'leah', name: 'Leah · VHS' },
+  { id: 'jess', name: 'Jess · Neon' },
+  { id: 'leo', name: 'Leo · FM Radio' },
+  { id: 'dan', name: 'Dan · Tape' },
+  { id: 'mia', name: 'Mia · Late Night' },
+  { id: 'zac', name: 'Zac · Arcade' },
+  { id: 'zoe', name: 'Zoe · Retro' },
 ] as const
 
 export const DEFAULT_ORPHEUS_PARAMS: OrpheusTTSParams = {

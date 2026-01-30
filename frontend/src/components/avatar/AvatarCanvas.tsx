@@ -60,6 +60,7 @@ const VERTEX_SHADER = `
   varying vec3 vColor;
   varying float vEnergy;
   varying float vHeartbeat;
+  varying float vEmphasis;
   
   uniform float uTime;
   uniform float uAmplitude;
@@ -69,6 +70,8 @@ const VERTEX_SHADER = `
   uniform float uFieldScale;
   uniform float uSpeaking;
   uniform float uListening;
+  uniform float uEmphasis;     // Sudden energy spikes (emphasis/excitement)
+  uniform float uPauseDepth;   // Natural pauses during speech
   uniform float uEnergy;
   uniform float uCore;
   uniform float uWarmth;
@@ -209,6 +212,28 @@ const VERTEX_SHADER = `
       sin(swirlAngle * 0.6) * speakSwirl * 0.25
     );
     
+    // === EMPHASIS - sudden energy bursts (important words, excitement) ===
+    // Emphasis causes a quick radial burst, especially in outer particles
+    float emphasisBurst = uEmphasis * (0.5 + layer * 0.5) * 0.15;
+    vec3 emphasisDir = radialDir * emphasisBurst;
+    // Also adds a quick "sparkle" jitter on emphasis
+    float emphasisJitter = uEmphasis * 0.04 * layer;
+    vec3 emphasisSparkle = vec3(
+      noise3(noiseCoord * 10.0 + uTime * 20.0),
+      noise3(noiseCoord * 10.0 + uTime * 20.0 + 100.0),
+      noise3(noiseCoord * 10.0 + uTime * 20.0 + 200.0)
+    ) * emphasisJitter;
+    vEmphasis = uEmphasis;
+    
+    // === PAUSE - natural settling during speech pauses ===
+    // During pauses, the avatar settles slightly inward and calms
+    float pauseSettle = uPauseDepth * 0.06;
+    vec3 pauseInward = -radialDir * pauseSettle * (0.3 + layer * 0.7);
+    // Reduce tremor/sparkle during pauses (calming)
+    float pauseCalm = 1.0 - uPauseDepth * 0.6;
+    tremor *= pauseCalm;
+    sparkleOffset *= pauseCalm;
+    
     // === LISTENING - attentive, focused ===
     float listenFocus = uListening * 0.1;
     float listenAlert = uListening * amp * 0.06;
@@ -226,6 +251,9 @@ const VERTEX_SHADER = `
     pos += sparkleOffset;
     pos += swirlOffset * (1.0 - layer * 0.4);
     pos += listenLean;
+    pos += emphasisDir;      // Emphasis burst
+    pos += emphasisSparkle;  // Emphasis jitter
+    pos += pauseInward;      // Pause settling
     pos *= 1.0 + speakEnergy;
     
     // === ASYMMETRY - break perfect sphere ===
@@ -263,6 +291,7 @@ const FRAGMENT_SHADER = `
   varying vec3 vColor;
   varying float vEnergy;
   varying float vHeartbeat;
+  varying float vEmphasis;
   
   uniform float uTime;
   uniform float uAmplitude;
@@ -275,6 +304,8 @@ const FRAGMENT_SHADER = `
   uniform float uSparkle;
   uniform float uListening;
   uniform float uSpeaking;
+  uniform float uEmphasis;
+  uniform float uPauseDepth;
   
   ${NOISE_FUNCTIONS}
   
@@ -326,6 +357,26 @@ const FRAGMENT_SHADER = `
     if (uSpeaking > 0.1) {
       vec3 speakWarm = vec3(1.0, 0.92, 0.8);
       col = mix(col, col * speakWarm, uSpeaking * (1.0 - vLayer) * 0.25);
+    }
+    
+    // === EMPHASIS - bright flash on important words ===
+    if (vEmphasis > 0.1) {
+      // Emphasis creates a brief bright flash, especially in outer particles
+      float emphasisGlow = vEmphasis * (0.3 + vLayer * 0.4);
+      // White-gold flash for emphasis
+      vec3 emphasisColor = vec3(1.0, 0.98, 0.9);
+      col = mix(col, emphasisColor, emphasisGlow * 0.5);
+      a *= 1.0 + emphasisGlow * 0.3;
+    }
+    
+    // === PAUSE - softer, contemplative during pauses ===
+    if (uPauseDepth > 0.1) {
+      // Pauses make the avatar softer, more introspective
+      float pauseSoften = uPauseDepth * 0.25;
+      // Slightly desaturate and cool during pauses
+      float gray = (col.r + col.g + col.b) / 3.0;
+      col = mix(col, vec3(gray * 0.95, gray, gray * 1.05), pauseSoften);
+      a *= 1.0 - pauseSoften * 0.2;
     }
     
     // High energy creates bright core
@@ -400,6 +451,8 @@ export function AvatarCanvas({
     highs: 0,
     speaking: 0,
     listening: 0,
+    emphasis: 0,      // Rate of change detection - sudden increases = emphasis
+    pauseDepth: 0,    // How deep into a pause (audio dip) we are
   })
   // Target values (set by props)
   const targetRef = useRef({
@@ -409,6 +462,13 @@ export function AvatarCanvas({
     highs: 0,
     speaking: 0,
     listening: 0,
+  })
+  // History for rate-of-change detection
+  const historyRef = useRef({
+    prevAmplitude: 0,
+    prevBass: 0,
+    emphasisDecay: 0,
+    pauseFrames: 0,    // How many frames amplitude has been low
   })
   const settleSpeedRef = useRef(1.0)
 
@@ -506,6 +566,8 @@ export function AvatarCanvas({
         uFieldScale: { value: config.fieldScale },
         uSpeaking: { value: 0 },
         uListening: { value: 0 },
+        uEmphasis: { value: 0 },     // Sudden energy increases (emphasis/excitement)
+        uPauseDepth: { value: 0 },   // How deep in a pause (natural settling)
         uPrimary: { value: new THREE.Vector3(...primaryVec) },
         uSecondary: { value: new THREE.Vector3(...secondaryVec) },
         uAccent: { value: new THREE.Vector3(...accentVec) },
@@ -529,6 +591,7 @@ export function AvatarCanvas({
       // Smooth lerp toward target values
       const s = smoothedRef.current
       const t = targetRef.current
+      const h = historyRef.current
       const attackSpeed = 0.18
       const releaseSpeed = 0.035 * settleSpeedRef.current
       
@@ -537,12 +600,40 @@ export function AvatarCanvas({
         return current + (target - current) * speed
       }
       
+      // === EMPHASIS DETECTION: Rate of change in amplitude ===
+      // When amplitude suddenly increases, that's emphasis (important word, excitement)
+      const ampDelta = t.amplitude - h.prevAmplitude
+      const bassDelta = t.bass - h.prevBass
+      
+      if (ampDelta > 0.08 || bassDelta > 0.1) {
+        // Sudden increase = emphasis moment
+        h.emphasisDecay = Math.min(1.0, h.emphasisDecay + ampDelta * 3 + bassDelta * 2)
+      } else {
+        // Decay emphasis over time
+        h.emphasisDecay = Math.max(0, h.emphasisDecay - 0.03)
+      }
+      
+      // === PAUSE DETECTION: Consecutive low-amplitude frames while speaking ===
+      const isSpeakingLow = t.speaking > 0.5 && t.amplitude < 0.1
+      if (isSpeakingLow) {
+        h.pauseFrames = Math.min(60, h.pauseFrames + 1) // Cap at ~1 second
+      } else {
+        h.pauseFrames = Math.max(0, h.pauseFrames - 3) // Quick recovery from pause
+      }
+      const pauseDepthTarget = h.pauseFrames > 5 ? Math.min(1, (h.pauseFrames - 5) / 30) : 0
+      
+      // Store current values for next frame's delta calculation
+      h.prevAmplitude = t.amplitude
+      h.prevBass = t.bass
+      
       s.amplitude = lerp(s.amplitude, t.amplitude)
       s.bass = lerp(s.bass, t.bass)
       s.mids = lerp(s.mids, t.mids)
       s.highs = lerp(s.highs, t.highs)
       s.speaking = lerp(s.speaking, t.speaking)
       s.listening = lerp(s.listening, t.listening)
+      s.emphasis = lerp(s.emphasis, h.emphasisDecay)
+      s.pauseDepth = lerp(s.pauseDepth, pauseDepthTarget)
       
       // Apply smoothed values to uniforms
       const mat = materialRef.current
@@ -554,6 +645,8 @@ export function AvatarCanvas({
       mat.uniforms.uHighs.value = s.highs
       mat.uniforms.uSpeaking.value = s.speaking
       mat.uniforms.uListening.value = s.listening
+      mat.uniforms.uEmphasis.value = s.emphasis
+      mat.uniforms.uPauseDepth.value = s.pauseDepth
       // Apply sound→visual params every frame so sliders always take effect
       mat.uniforms.uEnergy.value = params.energy
       mat.uniforms.uCore.value = params.core

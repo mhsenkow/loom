@@ -1,5 +1,6 @@
-import { useCallback, useState, useRef } from 'react'
+import { useCallback, useState, useRef, useEffect } from 'react'
 import type { OrpheusTTSParams } from '../types/tts'
+import { AudioProcessor, type SoundPreset, type AudioProcessorConfig } from '../utils/audioProcessor'
 
 const API_BASE = 'http://localhost:8000'
 
@@ -8,6 +9,12 @@ export interface UseOrpheusTTSOptions {
   onStart?: () => void
   onEnd?: () => void
   onError?: (e: Error) => void
+  /** Enable reverb for presence/warmth (default: true) */
+  reverbEnabled?: boolean
+  /** Reverb amount 0-1 (default: 0.15) */
+  reverbAmount?: number
+  /** Enable compression for even dynamics (default: true) */
+  compressionEnabled?: boolean
 }
 
 export function useOrpheusTTS(
@@ -15,32 +22,181 @@ export function useOrpheusTTS(
   options: UseOrpheusTTSOptions = {}
 ) {
   const [isSpeaking, setIsSpeaking] = useState(false)
-  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const [isGenerating, setIsGenerating] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
-  const { backendUrl = API_BASE, onStart, onEnd, onError } = options
+  const generateAbortRef = useRef<AbortController | null>(null)
+  const processorRef = useRef<AudioProcessor | null>(null)
+  
+  const { 
+    backendUrl = API_BASE, 
+    onStart, 
+    onEnd, 
+    onError,
+    reverbEnabled = true,
+    reverbAmount = 0.15,
+    compressionEnabled = true,
+  } = options
+  const preset = (orpheusParams.soundPreset ?? 'neutral') as SoundPreset
+
+  // Initialize and update audio processor
+  useEffect(() => {
+    if (!processorRef.current) {
+      processorRef.current = new AudioProcessor({
+        preset,
+        reverbEnabled,
+        reverbAmount,
+        compressionEnabled,
+        crossfadeMs: 40,
+      })
+    } else {
+      processorRef.current.updateConfig({
+        preset,
+        reverbEnabled,
+        reverbAmount,
+        compressionEnabled,
+      })
+    }
+  }, [preset, reverbEnabled, reverbAmount, compressionEnabled])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      processorRef.current?.close()
+      processorRef.current = null
+    }
+  }, [])
 
   const stop = useCallback(() => {
     if (abortRef.current) {
       abortRef.current.abort()
       abortRef.current = null
     }
-    const current = audioRef.current
-    if (current) {
-      if ('pause' in current && typeof current.pause === 'function') {
-        current.pause()
-        current.src = ''
-      } else if (current && typeof (current as { src?: AudioBufferSourceNode }).src?.stop === 'function') {
-        (current as { src: AudioBufferSourceNode }).src.stop()
-      }
-      audioRef.current = null
-    }
+    processorRef.current?.stop()
     setIsSpeaking(false)
   }, [])
+
+  /** Fetch TTS audio only; returns blob for caching. Does not play. */
+  const generate = useCallback(
+    async (text: string): Promise<Blob> => {
+      if (!text.trim()) throw new Error('Empty text')
+      if (generateAbortRef.current) generateAbortRef.current.abort()
+      const controller = new AbortController()
+      generateAbortRef.current = controller
+      setIsGenerating(true)
+      try {
+        const res = await fetch(`${backendUrl}/api/tts/speak`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: text.trim(),
+            model_type: 'orpheus',
+            orpheus: {
+              voice: orpheusParams.voice,
+              temperature: orpheusParams.temperature,
+              repetition_penalty: orpheusParams.repetitionPenalty,
+              reading_style: orpheusParams.readingStyle ?? undefined,
+              endpoint_override: orpheusParams.endpointOverride ?? undefined,
+              // Enable prosody engine for human-like speech
+              naturalize: true,
+              breath_frequency: 0.35,
+              dynamic_temperature: true,
+            },
+          }),
+          signal: controller.signal,
+        })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: res.statusText }))
+          throw new Error(err.detail || res.statusText)
+        }
+        const blob = await res.blob()
+        generateAbortRef.current = null
+        setIsGenerating(false)
+        return blob
+      } catch (e) {
+        if ((e as Error).name === 'AbortError') throw e
+        generateAbortRef.current = null
+        setIsGenerating(false)
+        throw e
+      }
+    },
+    [backendUrl, orpheusParams.voice, orpheusParams.temperature, orpheusParams.repetitionPenalty, orpheusParams.readingStyle, orpheusParams.endpointOverride]
+  )
+
+  /** Play a cached blob with full audio processing (reverb, compression, EQ). Optional customOnEnd for chaining. */
+  const playBlob = useCallback(
+    (blob: Blob, customOnEnd?: () => void) => {
+      stop()
+      setIsSpeaking(true)
+      onStart?.()
+      
+      const done = () => {
+        setIsSpeaking(false)
+        if (customOnEnd) {
+          customOnEnd()
+        } else {
+          onEnd?.()
+        }
+      }
+      
+      if (!processorRef.current) {
+        processorRef.current = new AudioProcessor({
+          preset,
+          reverbEnabled,
+          reverbAmount,
+          compressionEnabled,
+          crossfadeMs: 40,
+        })
+      }
+      
+      processorRef.current.playBlob(blob, done, (e) => {
+        setIsSpeaking(false)
+        onError?.(e)
+        if (customOnEnd) customOnEnd()
+      })
+    },
+    [preset, reverbEnabled, reverbAmount, compressionEnabled, stop, onStart, onEnd, onError]
+  )
+
+  /** Play a sequence of blobs with crossfade and pauses. */
+  const playSequence = useCallback(
+    (blobs: Blob[], pausesBetween: number[] = [], onAllEnd?: () => void) => {
+      if (blobs.length === 0) {
+        onAllEnd?.()
+        return
+      }
+      
+      stop()
+      setIsSpeaking(true)
+      onStart?.()
+      
+      if (!processorRef.current) {
+        processorRef.current = new AudioProcessor({
+          preset,
+          reverbEnabled,
+          reverbAmount,
+          compressionEnabled,
+          crossfadeMs: 40,
+        })
+      }
+      
+      processorRef.current.playSequence(blobs, pausesBetween, () => {
+        setIsSpeaking(false)
+        onEnd?.()
+        onAllEnd?.()
+      }, (e) => {
+        setIsSpeaking(false)
+        onError?.(e)
+      })
+    },
+    [preset, reverbEnabled, reverbAmount, compressionEnabled, stop, onStart, onEnd, onError]
+  )
 
   const speak = useCallback(
     async (text: string) => {
       if (!text.trim()) return
       stop()
+      if (generateAbortRef.current) generateAbortRef.current.abort()
+      generateAbortRef.current = null
 
       const controller = new AbortController()
       abortRef.current = controller
@@ -60,6 +216,9 @@ export function useOrpheusTTS(
               repetition_penalty: orpheusParams.repetitionPenalty,
               reading_style: orpheusParams.readingStyle ?? undefined,
               endpoint_override: orpheusParams.endpointOverride ?? undefined,
+              naturalize: true,
+              breath_frequency: 0.35,
+              dynamic_temperature: true,
             },
           }),
           signal: controller.signal,
@@ -71,67 +230,24 @@ export function useOrpheusTTS(
         }
 
         const blob = await res.blob()
-        const preset = orpheusParams.soundPreset ?? 'neutral'
-
-        if (preset !== 'neutral') {
-          // Apply sound preset via Web Audio (bass/treble EQ)
-          const arrayBuffer = await blob.arrayBuffer()
-          const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)()
-          const decoded = await ctx.decodeAudioData(arrayBuffer.slice(0))
-          const src = ctx.createBufferSource()
-          src.buffer = decoded
-
-          const filterNode = ctx.createBiquadFilter()
-          filterNode.frequency.value = preset === 'bright' ? 2400 : 200
-          filterNode.type = preset === 'bright' ? 'highshelf' : 'lowshelf'
-          filterNode.gain.value = preset === 'radio' ? 2 : preset === 'bright' ? 14 : 14
-
-          const onDone = () => {
-            audioRef.current = null
-            abortRef.current = null
-            setIsSpeaking(false)
-            onEnd?.()
-          }
-          src.onended = onDone
-
-          if (preset === 'radio') {
-            const mid = ctx.createBiquadFilter()
-            mid.type = 'peaking'
-            mid.frequency.value = 1100
-            mid.gain.value = 10
-            mid.Q.value = 1.2
-            src.connect(filterNode)
-            filterNode.connect(mid)
-            mid.connect(ctx.destination)
-          } else {
-            src.connect(filterNode)
-            filterNode.connect(ctx.destination)
-          }
-          src.start(0)
-          audioRef.current = { src } as unknown as HTMLAudioElement
-          return
+        
+        if (!processorRef.current) {
+          processorRef.current = new AudioProcessor({
+            preset,
+            reverbEnabled,
+            reverbAmount,
+            compressionEnabled,
+            crossfadeMs: 40,
+          })
         }
-
-        const url = URL.createObjectURL(blob)
-        const audio = new Audio(url)
-        audioRef.current = audio
-
-        audio.onended = () => {
-          URL.revokeObjectURL(url)
-          audioRef.current = null
-          abortRef.current = null
+        
+        processorRef.current.playBlob(blob, () => {
           setIsSpeaking(false)
           onEnd?.()
-        }
-        audio.onerror = () => {
-          URL.revokeObjectURL(url)
-          audioRef.current = null
-          abortRef.current = null
+        }, (e) => {
           setIsSpeaking(false)
-          onError?.(new Error('Orpheus TTS playback failed'))
-        }
-
-        await audio.play()
+          onError?.(e)
+        })
       } catch (e) {
         if ((e as Error).name === 'AbortError') return
         abortRef.current = null
@@ -139,8 +255,8 @@ export function useOrpheusTTS(
         onError?.(e instanceof Error ? e : new Error(String(e)))
       }
     },
-    [backendUrl, orpheusParams.voice, orpheusParams.temperature, orpheusParams.repetitionPenalty, orpheusParams.readingStyle, orpheusParams.soundPreset, orpheusParams.endpointOverride, stop, onStart, onEnd, onError]
+    [backendUrl, orpheusParams.voice, orpheusParams.temperature, orpheusParams.repetitionPenalty, orpheusParams.readingStyle, orpheusParams.endpointOverride, preset, reverbEnabled, reverbAmount, compressionEnabled, stop, onStart, onEnd, onError]
   )
 
-  return { speak, stop, isSpeaking }
+  return { speak, stop, isSpeaking, generate, playBlob, playSequence, isGenerating }
 }
