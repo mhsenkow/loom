@@ -30,8 +30,7 @@
           }
           return originalPut.call(this, request, response).catch(function(error) {
             if (error.message && error.message.includes('chrome-extension')) {
-              // Silently ignore chrome-extension caching errors
-              return;
+              return Promise.resolve();
             }
             throw error;
           });

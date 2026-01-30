@@ -38,6 +38,11 @@ class ResearchResponse(BaseModel):
     source_count: Optional[int] = None
     error: Optional[str] = None
 
+class InteractionRequest(BaseModel):
+    query: Optional[str] = None # For click/type
+    text: Optional[str] = None  # For type
+    direction: Optional[str] = "down" # For scroll
+
 @router.post("/visit", response_model=WebVisitResponse)
 async def visit_website(request: WebVisitRequest):
     """
@@ -45,7 +50,44 @@ async def visit_website(request: WebVisitRequest):
     Returns: title, cleaned article text (via Readability), screenshot, and optional vision analysis.
     """
     try:
-        result = await web_service.visit(request.url, analyze_vision=request.analyze_vision)
+        # Default to stateful=True for manual visits
+        result = await web_service.visit(request.url, analyze_vision=request.analyze_vision, stateful=True)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/click", response_model=WebVisitResponse)
+async def click_element(request: InteractionRequest):
+    """Click an element on the current page."""
+    try:
+        result = await web_service.interact_click(request.query)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/type", response_model=WebVisitResponse)
+async def type_text(request: InteractionRequest):
+    """Type text into an element."""
+    try:
+        result = await web_service.interact_type(request.query, request.text)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/scroll", response_model=WebVisitResponse)
+async def scroll_page(request: InteractionRequest):
+    """Scroll the current page."""
+    try:
+        result = await web_service.interact_scroll(request.direction)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/back", response_model=WebVisitResponse)
+async def go_back():
+    """Go back in browser history."""
+    try:
+        result = await web_service.go_back()
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

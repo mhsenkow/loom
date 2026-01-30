@@ -45,6 +45,8 @@ yarn-error.log*
 # Database / Data
 backend/data/chromadb/
 backend/data/loom.db
+backend/data/images/
+backend/data/music/
 *.sqlite3
 
 # Source maps (optional - uncomment to include)

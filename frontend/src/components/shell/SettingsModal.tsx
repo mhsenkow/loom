@@ -299,6 +299,22 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             </div>
           </section>
 
+          {/* Voice & Avatar Section */}
+          <section>
+            <h3 className="text-phosphor font-bold text-sm tracking-wider mb-3">
+              VOICE & AVATAR
+            </h3>
+            <p className="text-terminal-muted text-xs mb-2">
+              Use the <strong className="text-phosphor">✦</strong> button on the right sidebar to open the Voice & Avatar panel.
+            </p>
+            <ul className="text-terminal-muted text-[10px] list-disc list-inside space-y-1">
+              <li><strong className="text-phosphor">Response to read</strong> – Pick any AI reply and read it aloud (TTS)</li>
+              <li><strong className="text-phosphor">Voice (TTS)</strong> – Voice, rate, and pitch for read-aloud</li>
+              <li><strong className="text-phosphor">Avatar</strong> – Pick a style (Data Nebula, Plasma Orb, etc.)</li>
+              <li><strong className="text-phosphor">Voice chat</strong> – Opens a modal to talk back and forth (hold to talk, AI replies aloud)</li>
+            </ul>
+          </section>
+
           {/* Hugging Face Section */}
           <section>
             <h3 className="text-phosphor font-bold text-sm tracking-wider mb-3">

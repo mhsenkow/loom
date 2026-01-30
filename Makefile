@@ -26,6 +26,18 @@ install:
 	@echo "Installing frontend dependencies..."
 	@cd frontend && npm install
 
+# Install orpheus-speech into the backend venv (CUDA only). Run after 'make install'.
+install-orpheus:
+	@echo "Installing orpheus-speech into backend venv..."
+	@cd backend && source venv/bin/activate && pip install orpheus-speech
+	@echo "Done. Restart the backend (e.g. make notebook-open) to use local Orpheus TTS."
+
+# Install orpheus-cpp + llama-cpp-python (Metal) for local Orpheus on Mac (M1/M2/M3). Run after 'make install'.
+install-orpheus-mac:
+	@echo "Installing orpheus-cpp and llama-cpp-python (Metal) into backend venv..."
+	@cd backend && source venv/bin/activate && pip install orpheus-cpp && pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/metal
+	@echo "Done. Restart the backend (e.g. make notebook-open) to use local Orpheus TTS on Mac."
+
 clean:
 	@echo "Cleaning up..."
 	@rm -rf backend/venv

@@ -11,7 +11,16 @@ import { CodeContextPanel } from './CodeContextPanel'
 import { MusicSetupPanel } from './MusicSetupPanel'
 import { MusicGenerationPanel } from './MusicGenerationPanel'
 import { MusicPlayerCard } from './MusicPlayerCard'
+import { AvatarPanel } from '../avatar/AvatarPanel'
+import { VoiceChatModal } from '../avatar/VoiceChatModal'
 import { useSocket } from '../../hooks/useSocket'
+import { useAudioAnalyzer } from '../../hooks/useAudioAnalyzer'
+import { useSpeechSynthesis } from '../../hooks/useSpeechSynthesis'
+import { useMicrophoneRecorder } from '../../hooks/useMicrophoneRecorder'
+import { getAvatarConfig, DEFAULT_AVATAR_ID, type AvatarSoundVisualParams, DEFAULT_SOUND_VISUAL_PARAMS } from '../../types/avatar'
+import type { TTSModelType, OrpheusTTSParams } from '../../types/tts'
+import { DEFAULT_TTS_MODEL_TYPE, DEFAULT_ORPHEUS_PARAMS } from '../../types/tts'
+import { useOrpheusTTS } from '../../hooks/useOrpheusTTS'
 
 // Recommended image generation models (matching ImageGenerationPanel)
 const RECOMMENDED_IMAGE_GEN_MODELS = [
@@ -381,6 +390,194 @@ export function TerminalFeed() {
     seed?: number
   } | null>(null)
 
+  const [avatarPanelOpen, setAvatarPanelOpen] = useState(false)
+  const [voiceChatModalOpen, setVoiceChatModalOpen] = useState(false)
+  const [selectedAiEntryId, setSelectedAiEntryId] = useState<string | null>(null)
+  const [lastUserSaid, setLastUserSaid] = useState('')
+  const [lastAiSaid, setLastAiSaid] = useState('')
+  const [voiceChatWaitingForAi, setVoiceChatWaitingForAi] = useState(false)
+  const speakNextAiResponseRef = useRef(false)
+  const voiceChatContentRef = useRef('')
+  const voiceChatRecordingRef = useRef(false)
+  const handleAIRequestRef = useRef<((prompt: string, timestamp: number, contextMode: 'input' | 'key' | 'full') => void) | null>(null)
+
+  const [avatarConfig, setAvatarConfig] = useState(() => {
+    try {
+      const saved = localStorage.getItem('loom-avatar-config')
+      if (saved) return getAvatarConfig(saved)
+    } catch { }
+    return getAvatarConfig(DEFAULT_AVATAR_ID)
+  })
+
+  const { speak: speakTTS, stop: stopTTS, isSpeaking: isSpeakingBrowser, voices, selectedVoice, setSelectedVoice, rate, setRate, pitch, setPitch, volume, setVolume } = useSpeechSynthesis({})
+
+  const [ttsModelType, setTTSModelType] = useState<TTSModelType>(() => {
+    try {
+      const v = localStorage.getItem('loom-tts-model-type')
+      if (v === 'browser' || v === 'orpheus') return v
+    } catch { }
+    return DEFAULT_TTS_MODEL_TYPE
+  })
+  const [orpheusParams, setOrpheusParams] = useState<OrpheusTTSParams>(() => {
+    try {
+      const v = localStorage.getItem('loom-tts-orpheus-params')
+      if (v) {
+        const p = JSON.parse(v) as Partial<OrpheusTTSParams>
+        return {
+          voice: p.voice ?? DEFAULT_ORPHEUS_PARAMS.voice,
+          temperature: Math.min(2, Math.max(0, p.temperature ?? DEFAULT_ORPHEUS_PARAMS.temperature)),
+          repetitionPenalty: Math.min(2, Math.max(1, p.repetitionPenalty ?? DEFAULT_ORPHEUS_PARAMS.repetitionPenalty)),
+          readingStyle: p.readingStyle ?? DEFAULT_ORPHEUS_PARAMS.readingStyle,
+          soundPreset: p.soundPreset ?? DEFAULT_ORPHEUS_PARAMS.soundPreset,
+          endpointOverride: p.endpointOverride,
+        }
+      }
+    } catch { }
+    return { ...DEFAULT_ORPHEUS_PARAMS }
+  })
+
+  const { speak: speakOrpheus, stop: stopOrpheus, isSpeaking: isSpeakingOrpheus } = useOrpheusTTS(orpheusParams, { backendUrl: BACKEND_URL })
+
+  const isSpeaking = ttsModelType === 'browser' ? isSpeakingBrowser : isSpeakingOrpheus
+  const speakTTSUnified = useCallback((text: string) => {
+    if (ttsModelType === 'browser') speakTTS(text)
+    else speakOrpheus(text)
+  }, [ttsModelType, speakTTS, speakOrpheus])
+  const stopTTSUnified = useCallback(() => {
+    if (ttsModelType === 'browser') stopTTS()
+    else stopOrpheus()
+  }, [ttsModelType, stopTTS, stopOrpheus])
+
+  const {
+    startRecording,
+    stopRecording,
+    isRecording: isMicRecording,
+    stream: micStream,
+  } = useMicrophoneRecorder({
+    onTranscript: (text) => {
+      if (!text.trim()) return
+      if (voiceChatRecordingRef.current) {
+        voiceChatRecordingRef.current = false
+        setLastUserSaid(text)
+        speakNextAiResponseRef.current = true
+        voiceChatContentRef.current = ''
+        setVoiceChatWaitingForAi(true)
+        handleAIRequestRef.current?.(text, Date.now(), 'full')
+      } else if (commandInputEditorRef.current) {
+        commandInputEditorRef.current.commands.setContent(text)
+        commandInputEditorRef.current.commands.focus('end')
+      }
+    },
+    backendUrl: BACKEND_URL,
+  })
+  const audioAnalyzer = useAudioAnalyzer(micStream, !!micStream)
+
+  const [syntheticAudio, setSyntheticAudio] = useState({ amp: 0, bass: 0, mids: 0, highs: 0 })
+  useEffect(() => {
+    if (!isSpeaking || micStream) {
+      setSyntheticAudio({ amp: 0, bass: 0, mids: 0, highs: 0 })
+      return
+    }
+    let raf = 0
+    const start = Date.now()
+    const tick = () => {
+      const elapsed = Date.now() - start
+      const period = Math.max(150, 400 / Math.max(0.5, rate))
+      const t = elapsed / period
+      
+      // Main amplitude with varied frequencies to simulate speech cadence
+      const amp = 0.4 + 0.35 * Math.sin(t) + 0.15 * Math.sin(t * 2.7) + 0.1 * Math.sin(t * 0.4)
+      
+      // Bass pulses slower (like syllables)
+      const bass = 0.3 + 0.4 * Math.abs(Math.sin(t * 0.7)) + 0.2 * Math.sin(t * 1.3)
+      
+      // Mids follow amplitude more closely
+      const mids = amp * 0.8 + 0.1 * Math.sin(t * 3.1)
+      
+      // Highs are more erratic (consonants)
+      const highs = 0.2 + 0.3 * Math.abs(Math.sin(t * 4.2)) + 0.15 * Math.random()
+      
+      setSyntheticAudio({
+        amp: Math.max(0, Math.min(1, amp)),
+        bass: Math.max(0, Math.min(1, bass)),
+        mids: Math.max(0, Math.min(1, mids)),
+        highs: Math.max(0, Math.min(1, highs)),
+      })
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [isSpeaking, micStream, rate])
+
+  const avatarAudio = micStream
+    ? audioAnalyzer
+    : {
+      amplitude: syntheticAudio.amp,
+      bass: syntheticAudio.bass,
+      mids: syntheticAudio.mids,
+      highs: syntheticAudio.highs,
+      fftSize: 256,
+    }
+
+  const [audioSensitivityOverride, setAudioSensitivityOverride] = useState(() => {
+    try {
+      const v = localStorage.getItem('loom-avatar-sensitivity')
+      if (v != null) {
+        const n = Number(v)
+        if (n >= 0.3 && n <= 2) return n
+      }
+    } catch { }
+    return 1.0
+  })
+
+  const [soundVisualParams, setSoundVisualParams] = useState<AvatarSoundVisualParams>(() => {
+    const clampV = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x))
+    try {
+      const v = localStorage.getItem('loom-avatar-sound-visual')
+      if (v) {
+        const parsed = JSON.parse(v) as Partial<AvatarSoundVisualParams>
+        return {
+          energy: clampV(parsed.energy ?? 1, 0.3, 2),
+          core: clampV(parsed.core ?? 1, 0.3, 2),
+          warmth: clampV(parsed.warmth ?? 1, 0.3, 2),
+          sparkle: clampV(parsed.sparkle ?? 1, 0.3, 2),
+          settle: clampV(parsed.settle ?? 1, 0.5, 2),
+        }
+      }
+    } catch { }
+    return { ...DEFAULT_SOUND_VISUAL_PARAMS }
+  })
+
+  useEffect(() => {
+    try {
+      if (avatarConfig?.id) localStorage.setItem('loom-avatar-config', avatarConfig.id)
+    } catch { }
+  }, [avatarConfig?.id])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('loom-avatar-sensitivity', String(audioSensitivityOverride))
+    } catch { }
+  }, [audioSensitivityOverride])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('loom-avatar-sound-visual', JSON.stringify(soundVisualParams))
+    } catch { }
+  }, [soundVisualParams])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('loom-tts-model-type', ttsModelType)
+    } catch { }
+  }, [ttsModelType])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('loom-tts-orpheus-params', JSON.stringify(orpheusParams))
+    } catch { }
+  }, [orpheusParams])
+
   // Current session tracking - ChatGPT style
   const [currentSessionName, setCurrentSessionName] = useState<string | null>(() => {
     // Try to restore from localStorage
@@ -654,15 +851,27 @@ export function TerminalFeed() {
 
     const handleStatus = (statusData: { status: string; message: string }) => {
       if (statusData.status === 'success' || statusData.status === 'error') {
-        setEntries(prev => prev.map(entry =>
-          entry.id === entryId
-            ? {
-              ...entry,
-              status: statusData.status as 'success' | 'error',
-              content: entry.content || (statusData.status === 'error' ? `Error: ${statusData.message}` : 'No response received.'),
+        setEntries(prev => {
+          const entry = prev.find(e => e.id === entryId)
+          if (speakNextAiResponseRef.current) {
+            speakNextAiResponseRef.current = false
+            setVoiceChatWaitingForAi(false)
+            if (entry && statusData.status === 'success') {
+              const content = entry.content || ''
+              setLastAiSaid(content)
+              setTimeout(() => speakTTSUnified(content), 0)
             }
-            : entry
-        ))
+          }
+          return prev.map(entry =>
+            entry.id === entryId
+              ? {
+                ...entry,
+                status: statusData.status as 'success' | 'error',
+                content: entry.content || (statusData.status === 'error' ? `Error: ${statusData.message}` : 'No response received.'),
+              }
+              : entry
+          )
+        })
         currentAIEntryRef.current = null
       }
     }
@@ -768,9 +977,41 @@ export function TerminalFeed() {
           : entry
       ))
     }
-  }, [sendChat, status.activeModel, models, entries])
+  }, [sendChat, status.activeModel, models, entries, speakTTSUnified])
+
+  useEffect(() => {
+    handleAIRequestRef.current = handleAIRequest
+  }, [handleAIRequest])
 
   const handleSlashCommand = useCallback((command: string, timestamp: number) => {
+    // Helper for web interaction responses
+    const handleWebInteractionResponse = (data: any, ts: number) => {
+      if (data.status === 'success') {
+        let displayContent = `WEB INTERACTION: ${data.title}\n\n${data.text_content}`
+        if (data.vision_analysis) {
+          displayContent += `\n\n---\n🖼️ VISUAL ANALYSIS:\n${data.vision_analysis}`
+        }
+
+        setEntries(prev => [...prev, {
+          id: `web-${ts}`,
+          type: 'system',
+          content: displayContent,
+          imageUrl: data.screenshot_url,
+          timestamp: ts,
+        }])
+
+        // Auto-TL;DR trigger
+        let aiContext = `Here is the current state of the page "${data.title}" (${data.url}):\n\n${data.text_content}`
+        if (data.vision_analysis) {
+          aiContext += `\n\nVisual observations:\n${data.vision_analysis}`
+        }
+        aiContext += `\n\nPlease summarize the result of the interaction.`
+        handleAIRequest(aiContext, ts + 1)
+      } else {
+        addErrorEntry(`Interaction failed: ${data.error}`, ts)
+      }
+    }
+
     const [cmd, ...args] = command.slice(1).split(' ')
 
     switch (cmd.toLowerCase()) {
@@ -1186,18 +1427,34 @@ export function TerminalFeed() {
       }
 
       case 'visit': {
-        const url_arg = args.join(' ').trim()
-        if (!url_arg) {
+        const fullArg = args.join(' ').trim()
+        if (!fullArg) {
           addErrorEntry('Usage: /visit <url>', timestamp)
           break
         }
 
-        let targetUrl = url_arg
-        if (!targetUrl.startsWith('http')) {
-          targetUrl = `https://${targetUrl}`
+        // Smart extraction: Look for http/https URL first
+        let targetUrl = ''
+        const urlMatch = fullArg.match(/(https?:\/\/[^\s]+)/)
+
+        if (urlMatch) {
+          targetUrl = urlMatch[0]
+        } else {
+          // Fallback: assume first token is domain
+          targetUrl = args[0]
+          if (!targetUrl.startsWith('http')) {
+            targetUrl = `https://${targetUrl}`
+          }
         }
 
-        addSystemEntry(`Visiting ${targetUrl} (headless)...`, Date.now())
+        const visitId = `visit-${timestamp}`
+        setEntries(prev => [...prev, {
+          id: visitId,
+          type: 'system',
+          content: `Visiting ${targetUrl} (headless)...`,
+          timestamp,
+          status: 'running'
+        }])
 
         fetch(`${API_BASE}/api/web/visit`, {
           method: 'POST',
@@ -1206,37 +1463,13 @@ export function TerminalFeed() {
         })
           .then(res => res.json())
           .then(data => {
-            const nowTs = Date.now()
-            if (data.status === 'success') {
-              // Build content with optional vision analysis
-              let displayContent = `WEB BROWSE: ${data.title}\n\n${data.text_content}`
-              if (data.vision_analysis) {
-                displayContent += `\n\n---\n🖼️ VISUAL ANALYSIS:\n${data.vision_analysis}`
-              }
-
-              // Show title, text, and vision analysis
-              setEntries(prev => [...prev, {
-                id: `web-${nowTs}`,
-                type: 'system',
-                content: displayContent,
-                imageUrl: data.screenshot_url,
-                timestamp: nowTs,
-              }])
-
-              // Auto-TL;DR (include vision analysis in context if available)
-              let aiContext = `Here is the content of the web page "${data.title}" (${targetUrl}):\n\n${data.text_content}`
-              if (data.vision_analysis) {
-                aiContext += `\n\nVisual observations from the page:\n${data.vision_analysis}`
-              }
-              aiContext += `\n\nPlease provide a concise TL;DR summary of this content.`
-
-              handleAIRequest(aiContext, nowTs + 1)
-            } else {
-              addErrorEntry(`Web visit failed: ${data.error}`, nowTs)
-            }
+            // Mark loading entry as success
+            setEntries(prev => prev.map(e => e.id === visitId ? { ...e, status: 'success' } : e))
+            handleWebInteractionResponse(data, Date.now())
           })
           .catch(e => {
-            addErrorEntry(`Web visit request failed: ${e.message}`, Date.now())
+            setEntries(prev => prev.map(e => e.id === visitId ? { ...e, status: 'error' } : e))
+            addErrorEntry(`Visit failed: ${e.message}`, Date.now())
           })
         break
       }
@@ -1248,7 +1481,14 @@ export function TerminalFeed() {
           break
         }
 
-        addSystemEntry(`🔍 Deep searching: "${query}"...`, timestamp)
+        const researchId = `research-${timestamp}`
+        setEntries(prev => [...prev, {
+          id: researchId,
+          type: 'system',
+          content: `🔍 Deep searching: "${query}"...`,
+          timestamp,
+          status: 'running'
+        }])
 
         fetch(`${API_BASE}/api/web/research`, {
           method: 'POST',
@@ -1257,24 +1497,17 @@ export function TerminalFeed() {
         })
           .then(res => res.json())
           .then(data => {
+            setEntries(prev => prev.map(e => e.id === researchId ? { ...e, status: 'success' } : e))
             const nowTs = Date.now()
             if (data.status === 'success' && data.sources) {
-              // Build combined research content
-              let researchContent = `📚 RESEARCH RESULTS: "${query}"\n\n`
-              researchContent += `Found ${data.source_count} sources:\n\n`
+              const sourceContents = data.sources.map((s: any, i: number) =>
+                `[Source ${i + 1}: ${s.title}](${s.url})\n${(s.text_content || '').slice(0, 1500)}`
+              )
 
-              const sourceContents: string[] = []
-              data.sources.forEach((source: { title: string; url: string; content: string; screenshot_url?: string }, idx: number) => {
-                researchContent += `---\n**Source ${idx + 1}: ${source.title}**\n${source.url}\n\n`
-                researchContent += source.content.slice(0, 1000) + (source.content.length > 1000 ? '...' : '') + '\n\n'
-                sourceContents.push(`Source ${idx + 1}: ${source.title}\nURL: ${source.url}\nContent:\n${source.content}`)
-              })
-
-              // Display research results
               setEntries(prev => [...prev, {
                 id: `research-${nowTs}`,
                 type: 'system',
-                content: researchContent,
+                content: `RESEARCH COMPLETE: ${data.sources.length} sources found.\n\nSynthesizing answer...`,
                 timestamp: nowTs,
               }])
 
@@ -1287,8 +1520,92 @@ export function TerminalFeed() {
             }
           })
           .catch(e => {
+            setEntries(prev => prev.map(e => e.id === researchId ? { ...e, status: 'error' } : e))
             addErrorEntry(`Research request failed: ${e.message}`, Date.now())
           })
+        break
+      }
+
+      // --- Interactive Browsing Commands ---
+      case 'click': {
+        const query = args.join(' ').trim()
+        if (!query) {
+          addErrorEntry('Usage: /click <text or button name>', timestamp)
+          break
+        }
+
+        const clickId = `click-${timestamp}`
+        setEntries(prev => [...prev, {
+          id: clickId,
+          type: 'system',
+          content: `🖱️ Clicking "${query}"...`,
+          timestamp,
+          status: 'running'
+        }])
+
+        fetch(`${API_BASE}/api/web/click`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query }),
+        })
+          .then(res => res.json())
+          .then(data => {
+            setEntries(prev => prev.map(e => e.id === clickId ? { ...e, status: 'success' } : e))
+            handleWebInteractionResponse(data, timestamp)
+          })
+          .catch(e => {
+            setEntries(prev => prev.map(e => e.id === clickId ? { ...e, status: 'error' } : e))
+            addErrorEntry(`Click failed: ${e.message}`, Date.now())
+          })
+        break
+      }
+
+      case 'type': {
+        // Simple parsing: /type "selector" "text" or just /type text (if focused? logic needs query)
+        // Let's assume /type "search box" "hello world"
+        // Or simplistic: /type <query> <text>
+        // Getting quotes right in args split is hard with simple split(' ').
+        // Let's rely on simple split for now or improve arg parsing later.
+        // Assume: /type <query> <...text...>
+        if (args.length < 2) {
+          addErrorEntry('Usage: /type <element> <text>', timestamp)
+          break
+        }
+        const query = args[0]
+        const text = args.slice(1).join(' ')
+
+        addSystemEntry(`⌨️ Typing "${text}" into "${query}"...`, timestamp)
+        fetch(`${API_BASE}/api/web/type`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query, text }),
+        })
+          .then(res => res.json())
+          .then(data => handleWebInteractionResponse(data, timestamp))
+          .catch(e => addErrorEntry(`Type failed: ${e.message}`, Date.now()))
+        break
+      }
+
+      case 'scroll': {
+        const direction = args[0] === 'up' ? 'up' : 'down'
+        addSystemEntry(`📜 Scrolling ${direction}...`, timestamp)
+        fetch(`${API_BASE}/api/web/scroll`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ direction }),
+        })
+          .then(res => res.json())
+          .then(data => handleWebInteractionResponse(data, timestamp))
+          .catch(e => addErrorEntry(`Scroll failed: ${e.message}`, Date.now()))
+        break
+      }
+
+      case 'back': {
+        addSystemEntry(`🔙 Going back...`, timestamp)
+        fetch(`${API_BASE}/api/web/back`, { method: 'POST' })
+          .then(res => res.json())
+          .then(data => handleWebInteractionResponse(data, timestamp))
+          .catch(e => addErrorEntry(`Back failed: ${e.message}`, Date.now()))
         break
       }
 
@@ -2284,8 +2601,10 @@ export function TerminalFeed() {
           }
         }}
         onFolderContextClick={() => setCodeContextPanelOpen(!codeContextPanelOpen)}
+        onAvatarClick={() => setAvatarPanelOpen(true)}
         imageGenActive={!!imageGeneration}
         folderContextActive={codeContextActive}
+        avatarActive={avatarPanelOpen}
       />
 
       {/* Session Panel */}
@@ -2301,7 +2620,7 @@ export function TerminalFeed() {
       />
 
       {/* Main Terminal Area */}
-      <div className={`flex-1 flex flex-col transition-all duration-200 ${imageGeneration || musicGeneration ? 'mr-96' : ''}`}>
+      <div className={`flex-1 flex flex-col transition-all duration-200 ${imageGeneration || musicGeneration || avatarPanelOpen ? 'mr-96' : ''}`}>
         {/* Terminal Feed */}
         <div
           ref={feedRef}
@@ -2350,6 +2669,64 @@ export function TerminalFeed() {
           onClose={() => setDownloadProgress(null)}
         />
       )}
+
+      {/* Avatar & Voice Panel */}
+      {avatarPanelOpen && (
+        <AvatarPanel
+          onClose={() => setAvatarPanelOpen(false)}
+          config={avatarConfig}
+          onConfigChange={setAvatarConfig}
+          audio={avatarAudio}
+          speaking={isSpeaking}
+          listening={isMicRecording}
+          onSpeak={speakTTSUnified}
+          onStop={stopTTSUnified}
+          ttsModelType={ttsModelType}
+          onTTSModelTypeChange={setTTSModelType}
+          orpheusParams={orpheusParams}
+          onOrpheusParamsChange={setOrpheusParams}
+          aiEntries={entries}
+          selectedEntryId={selectedAiEntryId}
+          onSelectEntry={setSelectedAiEntryId}
+          voices={voices}
+          selectedVoice={selectedVoice}
+          onVoiceChange={setSelectedVoice}
+          rate={rate}
+          onRateChange={setRate}
+          pitch={pitch}
+          onPitchChange={setPitch}
+          volume={volume}
+          onVolumeChange={setVolume}
+          audioSensitivityOverride={audioSensitivityOverride}
+          onAudioSensitivityOverrideChange={setAudioSensitivityOverride}
+          soundVisualParams={soundVisualParams}
+          onSoundVisualParamsChange={setSoundVisualParams}
+          onOpenVoiceChat={() => setVoiceChatModalOpen(true)}
+          pixelate={true}
+        />
+      )}
+
+      {/* Voice Chat Modal (talk back and forth) */}
+      <VoiceChatModal
+        isOpen={voiceChatModalOpen}
+        onClose={() => setVoiceChatModalOpen(false)}
+        config={avatarConfig}
+        audio={avatarAudio}
+        speaking={isSpeaking}
+        listening={isMicRecording}
+        onStartRecording={() => {
+          voiceChatRecordingRef.current = true
+          startRecording()
+        }}
+        onStopRecording={stopRecording}
+        isMicActive={isMicRecording}
+        lastUserSaid={lastUserSaid}
+        lastAiSaid={lastAiSaid}
+        waitingForAi={voiceChatWaitingForAi}
+        audioSensitivityOverride={audioSensitivityOverride}
+        soundVisualParams={soundVisualParams}
+        pixelate={true}
+      />
 
       {/* Image Analysis Panel */}
       {imageAnalysis && (

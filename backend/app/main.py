@@ -24,7 +24,7 @@ backend_dir = Path(__file__).parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-from app.routers import modules, images, files, circuits, search, remote, code_context, music, sessions, web
+from app.routers import modules, images, files, circuits, search, remote, code_context, music, sessions, web, tts
 from app.services.ollama_client import ollama_client
 from app.services.vector_store import VectorStore
 from app.services.storage import get_module as storage_get_module, init_db as storage_init_db
@@ -93,6 +93,7 @@ app.include_router(code_context.router, prefix="/api/code-context", tags=["code-
 app.include_router(music.router, prefix="/api/music", tags=["music"])
 app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
 app.include_router(web.router, prefix="/api/web", tags=["web"])
+app.include_router(tts.router, prefix="/api/tts", tags=["tts"])
 
 # Initialize database on startup
 @app.on_event("startup")

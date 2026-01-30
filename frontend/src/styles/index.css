@@ -346,3 +346,15 @@
 .react-flow__background-pattern {
   fill: var(--theme-phosphor-dim) !important;
 }
+
+/* Avatar – 8-bit style */
+.avatar-container canvas {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  display: block;
+}
+
+.avatar-8bit-wrapper {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}

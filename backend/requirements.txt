@@ -24,6 +24,10 @@ scipy>=1.10.0
 soundfile>=0.12.1
 huggingface_hub>=0.20.0
 
+# Orpheus TTS local inference (optional). Install to use the downloaded model without Baseten:
+#   pip install orpheus-speech
+# If not installed, set ORPHEUS_TTS_URL for remote inference.
+
 # File processing
 pymupdf>=1.23.0
 
