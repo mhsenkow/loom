@@ -1,5 +1,8 @@
 # LOOM // Personal Intelligence OS
 
+<img width="2560" height="1440" alt="image" src="https://github.com/user-attachments/assets/23072505-1b8f-41a8-88a7-d3815a4ad8dc" />
+
+
 <img width="2560" height="1440" alt="image" src="https://github.com/user-attachments/assets/d972b27e-1a4d-40cd-9c0d-e74c2ed78e46" />
 
 <img width="2560" height="1440" alt="image" src="https://github.com/user-attachments/assets/9eebe68f-8896-47f3-8200-d3b529af8c8e" />
