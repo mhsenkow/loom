@@ -1,4 +1,4 @@
-import { useCallback, useState, useEffect } from 'react'
+import { useCallback, useState, useEffect, useRef } from 'react'
 import ReactFlow, {
   Node,
   Edge,
@@ -14,6 +14,7 @@ import ReactFlow, {
 import 'reactflow/dist/style.css'
 import { ModuleNode } from './ModuleNode'
 import { LinearView } from './LinearView'
+import { FloatingToolbar } from './FloatingToolbar'
 import { TemplatesSidebar, NotebookTemplate } from './TemplatesSidebar'
 import { LoopBackEdge } from './LoopBackEdge'
 import type { ModuleType, ModuleStatus } from '../../types/module'
@@ -22,6 +23,7 @@ import { useSystemStatus } from '../../hooks/useSystemStatus'
 import { useSendToTerminal } from '../../hooks/useTerminalOutput'
 import { saveCircuit, saveModelSlots, loadModelSlots, SavedCircuit } from '../../hooks/useCircuitRunner'
 import { loadModulesFromBackend, saveModuleToBackend, deleteModuleFromBackend } from '../../hooks/useModules'
+import { ProviderSetup } from '../terminal/ProviderSetup'
 
 type ViewMode = 'linear' | 'canvas'
 
@@ -208,8 +210,12 @@ export function CircuitBoard() {
   const [showSaveSuccess, setShowSaveSuccess] = useState(false)
 
   const { sendChat } = useSocket()
-  const { status, models } = useSystemStatus()
+  const { status, models, cloudModels } = useSystemStatus()
   const sendToTerminal = useSendToTerminal()
+  const { stopGeneration } = useSocket()
+
+  // Provider setup modal state
+  const [showProviderSetup, setShowProviderSetup] = useState(false)
 
   // Model slot configuration - maps slots to actual model names
   const [modelSlots, setModelSlots] = useState<ModelSlotConfig>(() => loadModelSlots())
@@ -778,7 +784,17 @@ export function CircuitBoard() {
 
       case 'image_gen':
         // Use IMAGE slot from modelSlots, or cell.model, or default
-        const imageModel = cell.model || modelSlots.IMAGE || 'sdxl'
+        const fullImageModel = cell.model || modelSlots.IMAGE || 'sdxl'
+        // Auto-detect provider from model prefix (including ollama)
+        const knownImageProviders = ['openai', 'gemini', 'google', 'ollama']
+        const imagePrefix = fullImageModel.includes(':') ? fullImageModel.split(':')[0] : ''
+        const imageProvider = knownImageProviders.includes(imagePrefix) ? imagePrefix : 'local'
+
+        // Strip provider prefix for the API call if it's a known provider
+        const imageModel = imageProvider !== 'local' && fullImageModel.includes(':')
+          ? fullImageModel.substring(imagePrefix.length + 1)
+          : fullImageModel
+
         updateCell(cell.id, {
           output: `Loading model "${imageModel}"...`,
           status: 'running'
@@ -795,7 +811,7 @@ export function CircuitBoard() {
               prompt: input || 'a beautiful image',
               model: imageModel,
               negative_prompt: cell.content || '',
-              provider: 'local',
+              provider: imageProvider,
               width: 1024,
               height: 1024,
               steps: 30,
@@ -1273,8 +1289,14 @@ export function CircuitBoard() {
 
   // Run a single cell (loop-back is ignored: { loopBackTo } is treated as onFail)
   const runCell = useCallback(async (id: string) => {
+    // If already running, don't start another (unless we want to queue? simplify for now: block)
+    if (isRunning) return
+
     const cellIndex = cells.findIndex((c) => c.id === id)
     if (cellIndex === -1) return
+
+    setIsRunning(true)
+    isRunningRef.current = true
 
     const cell = cells[cellIndex]
     const { input, originalQuestion } = gatherInput(cellIndex, cells)
@@ -1292,51 +1314,81 @@ export function CircuitBoard() {
         status: 'error',
         error: e instanceof Error ? e.message : 'Unknown error'
       })
+    } finally {
+      setIsRunning(false)
+      isRunningRef.current = false
     }
-  }, [cells, executeCell, updateCell, gatherInput])
+  }, [cells, isRunning, executeCell, updateCell, gatherInput])
+
+  // Active cell state (lifted from LinearView)
+  const [activeCellId, setActiveCellId] = useState<string | null>(null)
+  const isRunningRef = useRef(false)
+
+  // Stop execution
+  const stopRunning = useCallback(() => {
+    setIsRunning(false)
+    isRunningRef.current = false
+    stopGeneration()
+  }, [stopGeneration])
 
   // Run all cells sequentially (with optional loop-back from conditionals)
   const runAllCells = useCallback(async () => {
+    if (isRunning) return
     setIsRunning(true)
+    isRunningRef.current = true
+
     const workingCells = [...cells]
     const loopCounts = new Map<string, number>()
 
-    for (let i = 0; i < workingCells.length; i++) {
-      const cell = workingCells[i]
-      updateCell(cell.id, { status: 'running', output: undefined, error: undefined })
+    try {
+      for (let i = 0; i < workingCells.length; i++) {
+        // Check for stop signal
+        if (!isRunningRef.current) break
 
-      const { input, originalQuestion } = gatherInput(i, workingCells)
+        const cell = workingCells[i]
+        updateCell(cell.id, { status: 'running', output: undefined, error: undefined })
 
-      try {
-        const result = await executeCell(cell, input, originalQuestion)
-        let output: string
+        const { input, originalQuestion } = gatherInput(i, workingCells)
 
-        if (typeof result === 'object' && result !== null && 'loopBackTo' in result) {
-          const r = result as { loopBackTo: number }
-          const count = loopCounts.get(cell.id) ?? 0
-          const max = cell.loopBackMax ?? 3
-          if (count >= max) {
-            output = cell.onFail || ''
-            loopCounts.delete(cell.id)
+        try {
+          const result = await executeCell(cell, input, originalQuestion)
+          let output: string
+
+          if (typeof result === 'object' && result !== null && 'loopBackTo' in result) {
+            const r = result as { loopBackTo: number }
+            const count = loopCounts.get(cell.id) ?? 0
+            const max = cell.loopBackMax ?? 3
+            if (count >= max) {
+              output = cell.onFail || ''
+              loopCounts.delete(cell.id)
+            } else {
+              loopCounts.set(cell.id, count + 1)
+              i = r.loopBackTo - 2 // 1-based → 0-based; for-loop i++ runs next, so -2 to land on loopBackTo cell
+              continue
+            }
           } else {
-            loopCounts.set(cell.id, count + 1)
-            i = r.loopBackTo - 2 // 1-based → 0-based; for-loop i++ runs next, so -2 to land on loopBackTo cell
-            continue
+            output = result as string
           }
-        } else {
-          output = result as string
+
+          updateCell(cell.id, { status: 'success', output })
+          workingCells[i] = { ...workingCells[i], output }
+        } catch (e) {
+          updateCell(cell.id, { status: 'error', error: e instanceof Error ? e.message : 'Unknown error' })
+          break
         }
-
-        updateCell(cell.id, { status: 'success', output })
-        workingCells[i] = { ...workingCells[i], output }
-      } catch (e) {
-        updateCell(cell.id, { status: 'error', error: e instanceof Error ? e.message : 'Unknown error' })
-        break
       }
+    } finally {
+      setIsRunning(false)
+      isRunningRef.current = false
     }
+  }, [cells, isRunning, executeCell, updateCell, gatherInput])
 
-    setIsRunning(false)
-  }, [cells, executeCell, updateCell, gatherInput])
+  // Run just the active cell
+  const runActiveCell = useCallback(() => {
+    if (activeCellId) {
+      runCell(activeCellId)
+    }
+  }, [activeCellId, runCell])
 
   const handleViewModeChange = (mode: ViewMode) => {
     if (mode === 'canvas') {
@@ -1345,11 +1397,19 @@ export function CircuitBoard() {
     setViewMode(mode)
   }
 
-  const clearOutputs = () => {
-    setCells((prev) =>
-      prev.map((cell) => ({ ...cell, output: undefined, error: undefined, status: 'idle' }))
-    )
-  }
+  // Clear ALL cells (delete everything)
+  const clearAllCells = useCallback(() => {
+    if (window.confirm('Are you sure you want to delete ALL cells?')) {
+      setCells([])
+      setCircuitName('')
+      setShowSaveSuccess(false)
+      // Sync canvas
+      if (viewMode === 'canvas') {
+        setNodes([])
+        setEdges([])
+      }
+    }
+  }, [viewMode, setNodes, setEdges])
 
   return (
     <div className="h-full w-full flex">
@@ -1387,9 +1447,20 @@ export function CircuitBoard() {
                     className="bg-slate border border-terminal-border text-phosphor text-xs px-2 py-1 focus:outline-none focus:border-phosphor min-w-[140px]"
                   >
                     <option value="">Default</option>
-                    {models.map((m) => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
+                    <optgroup label="── LOCAL ──">
+                      {models.map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    </optgroup>
+                    {cloudModels.filter(cm => cm.provider_type === 'cloud').length > 0 && (
+                      <optgroup label="── CLOUD ──">
+                        {cloudModels.filter(cm => cm.provider_type === 'cloud').map((cm) => (
+                          <option key={cm.id} value={cm.id}>
+                            {cm.display_name} ({cm.provider})
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                   </select>
                 </div>
               ))}
@@ -1411,14 +1482,34 @@ export function CircuitBoard() {
                   className="bg-slate border border-terminal-border text-pink-400 text-xs px-2 py-1 focus:outline-none focus:border-pink-400 min-w-[140px]"
                 >
                   <option value="">Default</option>
-                  {imageModels.map((m) => (
-                    <option key={m.name} value={m.name}>
-                      {m.name} {m.vram ? `(${m.vram})` : ''}
-                      {currentImageModel === m.name ? ' ✓' : ''}
-                    </option>
-                  ))}
+                  <optgroup label="── LOCAL ──">
+                    {imageModels.map((m) => (
+                      <option key={m.name} value={m.name}>
+                        {m.name} {m.vram ? `(${m.vram})` : ''}
+                        {currentImageModel === m.name ? ' ✓' : ''}
+                      </option>
+                    ))}
+                  </optgroup>
+                  {cloudModels.filter(cm => cm.provider === 'openai').length > 0 && (
+                    <optgroup label="── DALL·E (OpenAI) ──">
+                      <option value="openai:dall-e-3">DALL·E 3 (1024×1024)</option>
+                      <option value="openai:dall-e-2">DALL·E 2 (1024×1024)</option>
+                    </optgroup>
+                  )}
+                  {cloudModels.filter(cm => cm.provider === 'gemini').length > 0 && (
+                    <optgroup label="── Imagen (Gemini) ──">
+                      <option value="gemini:imagen-3.0-generate-002">Imagen 3 (1024×1024)</option>
+                    </optgroup>
+                  )}
                 </select>
               </div>
+              {/* Provider setup button */}
+              <button
+                onClick={() => setShowProviderSetup(true)}
+                className="text-[10px] text-terminal-muted border border-terminal-border px-3 py-1 hover:text-phosphor hover:border-phosphor transition-colors"
+              >
+                ☁ Providers
+              </button>
             </div>
           </div>
         )}
@@ -1464,64 +1555,13 @@ export function CircuitBoard() {
               <span className="font-bold" style={{ color: SLOT_LABELS.C.color }}>C</span>
             </button>
 
-            <div className="w-px h-6 bg-terminal-border mx-2" />
-
-            {/* Add Cell Buttons */}
-            <button onClick={() => addCell('data_input')} className="btn-terminal text-xs">
-              + INPUT
-            </button>
-            <button onClick={() => addCell('data_loader')} className="btn-terminal text-xs" style={{ borderColor: '#00bfff', color: '#00bfff' }}>
-              + DATA
-            </button>
-            <button onClick={() => addCell('ai_processor')} className="btn-terminal text-xs">
-              + AI
-            </button>
-            <button onClick={() => addCell('image_gen')} className="btn-terminal text-xs" style={{ borderColor: '#ff69b4', color: '#ff69b4' }}>
-              + IMAGE
-            </button>
-            <button onClick={() => addCell('script_execution')} className="btn-terminal text-xs">
-              + SCRIPT
-            </button>
-            <button onClick={() => addCell('conditional')} className="btn-terminal text-xs" style={{ borderColor: '#a855f7', color: '#a855f7' }}>
-              + GATE
-            </button>
-            <button onClick={() => addCell('web_fetch')} className="btn-terminal text-xs" style={{ borderColor: '#60a5fa', color: '#60a5fa' }}>
-              + FETCH
-            </button>
-            <button onClick={() => addCell('vector_index')} className="btn-terminal text-xs" style={{ borderColor: '#4ade80', color: '#4ade80' }}>
-              + INDEX
-            </button>
-            <button onClick={() => addCell('vector_search')} className="btn-terminal text-xs" style={{ borderColor: '#facc15', color: '#facc15' }}>
-              + SEARCH
-            </button>
-            <button onClick={() => addCell('terminal_history')} className="btn-terminal text-xs" style={{ borderColor: '#fb923c', color: '#fb923c' }}>
-              + HISTORY
-            </button>
-            <button onClick={() => addCell('markdown')} className="btn-terminal text-xs" style={{ borderColor: '#888', color: '#888' }}>
-              + NOTE
-            </button>
-            <button onClick={() => addCell('log_entry')} className="btn-terminal text-xs">
-              + OUTPUT
-            </button>
           </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              onClick={clearOutputs}
-              className="text-xs text-terminal-muted hover:text-phosphor px-2 py-1 border border-terminal-border"
-            >
-              CLEAR
-            </button>
-            <button
-              onClick={runAllCells}
-              disabled={isRunning}
-              className="btn-terminal text-sm px-6 disabled:opacity-50"
-            >
-              {isRunning ? '● RUNNING...' : '▶ RUN ALL'}
-            </button>
-          </div>
+          {/* Right side controls removed - moved to floating toolbar */}
+          <div />
         </div>
 
+        {/* Content Area */}
         {/* Content Area */}
         <div className="flex-1 overflow-hidden">
           {viewMode === 'linear' ? (
@@ -1537,6 +1577,8 @@ export function CircuitBoard() {
               onDeleteCell={deleteCell}
               onMoveCell={moveCell}
               onRunCell={runCell}
+              activeCellId={activeCellId}
+              onActiveCellChange={setActiveCellId}
             />
           ) : (
             <ReactFlow
@@ -1601,6 +1643,19 @@ export function CircuitBoard() {
           )}
         </div>
       </div>
+      {/* Provider setup modal */}
+      {/* Floating Bottom Toolbar */}
+      <FloatingToolbar
+        onAddCell={addCell}
+        onRunAll={runAllCells}
+        onRunActive={runActiveCell}
+        onStop={stopRunning}
+        onClearBoard={clearAllCells}
+        isRunning={isRunning}
+        activeCellId={activeCellId}
+      />
+
+      <ProviderSetup isOpen={showProviderSetup} onClose={() => setShowProviderSetup(false)} />
     </div>
   )
 }

@@ -43,3 +43,9 @@ playwright-stealth>=1.0.0  # Anti-bot detection
 beautifulsoup4>=4.12.0  # For parsing HTML content if needed
 readability-lxml>=0.8.1  # Mozilla Readability for clean article extraction
 ddgs>=9.0  # DuckDuckGo search for /research (renamed from duckduckgo-search)
+
+# Cloud AI Providers
+openai>=1.12.0
+anthropic>=0.44.0
+google-genai>=1.0.0
+mistralai>=1.0.0

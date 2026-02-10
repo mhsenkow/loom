@@ -470,7 +470,7 @@ export function TerminalFeed() {
     const form = new FormData()
     form.append('entry_id', entryId)
     form.append('file', blob, 'audio.wav')
-    fetch(`${BACKEND_URL}/api/tts/files`, { method: 'POST', body: form }).catch(() => {})
+    fetch(`${BACKEND_URL}/api/tts/files`, { method: 'POST', body: form }).catch(() => { })
   }, [])
 
   /** When selected entry has no in-memory cache, try to load from backend data/tts (long-term). */
@@ -485,7 +485,7 @@ export function TerminalFeed() {
       .then(blob => {
         if (blob && !cancelled) setAudioCacheByEntryId(prev => ({ ...prev, [selectedAiEntryId]: blob }))
       })
-      .catch(() => {})
+      .catch(() => { })
     return () => { cancelled = true }
   }, [ttsModelType, selectedAiEntryId, audioCacheByEntryId])
 
@@ -525,19 +525,19 @@ export function TerminalFeed() {
       const elapsed = Date.now() - start
       const period = Math.max(150, 400 / Math.max(0.5, rate))
       const t = elapsed / period
-      
+
       // Main amplitude with varied frequencies to simulate speech cadence
       const amp = 0.4 + 0.35 * Math.sin(t) + 0.15 * Math.sin(t * 2.7) + 0.1 * Math.sin(t * 0.4)
-      
+
       // Bass pulses slower (like syllables)
       const bass = 0.3 + 0.4 * Math.abs(Math.sin(t * 0.7)) + 0.2 * Math.sin(t * 1.3)
-      
+
       // Mids follow amplitude more closely
       const mids = amp * 0.8 + 0.1 * Math.sin(t * 3.1)
-      
+
       // Highs are more erratic (consonants)
       const highs = 0.2 + 0.3 * Math.abs(Math.sin(t * 4.2)) + 0.15 * Math.random()
-      
+
       setSyntheticAudio({
         amp: Math.max(0, Math.min(1, amp)),
         bass: Math.max(0, Math.min(1, bass)),
@@ -793,6 +793,41 @@ export function TerminalFeed() {
       return () => clearInterval(interval)
     }
   }, [connected])
+
+  // Listen for models_updated event & Orchestrator events
+  useEffect(() => {
+    const handleModelsUpdated = () => {
+      console.log('[LOOM] Models updated, refreshing list...')
+      fetchModels()
+    }
+
+    const handleOrchestratorEvent = (event: CustomEvent<any>) => {
+      const { type, circuit, model, reason } = event.detail
+      if (type === 'circuit_suggestion') {
+        addSystemEntry(`🧠 Orchestrator Suggestion:\nI noticed you might want to run the "${circuit}" circuit.\nReason: ${reason}\n\nType /${circuit} to run it.`, Date.now())
+      } else if (type === 'model_selected') {
+        console.log(`[ORCHESTRATOR] Auto-selected model: ${model} (${reason})`)
+        // Do NOT overwrite activeModel if it's set to 'auto' - keep user preference
+        // setActiveModel(model) 
+      }
+    }
+
+    window.addEventListener('loom:models_updated', handleModelsUpdated)
+    window.addEventListener('orchestrator_event', handleOrchestratorEvent as any)
+
+    const socket = (window as any).loomSocket
+    if (socket) {
+      socket.on('orchestrator_event', (data: any) => {
+        handleOrchestratorEvent({ detail: data } as any)
+      })
+    }
+
+    return () => {
+      window.removeEventListener('loom:models_updated', handleModelsUpdated)
+      window.removeEventListener('orchestrator_event', handleOrchestratorEvent as any)
+      if (socket) socket.off('orchestrator_event')
+    }
+  }, [fetchModels, addSystemEntry, setActiveModel])
 
   // Handle folder indexing
   const handleIndexFolder = useCallback(async (folderPath: string, options?: any) => {
@@ -1701,6 +1736,66 @@ export function TerminalFeed() {
           }
         }
         break
+
+      case 'model': {
+        const modelName = args.join(' ').trim()
+        if (!modelName) {
+          const modelInfo = [
+            `Current chat model: ${status.activeModel || 'not set'}`,
+            `Current vision model: ${status.visionModel || 'not set'}`,
+            `Current image gen model: ${status.imageGenModel || 'not set'}`,
+            '',
+            'Usage: /model <name> - Set chat model',
+            '       /vision <name> - Set vision model',
+            '       /gen <name> - Set image generation model',
+            'Example: /model llama3.1:8b',
+            'Example: /model auto',
+            'Example: /vision llava:7b',
+          ].join('\n')
+          addSystemEntry(modelInfo, timestamp)
+        } else {
+          // Handle 'auto' explicit selection
+          if (modelName.toLowerCase() === 'auto') {
+            setActiveModel('auto')
+            addSystemEntry('Chat model set to: Auto (Orchestrator)', timestamp)
+            break
+          }
+
+          // Check if model exists
+          if (models.includes(modelName)) {
+            setActiveModel(modelName)
+            addSystemEntry(`Chat model switched to: ${modelName}`, timestamp)
+          } else {
+            // Try partial match
+            const match = models.find(m => m.toLowerCase().includes(modelName.toLowerCase()))
+            if (match) {
+              setActiveModel(match)
+              addSystemEntry(`Chat model switched to: ${match}`, timestamp)
+            } else {
+              // If no models loaded, try fetching them first
+              if (models.length === 0) {
+                addSystemEntry('No models loaded. Fetching from backend...', timestamp)
+                fetchModels().then((fetchedModels) => {
+                  if (fetchedModels.length > 0) {
+                    const match = fetchedModels.find((m: string) => m.toLowerCase().includes(modelName.toLowerCase()))
+                    if (match) {
+                      setActiveModel(match)
+                      addSystemEntry(`Chat model switched to: ${match}`, Date.now())
+                    } else {
+                      addErrorEntry(`Model "${modelName}" not found.\nAvailable: ${fetchedModels.slice(0, 10).join(', ')}${fetchedModels.length > 10 ? '...' : ''}`, Date.now())
+                    }
+                  } else {
+                    addErrorEntry(`Model "${modelName}" not found.\nNo models available. Is Ollama running?`, Date.now())
+                  }
+                })
+              } else {
+                addErrorEntry(`Model "${modelName}" not found.\nAvailable: ${models.slice(0, 10).join(', ')}${models.length > 10 ? '...' : ''}`, timestamp)
+              }
+            }
+          }
+        }
+        break
+      }
 
       case 'vision':
         const visionModelName = args.join(' ').trim()
@@ -3300,6 +3395,17 @@ function LogEntryBlock({ entry, formatTimestamp, onImageClick }: LogEntryBlockPr
         )}
         {entry.status === 'error' && (
           <span className="led led-error"></span>
+        )}
+
+        {/* Model Badge */}
+        {entry.metadata?.model && typeof entry.metadata.model === 'string' && (
+          <span
+            className="ml-auto text-[10px] font-mono opacity-50 flex items-center gap-1 bg-phosphor/10 px-1 rounded hover:opacity-100 transition-opacity"
+            title={`Generated by ${entry.metadata.model}`}
+          >
+            <span>⚡</span>
+            {entry.metadata.model.replace(':latest', '')}
+          </span>
         )}
       </div>
 

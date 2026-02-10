@@ -37,12 +37,16 @@ export interface LogEntry {
   type: 'user' | 'system' | 'ai' | 'error' | 'image' | 'audio'
   content: string
   timestamp: number
-  status?: ModuleStatus
+  status?: 'running' | 'success' | 'error'
+  audioUrl?: string
+  audioDuration?: number
+  audioPrompt?: string
   imageUrl?: string
   imageAnalysis?: string
-  audioUrl?: string
-  audioPrompt?: string
-  audioDuration?: number
+  metadata?: {
+    model?: string
+    [key: string]: any
+  }
 }
 
 export interface SystemStatus {

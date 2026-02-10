@@ -25,6 +25,7 @@ async def run_module(
     ollama: OllamaClient,
     model: Optional[str] = None,
     vector_store: Optional[VectorStore] = None,
+    provider_manager: Any = None,
 ) -> str:
     """
     Execute a single module and return its output string.
@@ -47,6 +48,9 @@ async def run_module(
             prompt = f"{content}\n\n---\n\n{inp}"
         else:
             prompt = inp
+        # Route through provider_manager (handles cloud models) or fall back to Ollama
+        if provider_manager is not None:
+            return await provider_manager.chat(prompt, model)
         return await ollama.chat(prompt, model=model)
 
     if module_type == "script_execution":

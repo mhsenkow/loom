@@ -290,7 +290,14 @@ export function NotebookCell({
   }
 
   return (
-    <div className="module-chip group">
+    <div
+      className={`module-chip group ${isExpanded ? 'ring-1 ring-phosphor shadow-glow-sm' : ''}`}
+      onClick={(e) => {
+        // Don't trigger if clicking buttons/inputs to avoid conflicts
+        if ((e.target as HTMLElement).tagName.match(/BUTTON|INPUT|TEXTAREA|SELECT|A/)) return
+        onExpand?.()
+      }}
+    >
       {/* Header */}
       <div className={`${config.bgColor} text-void px-4 py-2 flex items-center justify-between`}>
         <div className="flex items-center gap-3">
@@ -390,20 +397,32 @@ export function NotebookCell({
             </div>
           )}
 
-          {/* Model Selector for Image cells - shows current slot selection */}
+          {/* Model Selector for Image cells */}
           {cell.type === 'image_gen' && (
             <div className="flex items-center gap-2">
               <span className="text-[9px] text-terminal-muted">Model:</span>
-              <span
-                className="text-[10px] font-bold px-1.5 py-0.5 bg-black/30"
+              <select
+                value={cell.model || modelSlots.IMAGE || 'sdxl'}
+                onChange={(e) => onUpdate({ model: e.target.value })}
+                className="bg-black/30 border border-terminal-border text-[10px] font-bold px-1.5 py-0.5 rounded focus:outline-none focus:border-[#ff69b4]"
                 style={{ color: '#ff69b4' }}
-                title={`Using image model slot: ${modelSlots.IMAGE || 'Default'}`}
+                title="Select image generation model"
               >
-                {modelSlots.IMAGE || cell.model || 'Default'}
-              </span>
-              <span className="text-[8px] text-terminal-muted">
-                ({availableImageModels.length > 0 ? `${availableImageModels.length} available` : 'Loading...'})
-              </span>
+                <optgroup label="Cloud Models">
+                  <option value="openai:dall-e-3">openai:dall-e-3</option>
+                  <option value="gemini:imagen-3.0-generate-002">gemini:imagen-3.0</option>
+                </optgroup>
+                <optgroup label="Local Models">
+                  {availableImageModels.map((m) => (
+                    <option key={m.name} value={m.type === 'ollama' ? `ollama:${m.name}` : m.name}>
+                      {m.name} {m.vram !== 'unknown' ? `(${m.vram})` : ''}
+                    </option>
+                  ))}
+                  {availableImageModels.length === 0 && (
+                    <option value="sdxl" disabled>Loading local models...</option>
+                  )}
+                </optgroup>
+              </select>
             </div>
           )}
 
@@ -460,6 +479,7 @@ export function NotebookCell({
                     setEditContent(e.target.value)
                     onUpdate({ content: e.target.value })
                   }}
+                  onFocus={onExpand}
                   placeholder="Or type path: data.csv, reports/summary.pdf"
                   className="flex-1 bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-cyan-500"
                 />
@@ -542,6 +562,7 @@ export function NotebookCell({
                         type={cell.conditionType === 'length' ? 'number' : 'text'}
                         value={cell.conditionValue || ''}
                         onChange={(e) => onUpdate({ conditionValue: e.target.value })}
+                        onFocus={onExpand}
                         placeholder={
                           cell.conditionType === 'regex' ? 'e.g., \\?$' :
                             cell.conditionType === 'keyword' ? 'e.g., urgent' :
@@ -560,6 +581,7 @@ export function NotebookCell({
                           type="text"
                           value={cell.onPass || ''}
                           onChange={(e) => onUpdate({ onPass: e.target.value })}
+                          onFocus={onExpand}
                           placeholder="Leave empty to pass input through"
                           className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-purple-500"
                         />
@@ -570,6 +592,7 @@ export function NotebookCell({
                           type="text"
                           value={cell.onFail || ''}
                           onChange={(e) => onUpdate({ onFail: e.target.value })}
+                          onFocus={onExpand}
                           placeholder="Output when condition fails"
                           className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-purple-500"
                         />
@@ -585,6 +608,7 @@ export function NotebookCell({
                           max={index}
                           value={cell.loopBackTo ?? 0}
                           onChange={(e) => onUpdate({ loopBackTo: Math.max(0, parseInt(e.target.value) || 0) })}
+                          onFocus={onExpand}
                           placeholder="0"
                           className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-purple-500"
                         />
@@ -597,6 +621,7 @@ export function NotebookCell({
                           max={10}
                           value={cell.loopBackMax ?? 3}
                           onChange={(e) => onUpdate({ loopBackMax: Math.max(1, Math.min(10, parseInt(e.target.value) || 3)) })}
+                          onFocus={onExpand}
                           className="w-full bg-void border border-terminal-border p-1.5 text-phosphor font-mono text-[10px] focus:outline-none focus:border-purple-500"
                         />
                       </div>
@@ -611,6 +636,7 @@ export function NotebookCell({
                   onChange={(e) => setEditContent(e.target.value)}
                   onBlur={handleSave}
                   onKeyDown={handleKeyDown}
+                  onFocus={onExpand}
                   placeholder={getPlaceholder()}
                   className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-purple-500 min-h-[60px]"
                 />
@@ -648,6 +674,7 @@ export function NotebookCell({
                         setEditContent(e.target.value)
                         onUpdate({ content: e.target.value })
                       }}
+                      onFocus={onExpand}
                       placeholder="https://www.gutenberg.org/files/1342/1342-0.txt"
                       className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-blue-500"
                     />

@@ -19,7 +19,7 @@ function App() {
     const s = loadSettings()
     applyTheme(s.theme)
   }, [])
-  
+
   const { connected: socketConnected } = useSocket()
   const { status, models, setImageGenModel } = useSystemStatus()
 
@@ -29,7 +29,7 @@ function App() {
       const total = status.ramTotalGb
       const modelUsed = status.ramModelUsedGb || 0
       const availableForModels = status.ramAvailableForModelsGb || 0
-      
+
       // Show: "X.XGB used | X.XGB free" or just "X.XGB free" if no model loaded
       if (modelUsed > 0) {
         return `${modelUsed.toFixed(1)}GB used | ${availableForModels.toFixed(1)}GB free`
@@ -44,7 +44,7 @@ function App() {
     <CRTContainer enabled={crtEnabled}>
       <div className="loom-app h-screen w-screen flex flex-col bg-void text-phosphor font-mono overflow-hidden">
         {/* Custom Title Bar */}
-        <TitleBar 
+        <TitleBar
           viewMode={viewMode}
           onViewModeChange={setViewMode}
           crtEnabled={crtEnabled}
@@ -53,18 +53,18 @@ function App() {
         />
 
         {/* Settings Modal */}
-        <SettingsModal 
-          isOpen={settingsOpen} 
-          onClose={() => setSettingsOpen(false)} 
+        <SettingsModal
+          isOpen={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
         />
-        
+
         {/* Main Content Area - Both views always mounted for state persistence */}
         <main className="flex-1 overflow-hidden relative">
           {/* Terminal - Long-term memory, persistent conversation */}
           <div className={`absolute inset-0 ${viewMode === 'terminal' ? 'block' : 'hidden'}`}>
             <TerminalFeed />
           </div>
-          
+
           {/* Circuit - Deep dive notebooks, session-based */}
           <div className={`absolute inset-0 ${viewMode === 'circuit' ? 'block' : 'hidden'}`}>
             <CircuitBoard />
@@ -85,7 +85,13 @@ function App() {
             {status.activeModel && (
               <span className="flex items-center gap-1.5 text-phosphor/80" title="Chat model">
                 <span className="text-terminal-muted">CHAT:</span>
-                <span className="font-mono text-[10px]">{status.activeModel.length > 15 ? status.activeModel.substring(0, 15) + '...' : status.activeModel}</span>
+                {status.activeModel === 'auto' ? (
+                  <span className="font-mono text-[10px] text-cyan-400 flex items-center gap-1">
+                    <span className="text-[8px]">⚡</span> AUTO (Orchestrator)
+                  </span>
+                ) : (
+                  <span className="font-mono text-[10px]">{status.activeModel.length > 15 ? status.activeModel.substring(0, 15) + '...' : status.activeModel}</span>
+                )}
               </span>
             )}
             {status.visionModel && (

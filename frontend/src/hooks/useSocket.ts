@@ -15,6 +15,7 @@ interface AIChunk {
 interface AIStatus {
   status: 'running' | 'success' | 'error'
   message: string
+  model?: string
 }
 
 interface ModuleStatus {
@@ -80,7 +81,7 @@ function getOrCreateSocket(): Socket {
     globalSocket.on('ai_status', (data: AIStatus) => {
       // Collect request IDs to remove after iteration (avoid modifying during iteration)
       const completedRequests: symbol[] = []
-      
+
       activeStatusHandlers.forEach((handler, requestId) => {
         handler(data)
         // Mark for removal when request completes
@@ -88,7 +89,7 @@ function getOrCreateSocket(): Socket {
           completedRequests.push(requestId)
         }
       })
-      
+
       // Remove completed request handlers
       completedRequests.forEach(requestId => {
         activeStatusHandlers.delete(requestId)
@@ -114,7 +115,7 @@ function getOrCreateSocket(): Socket {
       window.dispatchEvent(new CustomEvent('loom:models_updated', { detail: data }))
     })
   }
-  
+
   return globalSocket
 }
 
@@ -132,7 +133,7 @@ export function useSocket() {
       setState(newState)
     }
     stateListeners.add(stateListener)
-    
+
     // Set initial state
     setState(socketState)
 
@@ -144,14 +145,14 @@ export function useSocket() {
     // Cleanup on unmount
     return () => {
       stateListeners.delete(stateListener)
-      
+
       // Remove active request handlers
       if (currentRequestIdRef.current) {
         activeChunkHandlers.delete(currentRequestIdRef.current)
         activeStatusHandlers.delete(currentRequestIdRef.current)
         currentRequestIdRef.current = null
       }
-      
+
       // Remove module status handler
       if (moduleStatusHandlerRef.current) {
         moduleStatusHandlers.delete(moduleStatusHandlerRef.current)
@@ -161,14 +162,14 @@ export function useSocket() {
 
   // Send chat message to AI
   const sendChat = useCallback((
-    prompt: string, 
+    prompt: string,
     model: string = 'llama3.1:8b',
     onChunk?: AIChunkHandler,
     onStatus?: AIStatusHandler,
     useCodeContext: boolean = false,
   ) => {
     const socket = getOrCreateSocket()
-    
+
     if (!socket.connected) {
       console.warn('[LOOM] Cannot send chat: not connected')
       return false
@@ -183,7 +184,7 @@ export function useSocket() {
     // Create a unique request ID for this chat request
     const requestId = Symbol('chat-request')
     currentRequestIdRef.current = requestId
-    
+
     // Register handlers with the request ID
     if (onChunk) {
       activeChunkHandlers.set(requestId, onChunk)
@@ -192,8 +193,8 @@ export function useSocket() {
       activeStatusHandlers.set(requestId, onStatus)
     }
 
-    socket.emit('chat', { 
-      prompt, 
+    socket.emit('chat', {
+      prompt,
       model,
       use_code_context: useCodeContext,
       code_context_collection: 'loom_code_context',
@@ -209,14 +210,14 @@ export function useSocket() {
     onStatus?: ModuleStatusHandler,
   ) => {
     const socket = getOrCreateSocket()
-    
+
     if (!socket.connected) {
       console.warn('[LOOM] Cannot execute module: not connected')
       return false
     }
 
     moduleStatusHandlerRef.current = onStatus || null
-    
+
     if (onStatus) {
       moduleStatusHandlers.add(onStatus)
     }
@@ -235,7 +236,7 @@ export function useSocket() {
     onStatus?: (status: any) => void,
   ) => {
     const socket = getOrCreateSocket()
-    
+
     if (!socket.connected) {
       console.warn('[LOOM] Cannot pull model: not connected')
       return false
@@ -245,7 +246,7 @@ export function useSocket() {
     if (onStatus) {
       const handler = (data: any) => onStatus(data)
       socket.on('pull_status', handler)
-      
+
       // Clean up handler when pull completes
       const cleanup = (data: any) => {
         if (data.status === 'success' || data.status === 'error') {
@@ -260,9 +261,32 @@ export function useSocket() {
     return true
   }, [])
 
+  // Stop current AI generation
+  const stopGeneration = useCallback(() => {
+    const socket = getOrCreateSocket()
+
+    // If there's an active request, manually trigger error to unblock promise
+    if (currentRequestIdRef.current) {
+      const statusHandler = activeStatusHandlers.get(currentRequestIdRef.current)
+      if (statusHandler) {
+        statusHandler({ status: 'error', message: 'Stopped by user' })
+      }
+
+      // Cleanup handlers
+      activeChunkHandlers.delete(currentRequestIdRef.current)
+      activeStatusHandlers.delete(currentRequestIdRef.current)
+      currentRequestIdRef.current = null
+    }
+
+    if (socket.connected) {
+      socket.emit('stop_generation')
+    }
+  }, [])
+
   return {
     ...state,
     sendChat,
+    stopGeneration,
     executeModule,
     pullModel,
   }

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { OrchestratorSettings } from '../settings/OrchestratorSettings'
 
 interface SettingsModalProps {
   isOpen: boolean
@@ -114,14 +115,14 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const handleDownloadModel = async (modelName: string) => {
     setDownloadingModel(modelName)
     setDownloadProgress({ model: modelName, status: 'starting', message: 'Preparing download...' })
-    
+
     try {
       // Check if it's an Ollama model
       if (modelName.includes('flux') || modelName.includes('flux2') || modelName.startsWith('x/')) {
         // Use socket to pull via Ollama
         const { io } = await import('socket.io-client')
         const socket = io('http://localhost:8000')
-        
+
         socket.on('pull_image_status', (data: any) => {
           if (data.model === modelName) {
             setDownloadProgress({
@@ -129,7 +130,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               status: data.status,
               message: data.message,
             })
-            
+
             if (data.status === 'success' || data.status === 'error') {
               setDownloadingModel(null)
               setTimeout(() => {
@@ -140,7 +141,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             }
           }
         })
-        
+
         socket.emit('pull_image_model', { model: modelName })
       } else {
         // Local diffusers model - trigger download by loading
@@ -148,7 +149,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         const response = await fetch(`http://localhost:8000/api/images/models/load?model=${encodeURIComponent(modelName)}`, {
           method: 'POST',
         })
-        
+
         if (response.ok) {
           setDownloadProgress({ model: modelName, status: 'success', message: 'Model downloaded!' })
           setTimeout(() => {
@@ -161,10 +162,10 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         }
       }
     } catch (error) {
-      setDownloadProgress({ 
-        model: modelName, 
-        status: 'error', 
-        message: error instanceof Error ? error.message : 'Download failed' 
+      setDownloadProgress({
+        model: modelName,
+        status: 'error',
+        message: error instanceof Error ? error.message : 'Download failed'
       })
       setTimeout(() => {
         setDownloadingModel(null)
@@ -183,7 +184,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         return // Don't save if data folder is invalid
       }
     }
-    
+
     saveSettings(settings)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
@@ -204,17 +205,17 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
-      <div 
+      <div
         className="absolute inset-0 bg-void/90"
         onClick={onClose}
       />
-      
+
       {/* Modal */}
       <div className="relative bg-slate border border-phosphor w-full max-w-lg mx-4 shadow-glow max-h-[90vh] overflow-y-auto">
         {/* Header */}
         <div className="bg-phosphor text-void px-4 py-2 flex items-center justify-between sticky top-0">
           <span className="font-bold text-sm tracking-wider">SETTINGS</span>
-          <button 
+          <button
             onClick={onClose}
             className="text-void hover:bg-void/20 px-2"
           >
@@ -238,11 +239,10 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                   key={t.id}
                   type="button"
                   onClick={() => updateSetting('theme', t.id)}
-                  className={`flex flex-col items-center p-3 border transition-colors ${
-                    settings.theme === t.id
-                      ? 'border-phosphor bg-void'
-                      : 'border-terminal-border hover:border-phosphor/50'
-                  }`}
+                  className={`flex flex-col items-center p-3 border transition-colors ${settings.theme === t.id
+                    ? 'border-phosphor bg-void'
+                    : 'border-terminal-border hover:border-phosphor/50'
+                    }`}
                   title={t.subtitle}
                 >
                   <span
@@ -262,6 +262,12 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             </div>
           </section>
 
+
+          {/* Orchestration Section */}
+          <section>
+            <OrchestratorSettings />
+          </section>
+
           {/* Data Folder Section */}
           <section>
             <h3 className="text-cyan-400 font-bold text-sm tracking-wider mb-3">
@@ -270,7 +276,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             <p className="text-terminal-muted text-xs mb-3">
               Set the folder where Loom looks for files. DATA cells will load from this folder.
             </p>
-            
+
             <div className="space-y-2">
               <label className="text-xs text-terminal-muted">Folder Path</label>
               <div className="flex gap-2">
@@ -323,7 +329,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             <p className="text-terminal-muted text-xs mb-3">
               Required for gated models (FLUX, SD3). Also used for cloud API fallback.
             </p>
-            
+
             <div className="space-y-2">
               <label className="text-xs text-terminal-muted">API Token</label>
               <input
@@ -350,7 +356,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               IMAGE GENERATION MODELS
             </h3>
             <p className="text-terminal-muted text-xs mb-3">
-              {imageModels.length > 0 
+              {imageModels.length > 0
                 ? `${imageModels.length} model${imageModels.length !== 1 ? 's' : ''} downloaded`
                 : 'No models downloaded yet'}
             </p>
@@ -395,9 +401,9 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                     {['x/flux2-klein:9b', 'x/flux2-klein:4b', 'x/flux2-klein'].map((modelName) => {
                       const isDownloaded = imageModels.some(m => m.name.includes('flux2-klein'))
                       const isDownloading = downloadingModel === modelName
-                      const shortName = modelName.includes(':9b') ? 'FLUX.2 Klein 9B' : 
-                                      modelName.includes(':4b') ? 'FLUX.2 Klein 4B' : 
-                                      'FLUX.2 Klein'
+                      const shortName = modelName.includes(':9b') ? 'FLUX.2 Klein 9B' :
+                        modelName.includes(':4b') ? 'FLUX.2 Klein 4B' :
+                          'FLUX.2 Klein'
                       return (
                         <button
                           key={modelName}
@@ -427,7 +433,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                   </div>
                 </div>
               )}
-              
+
               <div className="text-terminal-muted text-[10px]">
                 <p>Ollama models stored in: <code className="text-phosphor">~/.ollama/models/</code></p>
                 <p className="mt-1">Download via: <code className="text-phosphor">ollama pull x/flux2-klein:9b</code></p>

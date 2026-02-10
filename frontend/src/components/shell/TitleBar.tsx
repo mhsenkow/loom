@@ -1,3 +1,5 @@
+import { ModelSelector } from '../terminal/ModelSelector'
+
 interface TitleBarProps {
   viewMode: 'terminal' | 'circuit'
   onViewModeChange: (mode: 'terminal' | 'circuit') => void
@@ -6,10 +8,10 @@ interface TitleBarProps {
   onSettingsClick: () => void
 }
 
-export function TitleBar({ 
-  viewMode, 
-  onViewModeChange, 
-  crtEnabled, 
+export function TitleBar({
+  viewMode,
+  onViewModeChange,
+  crtEnabled,
   onCrtToggle,
   onSettingsClick,
 }: TitleBarProps) {
@@ -20,7 +22,7 @@ export function TitleBar({
   return (
     <header className="h-10 bg-slate border-b border-terminal-border flex items-center justify-between select-none">
       {/* Draggable Region */}
-      <div 
+      <div
         className="flex-1 h-full flex items-center px-4 gap-6"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
@@ -35,23 +37,28 @@ export function TitleBar({
         </div>
 
         {/* View Mode Tabs */}
-        <nav 
+        <nav
           className="flex items-center gap-1"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
-          <ViewTab 
+          <ViewTab
             active={viewMode === 'terminal'}
             onClick={() => onViewModeChange('terminal')}
           >
             TERMINAL
           </ViewTab>
-          <ViewTab 
+          <ViewTab
             active={viewMode === 'circuit'}
             onClick={() => onViewModeChange('circuit')}
           >
             CIRCUIT
           </ViewTab>
         </nav>
+
+        {/* Model Selector */}
+        <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+          <ModelSelector />
+        </div>
 
         {/* CRT Toggle */}
         <button
@@ -102,8 +109,8 @@ function ViewTab({ active, onClick, children }: ViewTabProps) {
       onClick={onClick}
       className={`
         px-3 py-1 text-xs font-bold tracking-wider border transition-none
-        ${active 
-          ? 'bg-phosphor text-void border-phosphor' 
+        ${active
+          ? 'bg-phosphor text-void border-phosphor'
           : 'bg-transparent text-terminal-muted border-terminal-border hover:text-phosphor hover:border-phosphor'
         }
       `}
@@ -127,8 +134,8 @@ function WindowButton({ onClick, title, danger, children }: WindowButtonProps) {
       title={title}
       className={`
         w-12 h-full flex items-center justify-center transition-none
-        ${danger 
-          ? 'text-terminal-muted hover:bg-red-600 hover:text-white' 
+        ${danger
+          ? 'text-terminal-muted hover:bg-red-600 hover:text-white'
           : 'text-terminal-muted hover:bg-terminal-gray hover:text-phosphor'
         }
       `}

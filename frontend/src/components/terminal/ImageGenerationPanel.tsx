@@ -13,6 +13,14 @@ interface ImageGeneration {
   recommendedModels?: Array<{ name: string; description: string; size: string }>
 }
 
+interface CloudModel {
+  id: string
+  name: string
+  display_name: string
+  provider: string
+  provider_type: string
+}
+
 interface ImageGenerationPanelProps {
   generation: ImageGeneration | null
   onClose?: () => void
@@ -21,6 +29,7 @@ interface ImageGenerationPanelProps {
   onRetryGeneration?: (prompt: string, modelName: string) => void
   onEditImage?: (imageUrl: string, editPrompt: string) => void
   allModels?: string[]
+  cloudModels?: CloudModel[]
   downloadProgress?: {
     model: string
     status: string
@@ -41,15 +50,23 @@ const RECOMMENDED_IMAGE_GEN_MODELS = [
   { name: 'x/flux2-klein:9b', description: 'FLUX.2 Klein 9B - Higher quality version', size: '~12GB' },
 ]
 
-export function ImageGenerationPanel({ 
-  generation, 
-  onClose, 
-  onPullModel, 
-  onApproveToChat, 
+// Cloud image generation models (shown when provider is connected)
+const CLOUD_IMAGE_MODELS = [
+  { id: 'openai:dall-e-3', name: 'DALL·E 3', provider: 'openai', description: 'High quality, creative images with text rendering', size: 'Cloud' },
+  { id: 'openai:dall-e-2', name: 'DALL·E 2', provider: 'openai', description: 'Fast image generation, lower cost', size: 'Cloud' },
+  { id: 'gemini:imagen-3.0-generate-002', name: 'Imagen 3', provider: 'gemini', description: 'Google\'s latest image generation model', size: 'Cloud' },
+]
+
+export function ImageGenerationPanel({
+  generation,
+  onClose,
+  onPullModel,
+  onApproveToChat,
   onRetryGeneration,
   onEditImage,
-  allModels = [], 
-  downloadProgress 
+  allModels = [],
+  cloudModels = [],
+  downloadProgress
 }: ImageGenerationPanelProps) {
   const [showImageModal, setShowImageModal] = useState(false)
   const [frameIndex, setFrameIndex] = useState(0)
@@ -59,29 +76,35 @@ export function ImageGenerationPanel({
 
   // Filter to only image generation models
   const imageGenKeywords = ['flux', 'flux2', 'stable-diffusion']
-  const imageGenModels = allModels.filter(m => 
+  const imageGenModels = allModels.filter(m =>
     imageGenKeywords.some(keyword => m.toLowerCase().includes(keyword))
   )
-  
+
   // Combine available and recommended models
   const allImageGenOptions = [
     ...(generation?.availableModels || []),
     ...imageGenModels.filter(m => !generation?.availableModels?.includes(m))
   ]
-  
+
   // Add recommended models that aren't installed
   const recommendedNotInstalled = RECOMMENDED_IMAGE_GEN_MODELS.filter(
     rec => !allImageGenOptions.some(installed => installed.toLowerCase().includes(rec.name.toLowerCase().split(':')[0]))
   )
 
+  // Cloud image models available (based on connected providers)
+  const connectedProviders = new Set(cloudModels.map(cm => cm.provider))
+  const availableCloudImageModels = CLOUD_IMAGE_MODELS.filter(
+    cm => connectedProviders.has(cm.provider)
+  )
+
   // Animate spinner while generating or downloading
   useEffect(() => {
     const isActive = generation && (
-      generation.status === 'generating' || 
+      generation.status === 'generating' ||
       generation.status === 'no-model' ||
       (downloadProgress && downloadProgress.status !== 'success' && downloadProgress.status !== 'error')
     )
-    
+
     if (!isActive) return
 
     const interval = setInterval(() => {
@@ -95,13 +118,13 @@ export function ImageGenerationPanel({
     console.log('[ImageGenerationPanel] No generation data, not rendering')
     return null
   }
-  
+
   console.log('[ImageGenerationPanel] Rendering with status:', generation.status)
 
   const isDownloading = Boolean(
-    downloadProgress && 
-    downloadProgress.model && 
-    downloadProgress.status !== 'success' && 
+    downloadProgress &&
+    downloadProgress.model &&
+    downloadProgress.status !== 'success' &&
     downloadProgress.status !== 'error'
   )
 
@@ -133,7 +156,7 @@ export function ImageGenerationPanel({
             <div className="border border-phosphor/30 bg-void/50 p-6 flex items-center justify-center min-h-[240px] font-mono">
               <div className="text-center space-y-2 text-phosphor/40 text-[10px] leading-tight">
                 <div className="whitespace-pre">
-{`╔═══════════════════════════════════╗
+                  {`╔═══════════════════════════════════╗
 ║  LOOM IMAGE GENERATION        ║
 ╠═══════════════════════════════════╣
 ║                                   ║
@@ -155,7 +178,7 @@ export function ImageGenerationPanel({
             {/* Prompting Advice */}
             <div className="border-l-2 border-phosphor/50 pl-3 space-y-3">
               <div className="text-xs text-phosphor font-bold">PROMPTING GUIDE</div>
-              
+
               <div className="space-y-2 text-[10px] text-terminal-muted">
                 <div>
                   <span className="text-phosphor/70 font-bold">✓ Be Specific:</span>
@@ -163,21 +186,21 @@ export function ImageGenerationPanel({
                     "a retro terminal with green phosphor text on black background, 1980s computer aesthetic"
                   </div>
                 </div>
-                
+
                 <div>
                   <span className="text-phosphor/70 font-bold">✓ Include Style:</span>
                   <div className="mt-1 ml-4 font-mono text-[9px]">
                     "cassette futurism", "cyberpunk", "vaporwave", "brutalist"
                   </div>
                 </div>
-                
+
                 <div>
                   <span className="text-phosphor/70 font-bold">✓ Add Details:</span>
                   <div className="mt-1 ml-4 font-mono text-[9px]">
                     lighting, colors, mood, composition, era
                   </div>
                 </div>
-                
+
                 <div>
                   <span className="text-phosphor/70 font-bold">✓ Use Negative Prompts:</span>
                   <div className="mt-1 ml-4 font-mono text-[9px]">
@@ -245,7 +268,7 @@ export function ImageGenerationPanel({
                 {generation.progress !== undefined && generation.progress > 0 && (
                   <div className="mt-2">
                     <div className="h-1.5 bg-void border border-terminal-border/30 overflow-hidden rounded-full">
-                      <div 
+                      <div
                         className="h-full bg-phosphor transition-all duration-300 rounded-full"
                         style={{ width: `${generation.progress}%` }}
                       />
@@ -255,7 +278,7 @@ export function ImageGenerationPanel({
                 )}
                 {(!generation.progress || generation.progress === 0) && (
                   <div className="mt-2 h-1.5 bg-void/50 border border-terminal-border/20 rounded-full overflow-hidden">
-                    <div 
+                    <div
                       className="h-full w-full bg-phosphor/30 rounded-full animate-pulse"
                     />
                   </div>
@@ -277,8 +300,8 @@ export function ImageGenerationPanel({
             <div>
               <div className="text-[10px] text-terminal-muted tracking-widest mb-2">GENERATED IMAGE</div>
               <div className="border border-terminal-border bg-void/30 p-2">
-                <img 
-                  src={generation.imageUrl} 
+                <img
+                  src={generation.imageUrl}
                   alt={generation.prompt}
                   className="w-full h-auto max-h-96 object-contain cursor-pointer hover:opacity-80 transition-opacity"
                   onClick={() => setShowImageModal(true)}
@@ -368,7 +391,7 @@ export function ImageGenerationPanel({
             {/* Available Models (if any) */}
             {generation.availableModels && generation.availableModels.length > 0 && (
               <div>
-                <div className="text-[10px] text-terminal-muted tracking-widest mb-2">AVAILABLE</div>
+                <div className="text-[10px] text-terminal-muted tracking-widest mb-2">AVAILABLE LOCAL</div>
                 <div className="space-y-1">
                   {generation.availableModels.map((model) => (
                     <button
@@ -382,6 +405,26 @@ export function ImageGenerationPanel({
                 </div>
               </div>
             )}
+
+            {/* Cloud alternatives when no local models */}
+            {availableCloudImageModels.length > 0 && (
+              <div>
+                <div className="text-[10px] text-terminal-muted tracking-widest mb-2">CLOUD ALTERNATIVES</div>
+                <div className="space-y-2">
+                  {availableCloudImageModels.map((cm) => (
+                    <button
+                      key={cm.id}
+                      onClick={() => onRetryGeneration?.(generation.prompt, cm.id)}
+                      className="w-full text-left border border-cyan-400/30 p-2 bg-void/20 hover:bg-cyan-400/5 transition-colors"
+                    >
+                      <div className="text-xs text-cyan-400 font-mono">☁ {cm.name}</div>
+                      <div className="text-[9px] text-terminal-muted mt-1">{cm.description}</div>
+                      <div className="text-[8px] text-cyan-400/50 mt-1">{cm.size} • No download needed</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -390,6 +433,10 @@ export function ImageGenerationPanel({
           <div className="border-t border-terminal-border pt-3 mt-3">
             <div className="text-[10px] text-terminal-muted tracking-widest mb-2">SELECT MODEL</div>
             <div className="space-y-1">
+              {/* Local models */}
+              {allImageGenOptions.length > 0 && (
+                <div className="text-[9px] text-terminal-muted/70 tracking-widest mt-2 mb-1">── LOCAL ──</div>
+              )}
               {allImageGenOptions.map((model) => (
                 <button
                   key={model}
@@ -403,6 +450,24 @@ export function ImageGenerationPanel({
                   {model}
                 </button>
               ))}
+              {/* Cloud image models */}
+              {availableCloudImageModels.length > 0 && (
+                <div className="text-[9px] text-terminal-muted/70 tracking-widest mt-2 mb-1">── CLOUD ──</div>
+              )}
+              {availableCloudImageModels.map((cm) => (
+                <button
+                  key={cm.id}
+                  onClick={() => {
+                    setSelectedModel(cm.id)
+                    onRetryGeneration?.(generation.prompt, cm.id)
+                    setShowModelSelector(false)
+                  }}
+                  className="w-full text-left px-2 py-1 text-xs text-cyan-400 hover:bg-void/30 border border-cyan-400/30"
+                >
+                  ☁ {cm.name} <span className="text-terminal-muted text-[9px]">({cm.description})</span>
+                </button>
+              ))}
+              {/* Recommended not installed */}
               {recommendedNotInstalled.map((model) => (
                 <div key={model.name} className="border border-terminal-border/30 p-2 bg-void/20">
                   <div className="text-xs text-phosphor/70 font-mono">{model.name}</div>
@@ -433,12 +498,12 @@ export function ImageGenerationPanel({
                   {downloadProgress.total > 0 && (
                     <div className="mt-1">
                       <div className="h-1 bg-void border border-terminal-border/30 overflow-hidden">
-                        <div 
+                        <div
                           className="h-full bg-phosphor transition-all duration-300"
-                          style={{ 
-                            width: downloadProgress.total > 0 
-                              ? `${(downloadProgress.completed / downloadProgress.total) * 100}%` 
-                              : '0%' 
+                          style={{
+                            width: downloadProgress.total > 0
+                              ? `${(downloadProgress.completed / downloadProgress.total) * 100}%`
+                              : '0%'
                           }}
                         />
                       </div>

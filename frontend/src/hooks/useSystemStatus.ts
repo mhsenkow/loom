@@ -1,18 +1,23 @@
-import { useState, useEffect, useCallback } from 'react'
-import type { SystemStatus } from '../types/module'
+import { useEffect, useCallback } from 'react'
+import { useSystemStore, CloudModelInfo } from '../store/systemStore'
 
 const BACKEND_URL = 'http://localhost:8000'
 
-export function useSystemStatus() {
-  const [status, setStatus] = useState<SystemStatus>({
-    connected: false,
-    memoryUsage: 0,
-    tokenSpeed: 0,
-    activeModel: undefined,
-    visionModel: undefined,
-  })
+// Re-export type for compatibility
+export type { CloudModelInfo }
 
-  const [models, setModels] = useState<string[]>([])
+export function useSystemStatus() {
+  const {
+    status,
+    models,
+    cloudModels,
+    setStatus,
+    setModels,
+    setCloudModels,
+    setActiveModel,
+    setVisionModel,
+    setImageGenModel
+  } = useSystemStore()
 
   // Check backend health
   const checkHealth = useCallback(async () => {
@@ -56,16 +61,13 @@ export function useSystemStatus() {
       }))
     }
     return null
-  }, [])
+  }, [setStatus])
 
   // Fetch available models
   const fetchModels = useCallback(async () => {
     // First check if backend is reachable
-    const health = await checkHealth()
-    if (!health) {
-      console.debug('[LOOM] Backend not reachable, skipping model fetch')
-      return []
-    }
+    // Skip health check here to avoid infinite loop or double check, relying on checkHealth in effects
+    // But for direct calls, we might want it.
 
     try {
       const response = await fetch(`${BACKEND_URL}/api/models`, {
@@ -76,7 +78,7 @@ export function useSystemStatus() {
         // Add timeout
         signal: AbortSignal.timeout(10000),
       })
-      
+
       if (!response.ok) {
         console.error('[LOOM] Failed to fetch models:', {
           status: response.status,
@@ -87,7 +89,7 @@ export function useSystemStatus() {
 
       const data = await response.json()
       console.log('[LOOM] Models API response:', data)
-      
+
       // Handle different response formats
       let modelsList = []
       if (Array.isArray(data.models)) {
@@ -97,7 +99,7 @@ export function useSystemStatus() {
       } else if (data.models && typeof data.models === 'object') {
         modelsList = Object.values(data.models)
       }
-      
+
       const modelNames = modelsList
         .map((m: any) => {
           // Handle both object and string formats
@@ -106,94 +108,85 @@ export function useSystemStatus() {
           return null
         })
         .filter((name: string | null): name is string => name !== null && name !== 'unknown')
-      
+
       console.log('[LOOM] Parsed model names:', modelNames)
       setModels(modelNames)
-      
+
       // Set first non-embedding model as active if not set
       if (modelNames.length > 0) {
-        // Find chat model (non-embedding, non-vision)
-        const chatModel = modelNames.find((n: string) => 
-          !n.includes('embed') && 
-          !n.toLowerCase().includes('llava') && 
-          !n.toLowerCase().includes('bakllava') && 
-          !n.toLowerCase().includes('moondream') &&
-          !n.toLowerCase().includes('vision')
-        )
-        if (chatModel) {
-          setStatus((prev) => ({
-            ...prev,
-            activeModel: prev.activeModel || chatModel,
-          }))
-        }
-        
-        // Find vision model (llava, bakllava, moondream, etc.)
-        const visionKeywords = ['llava', 'bakllava', 'moondream', 'vision']
-        const visionModel = modelNames.find((n: string) => 
-          visionKeywords.some(keyword => n.toLowerCase().includes(keyword))
-        )
-        if (visionModel) {
-          setStatus((prev) => ({
-            ...prev,
-            visionModel: prev.visionModel || visionModel,
-          }))
-        }
-        
-        // Find image generation model (flux, flux2, stable-diffusion)
-        const imageGenKeywords = ['flux', 'flux2', 'stable-diffusion']
-        const imageGenModel = modelNames.find((n: string) => 
-          imageGenKeywords.some(keyword => n.toLowerCase().includes(keyword))
-        )
-        if (imageGenModel) {
-          setStatus((prev) => ({
-            ...prev,
-            imageGenModel: prev.imageGenModel || imageGenModel,
-          }))
-        }
+        // Only set defaults if explicitly undefined, to respect user choice (even if 'auto' or empty string)
+        useSystemStore.setState(state => {
+          let updates: any = {}
+
+          if (!state.status.activeModel) {
+            // Find chat model (non-embedding, non-vision)
+            const chatModel = modelNames.find((n: string) =>
+              !n.includes('embed') &&
+              !n.toLowerCase().includes('llava') &&
+              !n.toLowerCase().includes('bakllava') &&
+              !n.toLowerCase().includes('moondream') &&
+              !n.toLowerCase().includes('vision') &&
+              !n.toLowerCase().includes('flux') &&
+              !n.toLowerCase().includes('stable-diffusion') &&
+              !n.toLowerCase().includes('sd3')
+            )
+            if (chatModel) updates.activeModel = chatModel
+          }
+
+          if (!state.status.visionModel) {
+            const visionKeywords = ['llava', 'bakllava', 'moondream', 'vision']
+            const visionModel = modelNames.find((n: string) =>
+              visionKeywords.some(keyword => n.toLowerCase().includes(keyword))
+            )
+            if (visionModel) updates.visionModel = visionModel
+          }
+
+          if (!state.status.imageGenModel) {
+            const imageGenKeywords = ['flux', 'flux2', 'stable-diffusion']
+            const imageGenModel = modelNames.find((n: string) =>
+              imageGenKeywords.some(keyword => n.toLowerCase().includes(keyword))
+            )
+            if (imageGenModel) updates.imageGenModel = imageGenModel
+          }
+
+          if (Object.keys(updates).length > 0) {
+            setStatus(prev => ({ ...prev, ...updates }))
+          }
+          return state // Return is ignored by setState here actually, but sticking to pattern
+        })
       }
-      
+
       return modelNames
     } catch (error) {
-      // Only log errors that aren't expected (like network timeouts during startup)
       if (error instanceof TypeError && error.message === 'Failed to fetch') {
-        // This is expected if backend isn't running yet - don't spam console
         console.debug('[LOOM] Backend not available yet (this is normal during startup)')
       } else if (error instanceof Error && error.name !== 'AbortError' && error.name !== 'TimeoutError') {
         console.error('[LOOM] Failed to fetch models:', error)
       }
       return []
     }
-  }, [checkHealth])
+  }, [setModels, setStatus])
 
-  // Set active model (chat)
-  const setActiveModel = useCallback((model: string) => {
-    setStatus((prev) => ({
-      ...prev,
-      activeModel: model,
-    }))
-  }, [])
-
-  // Set vision model
-  const setVisionModel = useCallback((model: string) => {
-    setStatus((prev) => ({
-      ...prev,
-      visionModel: model,
-    }))
-  }, [])
-
-  // Set image generation model
-  const setImageGenModel = useCallback((model: string) => {
-    setStatus((prev) => ({
-      ...prev,
-      imageGenModel: model,
-    }))
-  }, [])
+  // Fetch unified cloud model list
+  const fetchCloudModels = useCallback(async () => {
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/providers/models/all`, {
+        signal: AbortSignal.timeout(10000),
+      })
+      if (response.ok) {
+        const data = await response.json()
+        setCloudModels(data.models || [])
+      }
+    } catch (e) {
+      // Silently fail — cloud models are optional
+    }
+  }, [setCloudModels])
 
   // Poll health on mount and fetch models when backend is ready
   useEffect(() => {
     let retryCount = 0
     const maxRetries = 30 // Try for 30 seconds (30 * 1s)
-    
+
     const init = async () => {
       // Try to connect with exponential backoff
       while (retryCount < maxRetries) {
@@ -206,7 +199,7 @@ export function useSystemStatus() {
             break
           }
         }
-        
+
         retryCount++
         if (retryCount < maxRetries) {
           // Wait before retrying (exponential backoff, max 2s)
@@ -214,14 +207,14 @@ export function useSystemStatus() {
           await new Promise(resolve => setTimeout(resolve, delay))
         }
       }
-      
+
       if (retryCount >= maxRetries) {
         console.warn('[LOOM] Backend connection timeout - make sure backend is running')
       }
     }
-    
+
     init()
-    
+
     // Continue polling every 10s for health and models
     const interval = setInterval(async () => {
       const health = await checkHealth()
@@ -233,11 +226,21 @@ export function useSystemStatus() {
     return () => clearInterval(interval)
   }, [checkHealth, fetchModels, models.length])
 
+  // Fetch cloud models on mount and when providers change
+  useEffect(() => {
+    fetchCloudModels()
+    const handler = () => fetchCloudModels()
+    window.addEventListener('loom:providers_updated', handler)
+    return () => window.removeEventListener('loom:providers_updated', handler)
+  }, [fetchCloudModels])
+
   return {
     status,
     models,
+    cloudModels,
     checkHealth,
     fetchModels,
+    fetchCloudModels,
     setActiveModel,
     setVisionModel,
     setImageGenModel,

@@ -46,25 +46,35 @@ class DownloadModelRequest(BaseModel):
 async def generate_image(request: ImageGenRequest):
     """Generate an image from a text prompt"""
     try:
-        if request.provider == "ollama":
+        # Auto-detect cloud provider from model prefix (e.g., "openai:dall-e-3")
+        # Only split on known cloud providers, not Ollama version tags like ":fp16"
+        provider = request.provider
+        model = request.model
+        if ":" in model:
+            prefix = model.split(":", 1)[0]
+            if prefix in ("openai", "gemini", "google"):
+                provider = prefix if prefix != "google" else "gemini"
+                model = model.split(":", 1)[1]
+
+        if provider == "ollama":
             # Use Ollama image generation models (like flux2-klein)
             from app.services.ollama_client import ollama_client
             image_data = await ollama_client.generate_image(
                 prompt=request.prompt,
-                model=request.model,
+                model=model,
                 input_image=request.input_image,  # For image-to-image editing
             )
             return {
                 "status": "success",
                 "image": image_data,
-                "model": request.model or "auto-detected",
+                "model": model or "auto-detected",
                 "provider": "ollama",
             }
-        elif request.provider == "local":
+        elif provider == "local":
             # Use local diffusers with MPS/CUDA
             result = await local_image_gen.generate(
                 prompt=request.prompt,
-                model=request.model,
+                model=model,
                 negative_prompt=request.negative_prompt,
                 width=request.width,
                 height=request.height,
@@ -72,26 +82,84 @@ async def generate_image(request: ImageGenRequest):
                 guidance_scale=request.guidance_scale,
                 seed=request.seed,
             )
-        elif request.provider == "huggingface":
+        elif provider == "huggingface":
             # Use HuggingFace Inference API
             result = await image_gen_service.generate_hf(
                 prompt=request.prompt,
-                model=request.model,
+                model=model,
                 negative_prompt=request.negative_prompt,
                 width=request.width,
                 height=request.height,
             )
-        elif request.provider == "comfyui":
+        elif provider == "comfyui":
             # Use local ComfyUI
             result = await image_gen_service.generate_comfyui(
                 prompt=request.prompt,
-                model=request.model,
+                model=model,
                 negative_prompt=request.negative_prompt,
                 width=request.width,
                 height=request.height,
             )
+        elif provider == "openai":
+            # Use OpenAI DALL-E
+            from app.services.provider_manager import provider_manager
+            openai_provider = provider_manager.get_provider("openai")
+            if not openai_provider or not openai_provider._api_key:
+                raise ValueError("OpenAI not connected. Add your API key in ☁ Providers.")
+            import openai as openai_sdk
+            client = openai_sdk.AsyncOpenAI(api_key=openai_provider._api_key)
+            dalle_model = model if model and model.startswith("dall-e") else "dall-e-3"
+            size = "1024x1024"
+            if request.width > 1024 or request.height > 1792:
+                size = "1792x1024"
+            elif request.height > request.width:
+                size = "1024x1792"
+
+            response = await client.images.generate(
+                model=dalle_model,
+                prompt=request.prompt,
+                n=1,
+                size=size,
+                response_format="b64_json",
+            )
+            image_b64 = response.data[0].b64_json
+            result = {
+                "status": "success",
+                "image": f"data:image/png;base64,{image_b64}",
+                "model": dalle_model,
+                "provider": "openai",
+            }
+        elif provider == "gemini":
+            # Use Google Gemini Imagen
+            from app.services.provider_manager import provider_manager
+            gemini_provider = provider_manager.get_provider("gemini")
+            if not gemini_provider or not gemini_provider._api_key:
+                raise ValueError("Gemini not connected. Add your API key in ☁ Providers.")
+            from google import genai
+            client = genai.Client(api_key=gemini_provider._api_key)
+            imagen_model = model if model and "imagen" in model else "imagen-3.0-generate-002"
+            response = await asyncio.to_thread(
+                client.models.generate_images,
+                model=imagen_model,
+                prompt=request.prompt,
+                config=genai.types.GenerateImagesConfig(
+                    number_of_images=1,
+                ),
+            )
+            if response.generated_images and len(response.generated_images) > 0:
+                import base64
+                image_bytes = response.generated_images[0].image.image_bytes
+                image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+                result = {
+                    "status": "success",
+                    "image": f"data:image/png;base64,{image_b64}",
+                    "model": imagen_model,
+                    "provider": "gemini",
+                }
+            else:
+                raise RuntimeError("Gemini Imagen returned no images")
         else:
-            raise ValueError(f"Unknown provider: {request.provider}")
+            raise ValueError(f"Unknown provider: {provider}")
         
         return result
     

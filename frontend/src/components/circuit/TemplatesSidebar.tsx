@@ -7,7 +7,7 @@ export interface NotebookTemplate {
   name: string
   description: string
   icon: string
-  category: 'thinking' | 'writing' | 'music' | 'data' | 'knowledge' | 'code' | 'scripts' | 'mine'
+  category: 'thinking' | 'writing' | 'music' | 'data' | 'knowledge' | 'code' | 'scripts' | 'hybrid' | 'mine' | 'image'
   cells: Omit<CellData, 'id' | 'status'>[]
 }
 
@@ -20,13 +20,14 @@ const CATEGORIES = [
   { id: 'knowledge', label: 'KNOW', icon: '📚' },
   { id: 'code', label: 'CODE', icon: '💻' },
   { id: 'scripts', label: 'SCRIPT', icon: '⚙️' },
+  { id: 'hybrid', label: 'HYBRID', icon: '☁' },
 ] as const
 
 // Cell helpers with optional inputMode
 const ai = (
-  label: string, 
-  content: string, 
-  slot: ModelSlot = 'A', 
+  label: string,
+  content: string,
+  slot: ModelSlot = 'A',
   inputMode: InputMode = 'previous'
 ): Omit<CellData, 'id' | 'status'> => ({
   type: 'ai_processor', label, content, output: '', modelSlot: slot, inputMode,
@@ -138,6 +139,77 @@ const terminalHistory = (
 })
 
 export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
+  // ============================================
+  // IMAGE - Visual creativity
+  // ============================================
+  {
+    id: 'prompt-to-image',
+    name: 'Prompt → Image',
+    description: 'Basic image generation workflow: input prompt, refine it, generate image',
+    icon: '🎨',
+    category: 'image',
+    cells: [
+      input('PROMPT', 'A futuristic city with flying cars and neon lights, cyberpunk style'),
+      ai('REFINE', 'Take the prompt above and enhance it for an AI image generator (like Midjourney or DALL-E 3). Add details about lighting, composition, style, and mood. Keep it under 100 words.', 'A'),
+      imageGen('IMAGE', 'low quality, blurry, distorted, watermark'),
+    ]
+  },
+  {
+    id: 'mood-board',
+    name: 'Mood Board Generator',
+    description: 'Generate 3 different style variations for a single concept',
+    icon: '🖼️',
+    category: 'image',
+    cells: [
+      input('CONCEPT', 'Interior design for a modern coffee shop'),
+      ai('STYLES', 'Generate 3 distinct visual styles for this concept (e.g., Minimalist, Industrial, Bohemian). writes a detailed image prompt for EACH style. Label them clearly.', 'A'),
+      ai('PROMPT 1', 'Extract the FIRST style prompt from above. Just the prompt text.', 'A'),
+      imageGen('IMAGE 1', 'text, watermark, blurry'),
+      ai('PROMPT 2', 'Extract the SECOND style prompt from above. Just the prompt text.', 'A', 'all'),
+      imageGen('IMAGE 2', 'text, watermark, blurry'),
+      ai('PROMPT 3', 'Extract the THIRD style prompt from above. Just the prompt text.', 'A', 'all'),
+      imageGen('IMAGE 3', 'text, watermark, blurry'),
+    ]
+  },
+  {
+    id: 'story-illustrator',
+    name: 'Story Illustrator',
+    description: 'Write a story, AI picks a key scene and illustrates it',
+    icon: '📖',
+    category: 'image',
+    cells: [
+      input('STORY', 'Once upon a time in a digital kingdom... (paste your story here)'),
+      ai('SCENE', 'Read the story above. Identify the most visually striking scene that captures the essence of the narrative. Describe it in vivid detail.', 'A'),
+      ai('PROMPT', 'Convert the scene description above into a high-quality image generation prompt. Specify art style (e.g., oil painting, digital art, cinematic).', 'A'),
+      imageGen('ILLUSTRATION', 'bad anatomy, text, ugly, distorted'),
+    ]
+  },
+  {
+    id: 'logo-concept',
+    name: 'Logo Concept Creator',
+    description: 'Generate logo concepts from a brand description',
+    icon: '©️',
+    category: 'image',
+    cells: [
+      input('BRAND', 'Brand Name: "Vertex"\nIndustry: Tech/AI\nVibe: Modern, sharp, trusted'),
+      ai('CONCEPTS', 'Brainstorm 3 unique logo concepts for this brand. 1. Abstract geometric. 2. Minimalist typography. 3. Symbolic icon. Describe them visually.', 'A'),
+      ai('PROMPT', 'Choose the best concept from above. Write a DALL-E prompt for a logo design. Keywords: vector, white background, flat design, professional, high quality.', 'A'),
+      imageGen('LOGO', 'photo, realistic, 3d render, shadow, noise, text, watermark'),
+    ]
+  },
+  {
+    id: 'describe-enhance-gen',
+    name: 'Describe → Enhance → Generate',
+    description: 'Two-step prompt refinement for highest quality results',
+    icon: '✨',
+    category: 'image',
+    cells: [
+      input('IDEA', 'A cat wizard casting a spell'),
+      ai('EXPAND (Creative)', 'Expand this simple idea into a rich visual scene. What is the wizard wearing? What does the spell look like? What is the background? Be imaginative.', 'A', 'previous'),
+      ai('REFINE (Technical)', 'Now rewrite that description as a technical image generation prompt. Focus on lighting (e.g., volumetric, rim light), camera angle, render style (e.g., Octane render, unreal engine 5), and artists styles.', 'B', 'previous'),
+      imageGen('RESULT', 'lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, blurry'),
+    ]
+  },
   // ============================================
   // THINKING - Sharp reasoning tools
   // ============================================
@@ -1694,6 +1766,111 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
       output('INSIGHTS'),
     ]
   },
+
+  // ============================================
+  // HYBRID - Combine local + cloud AI models
+  // ============================================
+  {
+    id: 'local-draft-cloud-polish',
+    name: 'Local Draft → Cloud Polish',
+    description: 'Fast local draft, then cloud model refines — best of both worlds',
+    icon: '✨',
+    category: 'hybrid',
+    cells: [
+      input('TOPIC', 'Write a technical blog post about WebAssembly'),
+      ai('DRAFT', 'Write a rough first draft. Cover the key points: what it is, why it matters, examples. Don\'t worry about polish.', 'A'),
+      ai('POLISH', 'Take this draft and elevate it: better structure, sharper prose, stronger opening, cleaner conclusions. Keep the substance, improve the craft.', 'B'),
+      output('POLISHED'),
+    ]
+  },
+  {
+    id: 'cloud-brainstorm-local-draft',
+    name: 'Cloud Brainstorm → Local Draft',
+    description: 'Cloud model generates ideas, local model writes the full draft offline',
+    icon: '💡',
+    category: 'hybrid',
+    cells: [
+      input('GOAL', 'Create a landing page for a developer tool that makes API testing easier'),
+      ai('BRAINSTORM', 'Generate 10 creative angles for this. Think about pain points, emotional hooks, proof points, and unique positioning.', 'B'),
+      ai('OUTLINE', 'Pick the 3 best angles. Build a landing page outline: headline, sub-headline, 3 feature blocks, social proof, CTA.', 'A', 'previous'),
+      ai('COPY', 'Write all the copy. Punchy, specific, no fluff. Include microcopy for buttons and form fields.', 'A'),
+      output('LANDING PAGE'),
+    ]
+  },
+  {
+    id: 'compare-engines',
+    name: 'Research → Compare Engines',
+    description: 'Same question to local + cloud, then compare answers',
+    icon: '⚖️',
+    category: 'hybrid',
+    cells: [
+      input('QUESTION', 'What are the most promising approaches to AI alignment?'),
+      ai('LOCAL', '{{input}}', 'A'),
+      ai('CLOUD', '{{input}}', 'B', 'none'),
+      ai('COMPARE', 'Compare the two answers above. Which is more thorough? More accurate? What does each miss? Synthesize the best of both.', 'B', 'all'),
+      output('SYNTHESIS'),
+    ]
+  },
+  {
+    id: 'three-minds',
+    name: 'Three Minds Debate',
+    description: '3 different AI models debate your question — local, ChatGPT, Gemini',
+    icon: '🧠',
+    category: 'hybrid',
+    cells: [
+      input('TOPIC', 'Should companies mandate return-to-office or stay remote?'),
+      ai('MIND A (Local)', 'Take a clear position on this topic. Argue it forcefully with evidence. Be specific and opinionated.', 'A'),
+      ai('MIND B (ChatGPT)', 'Take the OPPOSITE position from what was argued above. Attack their points and present your own case.', 'B'),
+      ai('MIND C (Gemini)', 'You\'ve heard both sides above. Find the truth that neither captured. What are they both missing? What\'s the real answer?', 'C', 'all'),
+      ai('VERDICT', 'Read all three perspectives. Score each on reasoning quality (1-10). Synthesize the strongest elements into a final, nuanced answer.', 'B', 'all'),
+      output('DEBATE'),
+    ]
+  },
+  {
+    id: 'ai-peer-review',
+    name: 'AI Peer Review',
+    description: 'One model writes code, the other two review it — catch more bugs',
+    icon: '🔍',
+    category: 'hybrid',
+    cells: [
+      input('TASK', 'Write a Python function that finds all anagrams in a list of words, grouping them together'),
+      ai('CODE', 'Write clean, well-commented code for this task. Include type hints and docstrings.', 'A'),
+      ai('REVIEW 1 (ChatGPT)', 'Code review: Find bugs, edge cases, performance issues, and style problems in the code above. Be thorough.', 'B'),
+      ai('REVIEW 2 (Gemini)', 'Independent code review: Find bugs, edge cases, and improvements. Also check if Review 1 missed anything.', 'C', 'all'),
+      ai('FINAL CODE', 'Incorporate ALL valid feedback from both reviews. Write the final, improved version. Note what changed and why.', 'A', 'all'),
+      output('REVIEWED CODE'),
+    ]
+  },
+  {
+    id: 'triple-perspective',
+    name: 'Triple Perspective',
+    description: 'Analyze a decision from 3 angles using 3 different AI models',
+    icon: '🔺',
+    category: 'hybrid',
+    cells: [
+      input('DECISION', 'Should we rewrite our backend from Node.js to Go?'),
+      ai('ENGINEER (Local)', 'Analyze as a senior engineer: technical tradeoffs, migration effort, performance gains, team learning curve. Be concrete.', 'A'),
+      ai('BUSINESS (ChatGPT)', 'Analyze as a business strategist: cost of migration vs. cost of staying, impact on shipping speed, hiring implications, competitive advantage.', 'B', 'none'),
+      ai('USER (Gemini)', 'Analyze from the end user perspective: will they notice? What breaks during migration? What gets better? What risks does this create for reliability?', 'C', 'none'),
+      ai('DECISION MATRIX', 'Review all three perspectives above. Create a decision matrix: list each factor, rate importance (1-5), rate each option. What\'s the verdict?', 'B', 'all'),
+      output('ANALYSIS'),
+    ]
+  },
+  {
+    id: 'translate-verify',
+    name: 'Translate & Cross-Verify',
+    description: 'One model translates, two others independently verify the translation',
+    icon: '🌍',
+    category: 'hybrid',
+    cells: [
+      input('TEXT', 'Paste text to translate and specify target language, e.g.:\n\nTranslate to Spanish:\n"The quick brown fox jumps over the lazy dog. Time flies like an arrow; fruit flies like a banana."'),
+      ai('TRANSLATE', 'Translate the text as requested. Preserve tone, idioms, and nuance. Note any culturally specific adaptations.', 'B'),
+      ai('VERIFY 1 (Gemini)', 'Check this translation for accuracy, natural phrasing, and cultural appropriateness. Flag any errors or awkward phrasing. Suggest corrections.', 'C'),
+      ai('VERIFY 2 (Local)', 'Independent translation check: back-translate to English and compare with the original. Flag meaning changes, lost nuances, or errors.', 'A', 'all'),
+      ai('FINAL', 'Given the original text and both reviews, produce the final polished translation. Note any changes made.', 'B', 'all'),
+      output('TRANSLATION'),
+    ]
+  },
 ]
 
 
@@ -1710,23 +1887,23 @@ export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircui
   const [savedCircuits, setSavedCircuits] = useState<Record<string, SavedCircuit>>({})
   const [hoveredCircuit, setHoveredCircuit] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState<string>('')
-  
+
   // Check if current circuit matches a template or saved circuit
   const isCurrentTemplate = (templateId: string) => currentCircuitName === templateId
   const isCurrentSavedCircuit = (name: string) => currentCircuitName === name
-  
+
   // Load saved circuits
   const refreshSavedCircuits = useCallback(() => {
     setSavedCircuits(loadSavedCircuits())
   }, [])
-  
+
   useEffect(() => {
     refreshCircuitsFromBackend().then(refreshSavedCircuits)
     // Refresh periodically to catch saves from other parts of the app
     const interval = setInterval(refreshSavedCircuits, 2000)
     return () => clearInterval(interval)
   }, [refreshSavedCircuits])
-  
+
   const handleDeleteCircuit = (name: string, e: React.MouseEvent) => {
     e.stopPropagation()
     if (confirm(`Delete circuit "${name}"?`)) {
@@ -1734,7 +1911,7 @@ export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircui
       refreshSavedCircuits()
     }
   }
-  
+
   // Convert saved circuit to template format
   const savedCircuitToTemplate = (name: string, circuit: SavedCircuit): NotebookTemplate => ({
     id: `saved-${name}`,
@@ -1744,24 +1921,24 @@ export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircui
     category: 'mine',
     cells: circuit.cells,
   })
-  
+
   // Filter templates and saved circuits based on search query
-  const filterBySearch = (items: Array<{ name: string; description?: string }>, query: string) => {
+  const filterBySearch = <T extends { name: string; description?: string }>(items: T[], query: string): T[] => {
     if (!query.trim()) return items
     const lowerQuery = query.toLowerCase()
-    return items.filter(item => 
+    return items.filter(item =>
       item.name.toLowerCase().includes(lowerQuery) ||
       (item.description && item.description.toLowerCase().includes(lowerQuery))
     )
   }
-  
-  const filteredTemplates = activeCategory === 'mine' 
+
+  const filteredTemplates = activeCategory === 'mine'
     ? [] // We'll render saved circuits separately
     : NOTEBOOK_TEMPLATES.filter(t => t.category === activeCategory)
-  
+
   // Apply search filter to templates
   const searchFilteredTemplates = filterBySearch(filteredTemplates, searchQuery)
-  
+
   const savedCircuitList = Object.entries(savedCircuits)
     .sort(([, a], [, b]) => b.savedAt - a.savedAt)
     .map(([name, circuit]) => ({
@@ -1769,7 +1946,7 @@ export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircui
       circuit,
       description: `${circuit.cells.length} cells • saved ${new Date(circuit.savedAt).toLocaleDateString()}`
     }))
-  
+
   // Apply search filter to saved circuits
   const searchFilteredSavedCircuits = filterBySearch(
     savedCircuitList.map(({ name, description }) => ({ name, description })),
@@ -1780,10 +1957,9 @@ export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircui
   }).filter((item): item is [string, SavedCircuit] => item !== null)
 
   return (
-    <div 
-      className={`h-full bg-slate border-r border-terminal-border transition-all duration-200 flex flex-col ${
-        isCollapsed ? 'w-10' : 'w-64'
-      }`}
+    <div
+      className={`h-full bg-slate border-r border-terminal-border transition-all duration-200 flex flex-col ${isCollapsed ? 'w-10' : 'w-64'
+        }`}
     >
       {/* Header */}
       <div className="p-2 border-b border-terminal-border flex items-center justify-between">
@@ -1809,11 +1985,10 @@ export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircui
                 setActiveCategory(cat.id)
                 setSearchQuery('') // Clear search when switching categories
               }}
-              className={`flex-1 py-2 text-[9px] tracking-wider transition-colors ${
-                activeCategory === cat.id
-                  ? 'text-phosphor border-b-2 border-phosphor bg-void/50'
-                  : 'text-terminal-muted hover:text-phosphor'
-              }`}
+              className={`flex-1 py-2 text-[9px] tracking-wider transition-colors ${activeCategory === cat.id
+                ? 'text-phosphor border-b-2 border-phosphor bg-void/50'
+                : 'text-terminal-muted hover:text-phosphor'
+                }`}
               title={cat.label}
             >
               <span className="block text-sm mb-0.5">{cat.icon}</span>
@@ -1867,7 +2042,7 @@ export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircui
               Start with a blank notebook
             </p>
           </button>
-          
+
           {/* MINE category - show saved circuits */}
           {activeCategory === 'mine' && (
             <>
@@ -1886,7 +2061,7 @@ export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircui
                   </p>
                 </div>
               )}
-              
+
               {searchFilteredSavedCircuits.length === 0 && savedCircuitList.length > 0 && searchQuery ? (
                 <div className="text-center py-6 text-terminal-muted text-[10px]">
                   No circuits match "{searchQuery}"
@@ -1900,46 +2075,44 @@ export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircui
                 </div>
               ) : (
                 searchFilteredSavedCircuits.map(([name, circuit]) => {
-                const isActive = isCurrentSavedCircuit(name)
-                return (
-                  <div
-                    key={name}
-                    onMouseEnter={() => setHoveredCircuit(name)}
-                    onMouseLeave={() => setHoveredCircuit(null)}
-                    className={`w-full text-left p-2 hover:bg-void group transition-colors relative cursor-pointer ${
-                      isActive ? 'bg-void border-l-2 border-phosphor' : ''
-                    }`}
-                    onClick={() => onSelectTemplate(savedCircuitToTemplate(name, circuit), name)}
-                    title={`Run with /${name}`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className={`text-sm ${isActive ? 'text-phosphor' : 'text-phosphor/50'}`}>◆</span>
-                      <span className={`text-xs truncate flex-1 ${
-                        isActive ? 'text-phosphor font-bold' : 'text-terminal-muted group-hover:text-phosphor'
-                      }`}>
-                        /{name}
-                      </span>
-                      {/* Delete button */}
-                      {hoveredCircuit === name && !isActive && (
-                        <span
-                          onClick={(e) => handleDeleteCircuit(name, e)}
-                          className="text-red-400/50 hover:text-red-400 text-xs px-1 cursor-pointer"
-                          title="Delete circuit"
-                        >
-                          ×
+                  const isActive = isCurrentSavedCircuit(name)
+                  return (
+                    <div
+                      key={name}
+                      onMouseEnter={() => setHoveredCircuit(name)}
+                      onMouseLeave={() => setHoveredCircuit(null)}
+                      className={`w-full text-left p-2 hover:bg-void group transition-colors relative cursor-pointer ${isActive ? 'bg-void border-l-2 border-phosphor' : ''
+                        }`}
+                      onClick={() => onSelectTemplate(savedCircuitToTemplate(name, circuit), name)}
+                      title={`Run with /${name}`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className={`text-sm ${isActive ? 'text-phosphor' : 'text-phosphor/50'}`}>◆</span>
+                        <span className={`text-xs truncate flex-1 ${isActive ? 'text-phosphor font-bold' : 'text-terminal-muted group-hover:text-phosphor'
+                          }`}>
+                          /{name}
                         </span>
-                      )}
+                        {/* Delete button */}
+                        {hoveredCircuit === name && !isActive && (
+                          <span
+                            onClick={(e) => handleDeleteCircuit(name, e)}
+                            className="text-red-400/50 hover:text-red-400 text-xs px-1 cursor-pointer"
+                            title="Delete circuit"
+                          >
+                            ×
+                          </span>
+                        )}
+                      </div>
+                      <p className={`text-[9px] mt-1 pl-6 ${isActive ? 'text-phosphor/50' : 'text-terminal-muted/60'}`}>
+                        {circuit.cells.length} cells • {new Date(circuit.savedAt).toLocaleDateString()}
+                      </p>
                     </div>
-                    <p className={`text-[9px] mt-1 pl-6 ${isActive ? 'text-phosphor/50' : 'text-terminal-muted/60'}`}>
-                      {circuit.cells.length} cells • {new Date(circuit.savedAt).toLocaleDateString()}
-                    </p>
-                  </div>
-                )
-              })
+                  )
+                })
               )}
             </>
           )}
-          
+
           {/* Regular templates for other categories */}
           {activeCategory !== 'mine' && (
             searchFilteredTemplates.length === 0 && searchQuery ? (
@@ -1947,28 +2120,26 @@ export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircui
                 No templates match "{searchQuery}"
               </div>
             ) : (
-              searchFilteredTemplates.map((template) => {
+              searchFilteredTemplates.map((t) => {
+                const template = t as NotebookTemplate
                 const isActive = isCurrentTemplate(template.id)
                 return (
                   <button
                     key={template.id}
                     onClick={() => onSelectTemplate(template, template.id)}
-                    className={`w-full text-left p-2 hover:bg-void group transition-colors ${
-                      isActive ? 'bg-void border-l-2 border-phosphor' : ''
-                    }`}
+                    className={`w-full text-left p-2 hover:bg-void group transition-colors ${isActive ? 'bg-void border-l-2 border-phosphor' : ''
+                      }`}
                     title={template.description}
                   >
                     <div className="flex items-center gap-2">
                       <span className="text-sm">{template.icon}</span>
-                      <span className={`text-xs truncate ${
-                        isActive ? 'text-phosphor font-bold' : 'text-terminal-muted group-hover:text-phosphor'
-                      }`}>
+                      <span className={`text-xs truncate ${isActive ? 'text-phosphor font-bold' : 'text-terminal-muted group-hover:text-phosphor'
+                        }`}>
                         {template.name}
                       </span>
                     </div>
-                    <p className={`text-[9px] mt-1 line-clamp-2 pl-6 ${
-                      isActive ? 'text-phosphor/50' : 'text-terminal-muted/60'
-                    }`}>
+                    <p className={`text-[9px] mt-1 line-clamp-2 pl-6 ${isActive ? 'text-phosphor/50' : 'text-terminal-muted/60'
+                      }`}>
                       {template.description}
                     </p>
                   </button>
@@ -1982,55 +2153,69 @@ export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircui
       {/* Collapsed view */}
       {isCollapsed && (
         <div className="flex-1 flex flex-col">
-          <div className="border-b border-terminal-border">
+          <div className="border-b border-terminal-border py-1">
             {CATEGORIES.map((cat) => (
-              <button
-                key={cat.id}
-                onClick={() => setActiveCategory(cat.id)}
-                className={`w-full p-2 flex justify-center transition-colors ${
-                  activeCategory === cat.id
+              <div key={cat.id} className="group relative flex items-center justify-center">
+                <button
+                  onClick={() => setActiveCategory(cat.id)}
+                  className={`w-full p-2.5 flex justify-center transition-colors relative ${activeCategory === cat.id
                     ? 'text-phosphor bg-void/50'
                     : 'text-terminal-muted hover:text-phosphor'
-                }`}
-                title={cat.label}
-              >
-                <span className="text-sm">{cat.icon}</span>
-              </button>
+                    }`}
+                >
+                  <div className={`absolute left-0 top-2 bottom-2 w-0.5 bg-phosphor transition-opacity ${activeCategory === cat.id ? 'opacity-100' : 'opacity-0'}`} />
+                  <span className="text-sm relative z-10">{cat.icon}</span>
+                </button>
+                {/* Custom Tooltip */}
+                <div className="absolute left-full top-1/2 -translate-y-1/2 ml-2 px-2 py-1 bg-void border border-terminal-border text-xs text-phosphor whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50 shadow-xl">
+                  {cat.label}
+                </div>
+              </div>
             ))}
           </div>
-          
+
           {/* NEW button */}
-          <button
-            onClick={onNewCircuit}
-            className="p-2 border-b border-terminal-border text-phosphor hover:bg-void flex justify-center"
-            title="New Circuit"
-          >
-            <span className="text-sm">+</span>
-          </button>
-          
+          <div className="group relative flex items-center justify-center">
+            <button
+              onClick={onNewCircuit}
+              className="w-full p-2 border-b border-terminal-border text-phosphor hover:bg-void flex justify-center relative"
+            >
+              <span className="text-sm">+</span>
+            </button>
+            <div className="absolute left-full top-1/2 -translate-y-1/2 ml-2 px-2 py-1 bg-void border border-terminal-border text-xs text-phosphor whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50 shadow-xl">
+              New Circuit
+            </div>
+          </div>
+
           <div className="flex-1 overflow-y-auto py-2">
             {/* Saved circuits for MINE category */}
-            {activeCategory === 'mine' && savedCircuitList.map(([name, circuit]) => (
-              <button
-                key={name}
-                onClick={() => onSelectTemplate(savedCircuitToTemplate(name, circuit), name)}
-                className="w-full p-2 hover:bg-void flex justify-center"
-                title={`/${name}: ${circuit.cells.length} cells`}
-              >
-                <span className="text-sm text-phosphor">◆</span>
-              </button>
+            {activeCategory === 'mine' && savedCircuitList.map(({ name, circuit }) => (
+              <div key={name} className="group relative flex items-center justify-center">
+                <button
+                  onClick={() => onSelectTemplate(savedCircuitToTemplate(name, circuit), name)}
+                  className="w-full p-2 hover:bg-void flex justify-center"
+                >
+                  <span className="text-sm text-phosphor">◆</span>
+                </button>
+                <div className="absolute left-full top-1/2 -translate-y-1/2 ml-2 px-2 py-1 bg-void border border-terminal-border text-xs text-phosphor whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50 shadow-xl">
+                  /{name} ({circuit.cells.length})
+                </div>
+              </div>
             ))}
-            
+
             {/* Regular templates */}
             {activeCategory !== 'mine' && filteredTemplates.map((template) => (
-              <button
-                key={template.id}
-                onClick={() => onSelectTemplate(template, template.id)}
-                className="w-full p-2 hover:bg-void flex justify-center"
-                title={`${template.name}: ${template.description}`}
-              >
-                <span className="text-sm">{template.icon}</span>
-              </button>
+              <div key={template.id} className="group relative flex items-center justify-center">
+                <button
+                  onClick={() => onSelectTemplate(template, template.id)}
+                  className="w-full p-2 hover:bg-void flex justify-center"
+                >
+                  <span className="text-sm">{template.icon}</span>
+                </button>
+                <div className="absolute left-full top-1/2 -translate-y-1/2 ml-2 px-2 py-1 bg-void border border-terminal-border text-xs text-phosphor whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50 shadow-xl">
+                  {template.name}
+                </div>
+              </div>
             ))}
           </div>
         </div>

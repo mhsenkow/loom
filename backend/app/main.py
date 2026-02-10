@@ -25,11 +25,14 @@ if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
 from app.routers import modules, images, files, circuits, search, remote, code_context, music, sessions, web, tts
+from app.routers import providers as providers_router
 from app.services.ollama_client import ollama_client
+from app.services.provider_manager import provider_manager
 from app.services.vector_store import VectorStore
 from app.services.storage import get_module as storage_get_module, init_db as storage_init_db
 from app.services.module_executor import run_module as execute_module_logic
 from app.services.file_loader import file_loader
+from app.services.orchestrator import orchestrator
 
 
 # Create Socket.IO server
@@ -94,6 +97,7 @@ app.include_router(music.router, prefix="/api/music", tags=["music"])
 app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
 app.include_router(web.router, prefix="/api/web", tags=["web"])
 app.include_router(tts.router, prefix="/api/tts", tags=["tts"])
+app.include_router(providers_router.router, prefix="/api/providers", tags=["providers"])
 
 # Initialize database on startup
 @app.on_event("startup")
@@ -412,10 +416,18 @@ async def get_model_info(model_name: str):
             return {"model": model_name, "size": "Unknown", "description": "Model information not available", "use": "General purpose"}
     except Exception as e:
         print(f"[LOOM] Error getting model info: {e}")
-        return {"error": str(e), "model": model_name}
 
+@app.get("/api/orchestrator/settings")
+async def get_orchestrator_settings():
+    """Get current orchestrator preferences"""
+    return orchestrator.get_settings()
 
-# Socket.IO Events
+@app.post("/api/orchestrator/settings")
+async def update_orchestrator_settings(settings: dict):
+    """Update orchestrator preferences"""
+    orchestrator.update_settings(settings)
+    return {"status": "success", "settings": orchestrator.get_settings()}
+
 @sio.event
 async def connect(sid, environ):
     print(f"[LOOM] Client connected: {sid}")
@@ -431,7 +443,40 @@ async def disconnect(sid):
 async def chat(sid, data):
     """Handle chat/AI processing requests with optional RAG and code context"""
     prompt = data.get('prompt', '')
-    model = data.get('model', 'llama3.1:8b')
+    requested_model = data.get('model', 'auto')
+    
+    # --- ORCHESTRATION LAYER ---
+    try:
+        analysis = await orchestrator.analyze(prompt)
+        
+        # 1. Circuit Detection
+        if analysis.action == 'circuit' and analysis.circuit_name:
+            await sio.emit('orchestrator_event', {
+                'type': 'circuit_suggestion',
+                'circuit': analysis.circuit_name,
+                'reason': analysis.reasoning
+            }, room=sid)
+            # We could return here if we want to stop chat, but usually 
+            # we let chat proceed or wait for user confirmation.
+            # For now, let's notify and continue chat unless user strictly blocked it.
+
+        # 2. Auto Model Selection
+        if requested_model == 'auto' or requested_model == 'Auto':
+            if analysis.model_name:
+                requested_model = analysis.model_name
+                await sio.emit('orchestrator_event', {
+                    'type': 'model_selected',
+                    'model': requested_model,
+                    'reason': analysis.reasoning
+                }, room=sid)
+            else:
+                requested_model = 'llama3.1:8b' # Fallback
+    
+    except Exception as e:
+        print(f"[ORCHESTRATOR] Error: {e}")
+        requested_model = 'llama3.1:8b'
+
+    model = requested_model
     use_rag = data.get('use_rag', False)  # Enable RAG retrieval
     rag_collection = data.get('rag_collection', None)
     rag_n_results = data.get('rag_n_results', 5)
@@ -506,12 +551,12 @@ Instructions:
 
 Answer:"""
         
-        # Stream response from Ollama
-        async for chunk in ollama_client.stream_chat(final_prompt, model):
+        # Stream response — routes to Ollama or cloud provider based on model prefix
+        async for chunk in provider_manager.stream_chat(final_prompt, model):
             await sio.emit('ai_chunk', {'content': chunk}, room=sid)
         
         # Emit completion
-        await sio.emit('ai_status', {'status': 'success', 'message': 'Complete'}, room=sid)
+        await sio.emit('ai_status', {'status': 'success', 'message': 'Complete', 'model': model}, room=sid)
         
     except Exception as e:
         await sio.emit('ai_status', {'status': 'error', 'message': str(e)}, room=sid)
@@ -753,6 +798,7 @@ async def execute_module(sid, data):
             module_type, content, inputs,
             ollama=ollama_client, model=model,
             vector_store=vector_store,
+            provider_manager=provider_manager,
         )
         await sio.emit('module_status', {
             'module_id': module_id,
