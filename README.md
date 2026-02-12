@@ -16,11 +16,17 @@ A local-first, desktop-class Personal Intelligence OS with a "Cassette Futurism"
 
 - **Terminal Feed**: A linear notebook interface styled as a data feed/log with session management
 - **Circuit Board**: A node-graph for building AI processing pipelines with templates
-- **Local AI**: Powered by Ollama for fully local LLM inference
+- **Local-First AI**: Powered by Ollama for fully local LLM inference
+- **Auto Orchestrator**: Intent-aware model selection with session stickiness and model-switch events
+- **Quick Cloud Lane**: `/quick` routes low-priority asks to free/cheap cloud models when connected
+- **Conversational Action Assist**: In-chat `yes / edit: / no` confirmation flow for image/music/speech/QDC actions
 - **Vector Memory**: ChromaDB for semantic search, RAG, and document indexing
 - **Image Analysis**: Vision model integration for analyzing images (LLaVA, BakLLaVA, Moondream)
 - **File Processing**: Load and process PDFs, text files, and other documents
-- **Image Generation**: Local image generation capabilities
+- **Image + Music Generation**: Local image generation and ACE-Step music generation
+- **Speech Stack**: Voice chat modal + browser/Orpheus TTS with streaming speech options
+- **Cloud Providers**: OpenAI, Anthropic, Gemini, Mistral, DeepSeek, OpenRouter, and QDC connector card
+- **QDC Async Job Lane**: Upload/run/status/results flow with terminal/socket progress updates
 - **Session Management**: Save, load, and restore sessions
 - **Circuit Persistence**: Save and load complete circuit configurations
 - **Retro Aesthetics**: CRT scanlines, phosphor green, monospace everything
@@ -50,6 +56,10 @@ Before you begin, ensure you have the following installed:
 
 ### 4. Git (for cloning the repository)
 - Download from [git-scm.com](https://git-scm.com/)
+
+### 5. Optional Cloud Keys / Tokens
+- Cloud chat/image providers are optional and can be configured in **Cloud Providers** modal.
+- QDC is supported as an async remote job connector (not direct chat-completions).
 
 ## 🚀 Quick Start
 
@@ -199,6 +209,27 @@ Open your browser and navigate to: **http://localhost:5173**
 
 You should see the LOOM interface!
 
+## ⚙️ Environment Configuration
+
+Optional environment variables for safer/localized deployments:
+
+- `LOOM_ALLOWED_ORIGINS` (backend): comma-separated CORS allowlist.  
+  Example: `LOOM_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173`
+- `LOOM_LOG_LEVEL` (backend): app log level (`DEBUG|INFO|WARNING|ERROR`, default `INFO`).
+- `LOOM_ACCESS_LOG` (backend): enable uvicorn access logs (`true`/`false`, default `false`).
+- `LOOM_HTTP_CLIENT_LOG_LEVEL` (backend): log level for internal `httpx/httpcore` logs (default `WARNING`).
+- `LOOM_SOCKETIO_LOG` (backend): enable Socket.IO internal logs (`true`/`false`, default `false`).
+- `LOOM_ENGINEIO_LOG` (backend): enable Engine.IO transport logs (`true`/`false`, default `false`).
+- `LOOM_QUIET_REQUEST_PATHS` (backend): comma-separated endpoint paths that are logged at `DEBUG` for successful requests (default `/health,/api/images/models,/api/code-context/status,/api/sessions`).
+- `LOOM_WEB_API_KEY` (backend): if set, `/api/web/*` endpoints require `X-LOOM-API-KEY`.
+- `LOOM_WEB_RATE_LIMIT_PER_MIN` (backend): requests per minute limit for `/api/web/*` endpoints (default `60`).
+- `LOOM_INTERNAL_API_BASE_URL` (backend): internal base URL used by backend services for internal API calls (default `http://localhost:8000`).
+- `LOOM_RUN_CLEANUP_ON_STARTUP` (backend): run generated-media cleanup on startup (`true`/`false`, default `true`).
+- `LOOM_GENERATED_MEDIA_RETENTION_DAYS` (backend): remove generated images/music older than N days on startup (default `14`).
+- `LOOM_QDC_MODE` (backend): QDC execution mode (currently `mock`).
+- `LOOM_QDC_MOCK_STEP_S` (backend): QDC mock progress pacing in seconds per step (default `0.35`).
+- `VITE_API_BASE_URL` (frontend): backend API base URL for the web app (default `http://localhost:8000`).
+
 ## 🖥️ Running as Electron Desktop App
 
 To run LOOM as a desktop application:
@@ -224,6 +255,8 @@ Once LOOM is running, you can use these commands in the terminal:
 | `/help` | Show available commands |
 | `/ai <prompt>` | Send a prompt to the AI |
 | `/models` | List available Ollama models |
+| `/setup-models` | Pull baseline stack (tiny/chat/image/music) if missing |
+| `/quick <question>` | Route low-priority ask to fast free/cheap cloud lane |
 | `/status` | Show system status (Ollama, ChromaDB) |
 | `/clear` | Clear the display; use `/restore` to bring it back |
 | `/restore` | Restore content from before `/clear` |
@@ -231,8 +264,28 @@ Once LOOM is running, you can use these commands in the terminal:
 | `/load <name>` | Load a saved session (replaces current) |
 | `/sessions` | List saved sessions |
 | `/image` | Upload and analyze an image with vision models |
+| `/song <style>` | Open quick music generation flow |
+| `/qdc status` | Show QDC connector and remote lane status |
+| `/qdc jobs` | List recent QDC jobs |
+| `/qdc run <prompt>` | Start async QDC remote job |
 
-**Tip:** You can also just type naturally - any non-command input is automatically sent to the AI. Click the 📷 button to upload and analyze images.
+**Tip:** You can also type naturally. Non-command input goes to chat unless it is detected as an action request (image/music/speech/QDC), in which case LOOM asks for `yes`, `edit: ...`, or `no`.
+
+### Model Routing & Cloud Lanes
+
+- `auto` chat mode uses the orchestrator to pick models based on intent, speed/cost/quality settings, and prior model stickiness.
+- `/quick` explicitly targets the fast lane and prefers free/cheap cloud models (Gemini/OpenRouter/open mini-class models), with local tiny-model fallback.
+- Cloud models are listed in a unified catalog alongside local models.
+- QDC is treated as a **job lane**, not a token-streaming chat provider.
+
+### Conversational Action Assist
+
+LOOM can turn plain-language requests into assisted actions:
+
+- Example: “make a poster for my event” -> suggests image action -> reply `yes` to run.
+- Example: “compose lo-fi study music” -> suggests music action -> `yes` launches music generation.
+- Example: “use qdc for this remote run” -> suggests QDC job action -> `yes` starts async job.
+- Example: “read this aloud” -> suggests speech mode action.
 
 ### Circuit Board
 
@@ -295,6 +348,8 @@ Once LOOM is running, you can use these commands in the terminal:
 - **No models available**: Pull a model with `ollama pull llama2`
 - **Model not responding**: Check Ollama is running and the model name is correct
 - **Connection refused**: Ensure the backend server is running on port 8000
+- **`/quick` uses local fallback unexpectedly**: Connect a cloud provider in the Providers modal and retry
+- **QDC run fails immediately**: Ensure Qualcomm QDC token is connected in Providers (`/qdc status` should show connected)
 
 ### Electron app issues
 
@@ -310,8 +365,8 @@ loom/
 │   ├── src/
 │   │   ├── components/
 │   │   │   ├── shell/        # CRT effects, title bar, settings
-│   │   │   ├── terminal/     # Tiptap notebook, image analysis, sessions
-│   │   │   └── circuit/      # React Flow graph, modules, templates
+│   │   │   ├── terminal/     # Tiptap notebook, orchestration, providers, image/music flows
+│   │   │   └── circuit/      # React Flow graph, modules, templates, QDC nodes
 │   │   ├── hooks/            # Socket, status, circuit runner hooks
 │   │   ├── styles/           # Tailwind + CRT CSS
 │   │   └── types/            # TypeScript interfaces
@@ -319,8 +374,8 @@ loom/
 │
 ├── backend/                  # Python FastAPI server
 │   ├── app/
-│   │   ├── routers/          # REST endpoints (modules, files, images, circuits, search)
-│   │   ├── services/         # Ollama, ChromaDB, file processing, storage
+│   │   ├── routers/          # REST endpoints (modules, files, images, circuits, providers, qdc, search)
+│   │   ├── services/         # Ollama, ChromaDB, orchestrator, qdc lane, file processing, storage
 │   │   └── models/           # Pydantic schemas
 │   ├── data/                 # Local data storage (ChromaDB, SQLite)
 │   ├── scripts/              # Template extraction and testing scripts
@@ -336,6 +391,8 @@ loom/
 
 - **[CHROMADB_INTEGRATION.md](./CHROMADB_INTEGRATION.md)** - Complete guide to vector store and RAG
 - **[VECTOR_CELLS_GUIDE.md](./VECTOR_CELLS_GUIDE.md)** - Simple guide to INDEX and SEARCH cells
+- **[LOCAL_CONVERSATIONAL_AI.md](./LOCAL_CONVERSATIONAL_AI.md)** - Local conversation + streaming speech stack details
+- **[CLOUD_ORCHESTRATION_AND_QDC.md](./CLOUD_ORCHESTRATION_AND_QDC.md)** - Orchestrator routing, quick lane, providers, and QDC job lane
 - **[TEMPLATE_UPDATES.md](./TEMPLATE_UPDATES.md)** - Available circuit templates
 - **[MODULE_PERSISTENCE_IMPLEMENTATION.md](./MODULE_PERSISTENCE_IMPLEMENTATION.md)** - How module storage works
 - **[STORAGE_ANALYSIS.md](./STORAGE_ANALYSIS.md)** - Storage architecture details
@@ -368,17 +425,33 @@ loom/
 - `POST /api/circuits` - Save a circuit
 - `GET /api/circuits/{name}` - Get a saved circuit
 - `GET /api/search` - Semantic search across indexed documents
+- `GET /api/providers` - List cloud providers and capabilities
+- `GET /api/providers/models/all` - Unified local+cloud model catalog
+- `GET /api/providers/quick-model` - Suggest fast/low-cost model for `/quick`
+- `GET /api/qdc/status` - QDC lane status
+- `POST /api/qdc/upload` - Upload artifact path for QDC lane
+- `POST /api/qdc/jobs` - Start async QDC job
+- `GET /api/qdc/jobs` - List recent QDC jobs
+- `GET /api/qdc/jobs/{id}` - Get QDC job status
+- `GET /api/qdc/jobs/{id}/logs` - Get QDC job logs
+- `GET /api/qdc/jobs/{id}/results` - Get QDC job result
+- `POST /api/qdc/jobs/{id}/rerun` - Rerun QDC job
+- `POST /api/qdc/jobs/{id}/cancel` - Cancel QDC job
 
 ### Socket.IO Events
 
 **Client → Server:**
 - `chat` - Send AI prompt `{ prompt, model }`
 - `execute_module` - Run a module `{ module_id, type, inputs }`
+- `pull_model` - Pull Ollama model with progress
 
 **Server → Client:**
 - `ai_chunk` - Streaming token `{ content }`
 - `ai_status` - Status update `{ status, message }`
 - `module_status` - Module state `{ module_id, status, output }`
+- `orchestrator_event` - Circuit/model suggestion or auto-switch details
+- `pull_status` - Model pull progress `{ status, model, percent, message }`
+- `qdc_job_event` - QDC async job progress/status updates
 
 ## 🛠️ Development
 
@@ -439,18 +512,23 @@ npm run electron:build
 **✅ Fully Working:**
 - Terminal feed with session management
 - Circuit board with node-based workflows
-- AI chat with Ollama integration
+- AI chat with local/cloud routing
+- Intent-aware orchestrator with auto model switching + model-switch notifications
+- Quick lane (`/quick`) with free/cheap cloud preference and tiny local fallback
 - Vector store with ChromaDB (INDEX/SEARCH cells)
 - File processing and indexing
 - Image analysis with vision models
+- Image + music generation panels and command flows
+- Conversational action-confirm flow (`yes` / `edit:` / `no`) for image/music/speech/QDC
+- QDC async lane (upload, run, status, logs, results, rerun/cancel)
+- Circuit QDC nodes (`qdc_upload`, `qdc_run`, `qdc_status`, `qdc_results`)
 - Circuit templates and persistence
 - Session save/load/restore
 
 **🚧 In Development:**
-- Enhanced RAG workflows
-- More circuit templates
-- Advanced image generation features
-- Performance optimizations
+- Live Qualcomm QDC API execution backend (current lane is mock-backed for UX integration)
+- Enhanced RAG workflows and more circuit templates
+- Advanced image generation features and performance optimizations
 
 **📋 Planned:**
 - Multi-user support

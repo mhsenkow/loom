@@ -1,5 +1,8 @@
 import { useState, useCallback, useEffect } from 'react'
 import { FolderPickerModal } from './FolderPickerModal'
+import { DialogModal } from '../shell/DialogModal'
+import { API_BASE_URL } from '../../config/api'
+import { clearCodeContext } from '../../utils/codeContextApi'
 
 interface CodeContextPanelProps {
   isOpen: boolean
@@ -10,7 +13,7 @@ interface CodeContextPanelProps {
   isIndexing?: boolean
 }
 
-interface IndexOptions {
+export interface IndexOptions {
   file_patterns?: string[]
   exclude_patterns?: string[]
   chunk_size?: number
@@ -31,6 +34,13 @@ export function CodeContextPanel({
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [indexingProgress, setIndexingProgress] = useState<string>('')
   const [showFolderPicker, setShowFolderPicker] = useState(false)
+  const [filePatternsInput, setFilePatternsInput] = useState('*.py,*.ts,*.js,*.tsx,*.jsx')
+  const [excludePatternsInput, setExcludePatternsInput] = useState('node_modules,.git,__pycache__')
+  const [chunkSizeInput, setChunkSizeInput] = useState('1000')
+  const [chunkOverlapInput, setChunkOverlapInput] = useState('200')
+  const [indexingStartedAt, setIndexingStartedAt] = useState<number | null>(null)
+  const [elapsedSeconds, setElapsedSeconds] = useState(0)
+  const [missingFolderDialogOpen, setMissingFolderDialogOpen] = useState(false)
 
   useEffect(() => {
     if (activeFolder) {
@@ -65,13 +75,33 @@ export function CodeContextPanel({
 
   const handleIndex = useCallback(async () => {
     if (!folderPath.trim()) {
-      alert('Please select a folder')
+      setMissingFolderDialogOpen(true)
       return
     }
 
     setIndexingProgress('Indexing folder... This may take a minute for large folders.')
+    setIndexingStartedAt(Date.now())
+    setElapsedSeconds(0)
     try {
-      await onIndexFolder(folderPath)
+      const parseCsv = (value: string): string[] =>
+        value
+          .split(',')
+          .map(part => part.trim())
+          .filter(Boolean)
+
+      const toPositiveInt = (value: string): number | undefined => {
+        const parsed = Number.parseInt(value, 10)
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
+      }
+
+      const options: IndexOptions = {
+        file_patterns: parseCsv(filePatternsInput),
+        exclude_patterns: parseCsv(excludePatternsInput),
+        chunk_size: toPositiveInt(chunkSizeInput),
+        chunk_overlap: toPositiveInt(chunkOverlapInput),
+      }
+
+      await onIndexFolder(folderPath, options)
       setIndexingProgress('')
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Failed to index'
@@ -80,20 +110,32 @@ export function CodeContextPanel({
       setTimeout(() => {
         setIndexingProgress('')
       }, 10000)
+    } finally {
+      setIndexingStartedAt(null)
     }
-  }, [folderPath, onIndexFolder])
+  }, [
+    chunkOverlapInput,
+    chunkSizeInput,
+    excludePatternsInput,
+    filePatternsInput,
+    folderPath,
+    onIndexFolder,
+  ])
+
+  useEffect(() => {
+    if (!isIndexing || indexingStartedAt === null) return
+    const interval = window.setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - indexingStartedAt) / 1000))
+    }, 1000)
+    return () => window.clearInterval(interval)
+  }, [isIndexing, indexingStartedAt])
 
   const handleClear = useCallback(async () => {
     setFolderPath('')
     setIndexingProgress('')
     // Call backend to clear context
     try {
-      const response = await fetch('http://localhost:8000/api/code-context/clear', {
-        method: 'DELETE',
-      })
-      if (!response.ok) {
-        console.warn('[LOOM] Failed to clear code context:', response.statusText)
-      }
+      await clearCodeContext(API_BASE_URL)
     } catch (error) {
       console.warn('[LOOM] Error clearing code context:', error)
     }
@@ -102,7 +144,7 @@ export function CodeContextPanel({
   if (!isOpen) return null
 
   return (
-    <div className="fixed right-0 top-0 bottom-0 w-96 bg-slate border-l-2 border-phosphor z-40 flex flex-col overflow-hidden">
+    <div className="fixed right-0 top-0 bottom-0 w-full sm:w-96 bg-slate border-l-2 border-phosphor z-40 flex flex-col overflow-hidden">
       {/* Header */}
       <div className="p-4 border-b border-terminal-border flex items-center justify-between bg-void/50">
         <div className="flex items-center gap-2">
@@ -162,6 +204,14 @@ export function CodeContextPanel({
             </div>
           </div>
         )}
+        {!activeFolder && (
+          <div className="border border-terminal-border bg-void/20 p-3 text-[10px] text-terminal-muted leading-relaxed">
+            <div className="text-phosphor text-xs font-bold mb-1">No code context yet</div>
+            <div>1. Click <span className="text-phosphor">Browse</span> (or paste a folder path).</div>
+            <div>2. Click <span className="text-phosphor">Index Folder</span>.</div>
+            <div>3. Ask code questions in Terminal; relevant files are added automatically.</div>
+          </div>
+        )}
 
         {/* Actions */}
         <div className="flex gap-2">
@@ -186,6 +236,16 @@ export function CodeContextPanel({
         {indexingProgress && (
           <div className="border border-terminal-border bg-void/30 p-2">
             <div className="text-xs text-phosphor font-mono">{indexingProgress}</div>
+            {isIndexing && (
+              <div className="mt-2 space-y-1">
+                <div className="h-1.5 border border-terminal-border bg-void overflow-hidden">
+                  <div className="h-full w-1/2 bg-phosphor/60 animate-pulse" />
+                </div>
+                <div className="text-[10px] text-terminal-muted">
+                  Working... {elapsedSeconds}s elapsed
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -205,7 +265,8 @@ export function CodeContextPanel({
                 <label className="block text-phosphor/70 mb-1">File Patterns</label>
                 <input
                   type="text"
-                  defaultValue="*.py,*.ts,*.js,*.tsx,*.jsx"
+                  value={filePatternsInput}
+                  onChange={(e) => setFilePatternsInput(e.target.value)}
                   className="w-full bg-void border border-terminal-border text-phosphor px-2 py-1 focus:outline-none focus:border-phosphor"
                 />
               </div>
@@ -213,7 +274,8 @@ export function CodeContextPanel({
                 <label className="block text-phosphor/70 mb-1">Exclude Patterns</label>
                 <input
                   type="text"
-                  defaultValue="node_modules,.git,__pycache__"
+                  value={excludePatternsInput}
+                  onChange={(e) => setExcludePatternsInput(e.target.value)}
                   className="w-full bg-void border border-terminal-border text-phosphor px-2 py-1 focus:outline-none focus:border-phosphor"
                 />
               </div>
@@ -222,7 +284,8 @@ export function CodeContextPanel({
                   <label className="block text-phosphor/70 mb-1">Chunk Size</label>
                   <input
                     type="number"
-                    defaultValue={1000}
+                    value={chunkSizeInput}
+                    onChange={(e) => setChunkSizeInput(e.target.value)}
                     className="w-full bg-void border border-terminal-border text-phosphor px-2 py-1 focus:outline-none focus:border-phosphor"
                   />
                 </div>
@@ -230,7 +293,8 @@ export function CodeContextPanel({
                   <label className="block text-phosphor/70 mb-1">Overlap</label>
                   <input
                     type="number"
-                    defaultValue={200}
+                    value={chunkOverlapInput}
+                    onChange={(e) => setChunkOverlapInput(e.target.value)}
                     className="w-full bg-void border border-terminal-border text-phosphor px-2 py-1 focus:outline-none focus:border-phosphor"
                   />
                 </div>
@@ -253,6 +317,16 @@ export function CodeContextPanel({
         isOpen={showFolderPicker}
         onClose={() => setShowFolderPicker(false)}
         onSelect={handleFolderSelected}
+      />
+
+      <DialogModal
+        isOpen={missingFolderDialogOpen}
+        title="Folder Required"
+        message="Select or enter a project folder before indexing code context."
+        confirmLabel="OK"
+        hideCancel
+        onConfirm={() => setMissingFolderDialogOpen(false)}
+        onCancel={() => setMissingFolderDialogOpen(false)}
       />
     </div>
   )

@@ -70,7 +70,6 @@ export function ImageGenerationPanel({
 }: ImageGenerationPanelProps) {
   const [showImageModal, setShowImageModal] = useState(false)
   const [frameIndex, setFrameIndex] = useState(0)
-  const [selectedModel, setSelectedModel] = useState<string>('')
   const [showModelSelector, setShowModelSelector] = useState(false)
   const [promptInput, setPromptInput] = useState<string>('')
 
@@ -129,7 +128,7 @@ export function ImageGenerationPanel({
   )
 
   return (
-    <div className="fixed right-0 top-0 bottom-0 w-96 bg-slate border-l-2 border-phosphor z-40 flex flex-col overflow-hidden">
+    <div className="fixed right-0 top-0 bottom-0 w-full sm:w-96 bg-slate border-l-2 border-phosphor z-40 flex flex-col overflow-hidden">
       {/* Header */}
       <div className="p-4 border-b border-terminal-border flex items-center justify-between bg-void/50">
         <div>
@@ -441,7 +440,6 @@ export function ImageGenerationPanel({
                 <button
                   key={model}
                   onClick={() => {
-                    setSelectedModel(model)
                     onRetryGeneration?.(generation.prompt, model)
                     setShowModelSelector(false)
                   }}
@@ -458,7 +456,6 @@ export function ImageGenerationPanel({
                 <button
                   key={cm.id}
                   onClick={() => {
-                    setSelectedModel(cm.id)
                     onRetryGeneration?.(generation.prompt, cm.id)
                     setShowModelSelector(false)
                   }}

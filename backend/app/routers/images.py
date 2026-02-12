@@ -9,11 +9,13 @@ from pydantic import BaseModel
 from typing import Optional
 from pathlib import Path
 import asyncio
+import logging
 
 from app.services.image_gen import image_gen_service
 from app.services.local_image_gen import local_image_gen
 
 router = APIRouter()
+logger = logging.getLogger("loom.router.images")
 
 
 class ImageGenRequest(BaseModel):
@@ -190,7 +192,7 @@ async def list_models():
                     "vram": "varies",
                 })
     except Exception as e:
-        print(f"[LOOM] Error fetching Ollama image models: {e}")
+        logger.warning("failed_to_fetch_ollama_image_models error=%s", e)
     
     # Get local diffusers models (only if actually downloaded/cached)
     local_models = []
@@ -227,7 +229,7 @@ async def list_models():
                         "vram": info["vram"],
                     })
     except Exception as e:
-        print(f"[LOOM] Error checking local models: {e}")
+        logger.warning("failed_to_check_local_image_models error=%s", e)
     
     # Combine both sources - Ollama models first (they're actually downloaded)
     all_models = ollama_image_models + local_models

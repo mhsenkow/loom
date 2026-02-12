@@ -1,13 +1,10 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { API_BASE_URL } from '../../config/api'
+import { SESSIONS_KEY, loadSessionsIndexFromLocalStorage, type SessionIndexInfo } from '../../utils/sessionPersistence'
 
-const SESSIONS_KEY = 'loom-terminal-sessions'
-const API_BASE = 'http://localhost:8000'
+const API_BASE = API_BASE_URL
 
-interface SessionInfo {
-  savedAt: number
-  entryCount: number
-  mediaFiles?: string[]
-}
+type SessionInfo = SessionIndexInfo
 
 interface SessionPanelProps {
   isCollapsed: boolean
@@ -32,9 +29,16 @@ export function SessionPanel({
 }: SessionPanelProps) {
   const [sessions, setSessions] = useState<Record<string, SessionInfo>>({})
   const [hoveredSession, setHoveredSession] = useState<string | null>(null)
+  const lastRefreshMsRef = useRef(0)
 
   // Load sessions index (from backend with localStorage fallback)
   const refreshSessions = useCallback(async () => {
+    const now = Date.now()
+    if (now - lastRefreshMsRef.current < 1500) {
+      return
+    }
+    lastRefreshMsRef.current = now
+
     try {
       // Try backend first
       const res = await fetch(`${API_BASE}/api/sessions`)
@@ -48,12 +52,7 @@ export function SessionPanel({
     }
     // Fallback to localStorage
     try {
-      const stored = localStorage.getItem(SESSIONS_KEY)
-      if (stored) {
-        setSessions(JSON.parse(stored))
-      } else {
-        setSessions({})
-      }
+      setSessions(loadSessionsIndexFromLocalStorage())
     } catch (e) {
       console.warn('[LOOM] Failed to load sessions:', e)
       setSessions({})
@@ -78,20 +77,50 @@ export function SessionPanel({
     window.addEventListener('storage', handleStorage)
     window.addEventListener('loom:session-saved', handleSessionChange)
     window.addEventListener('loom:session-deleted', handleSessionChange)
-
-    // Reduced polling interval - autosave doesn't trigger events, so poll catches it
-    const interval = setInterval(refreshSessions, 5000)
+    window.addEventListener('focus', handleSessionChange)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        refreshSessions()
+      }
+    }
+    window.addEventListener('visibilitychange', handleVisibilityChange)
 
     return () => {
       window.removeEventListener('storage', handleStorage)
       window.removeEventListener('loom:session-saved', handleSessionChange)
       window.removeEventListener('loom:session-deleted', handleSessionChange)
-      clearInterval(interval)
+      window.removeEventListener('focus', handleSessionChange)
+      window.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [refreshSessions])
 
   const sessionList = Object.entries(sessions)
     .sort(([, a], [, b]) => b.savedAt - a.savedAt) // Most recent first
+  const activeSessionName = currentSessionName || null
+  const activeSessionInfo = activeSessionName ? sessions[activeSessionName] : undefined
+  const recentSessionList = sessionList.filter(([name]) => name !== activeSessionName)
+
+  const closeDrawerOnMobile = useCallback(() => {
+    if (isCollapsed) return
+    if (window.matchMedia('(max-width: 767px)').matches) {
+      onToggleCollapse()
+    }
+  }, [isCollapsed, onToggleCollapse])
+
+  const handleLoadSessionClick = useCallback((name: string) => {
+    onLoadSession(name)
+    closeDrawerOnMobile()
+  }, [onLoadSession, closeDrawerOnMobile])
+
+  const handleSaveClick = useCallback(() => {
+    onSaveSession()
+    closeDrawerOnMobile()
+  }, [onSaveSession, closeDrawerOnMobile])
+
+  const handleNewClick = useCallback(() => {
+    onNewSession()
+    closeDrawerOnMobile()
+  }, [onNewSession, closeDrawerOnMobile])
 
   const formatDate = (ts: number) => {
     const date = new Date(ts)
@@ -110,10 +139,22 @@ export function SessionPanel({
   }
 
   return (
-    <div
-      className={`h-full bg-void border-r border-terminal-border transition-all duration-200 flex flex-col ${isCollapsed ? 'w-10' : 'w-44'
+    <>
+      {!isCollapsed && (
+        <button
+          type="button"
+          className="fixed inset-0 z-30 bg-void/70 md:hidden"
+          aria-label="Close sessions panel"
+          onClick={onToggleCollapse}
+        />
+      )}
+      <div
+        className={`h-full bg-void border-r border-terminal-border transition-all duration-200 flex flex-col absolute md:relative left-0 top-0 z-40 md:z-auto shadow-2xl md:shadow-none ${
+          isCollapsed
+            ? 'w-56 md:w-10 -translate-x-[calc(100%-2.5rem)] md:translate-x-0'
+            : 'w-56 sm:w-60 md:w-40 lg:w-44 translate-x-0'
         }`}
-    >
+      >
       {/* Header */}
       <div className="border-b border-terminal-border flex items-center">
         {!isCollapsed && (
@@ -123,8 +164,9 @@ export function SessionPanel({
         )}
         <button
           onClick={onToggleCollapse}
-          className="p-2 text-terminal-muted hover:text-phosphor text-xs"
+          className="p-2 min-h-11 min-w-11 text-terminal-muted hover:text-phosphor text-xs"
           title={isCollapsed ? 'Expand' : 'Collapse'}
+          aria-label={isCollapsed ? 'Expand sessions panel' : 'Collapse sessions panel'}
         >
           {isCollapsed ? '▶' : '◀'}
         </button>
@@ -152,11 +194,13 @@ export function SessionPanel({
           {sessionList.slice(0, 8).map(([name]) => (
             <button
               key={name}
-              onClick={() => onLoadSession(name)}
-              className="w-6 h-6 flex items-center justify-center text-terminal-muted hover:text-phosphor hover:bg-slate transition-colors text-[10px]"
+              onClick={() => handleLoadSessionClick(name)}
+              className={`w-8 h-8 flex items-center justify-center hover:bg-slate transition-colors text-[10px] ${
+                name === activeSessionName ? 'text-phosphor bg-slate' : 'text-terminal-muted hover:text-phosphor'
+              }`}
               title={name}
             >
-              ▪
+              {name === activeSessionName ? '◆' : '▪'}
             </button>
           ))}
           {sessionList.length > 8 && (
@@ -169,13 +213,33 @@ export function SessionPanel({
       {!isCollapsed && (
         <div className="flex-1 overflow-y-auto">
           {sessionList.length === 0 ? (
-            <div className="px-3 py-4 text-[9px] text-terminal-muted text-center">
-              No saved sessions
-              <div className="mt-1 text-[8px]">/saveas &lt;name&gt; or SAVE</div>
+            <div className="px-3 py-4 text-[9px] text-terminal-muted text-center space-y-2">
+              <div className="text-phosphor text-[10px] tracking-wide">No sessions yet</div>
+              <div>Start with <span className="text-phosphor">New</span>, then click <span className="text-phosphor">Save</span>.</div>
+              <div className="text-[8px] text-terminal-muted/70">Tip: /saveas &lt;name&gt; creates named snapshots.</div>
             </div>
           ) : (
             <div className="py-1">
-              {sessionList.map(([name, info]) => (
+              {activeSessionName && activeSessionInfo && (
+                <div className="px-3 py-2 border-b border-terminal-border/60">
+                  <div className="text-[8px] text-terminal-muted tracking-widest mb-1">ACTIVE SESSION</div>
+                  <button
+                    onClick={() => handleLoadSessionClick(activeSessionName)}
+                    className="w-full text-left p-2 border border-phosphor/40 bg-phosphor/10 hover:bg-phosphor/15 transition-colors"
+                    title={`Reload "${activeSessionName}"`}
+                  >
+                    <div className="text-[10px] text-phosphor truncate">{activeSessionName}</div>
+                    <div className="text-[8px] text-terminal-muted mt-1">
+                      {activeSessionInfo.entryCount} entries • {formatDate(activeSessionInfo.savedAt)}
+                    </div>
+                  </button>
+                </div>
+              )}
+
+              {recentSessionList.length > 0 && (
+                <div className="px-3 pt-2 pb-1 text-[8px] text-terminal-muted tracking-widest">RECENT</div>
+              )}
+              {recentSessionList.map(([name, info]) => (
                 <div
                   key={name}
                   onMouseEnter={() => setHoveredSession(name)}
@@ -185,7 +249,7 @@ export function SessionPanel({
                 >
                   <div className="flex items-center justify-between">
                     <button
-                      onClick={() => onLoadSession(name)}
+                      onClick={() => handleLoadSessionClick(name)}
                       title={`Load "${name}" (replaces current)`}
                       className="text-[10px] text-terminal-muted group-hover:text-phosphor truncate flex-1 text-left"
                     >
@@ -199,13 +263,14 @@ export function SessionPanel({
                         }}
                         className="opacity-0 group-hover:opacity-100 text-[10px] text-terminal-muted hover:text-red-400 px-1 transition-opacity"
                         title={`Delete "${name}"`}
+                        aria-label={`Delete session ${name}`}
                       >
                         ✕
                       </button>
                     )}
                   </div>
                   <button
-                    onClick={() => onLoadSession(name)}
+                    onClick={() => handleLoadSessionClick(name)}
                     className="w-full"
                   >
                     <div className="flex items-center justify-between mt-0.5">
@@ -228,24 +293,24 @@ export function SessionPanel({
       {!isCollapsed && (
         <div className="border-t border-terminal-border p-2 space-y-1">
           <button
-            onClick={onSaveSession}
+            onClick={handleSaveClick}
             title="Save current session to a named slot"
-            className="w-full text-[9px] text-terminal-muted hover:text-phosphor py-1.5 border border-terminal-border hover:border-phosphor transition-colors flex items-center justify-center gap-2"
+            className="w-full min-h-11 text-[9px] text-terminal-muted hover:text-phosphor py-1.5 border border-terminal-border hover:border-phosphor transition-colors flex items-center justify-center gap-2"
           >
-            <span>▣</span> SAVE
+            <span>▣</span> Save
           </button>
           <div className="flex gap-1">
             <button
-              onClick={onNewSession}
+              onClick={handleNewClick}
               title="Start fresh (save first if you want to keep current)"
-              className="flex-1 text-[9px] text-terminal-muted hover:text-phosphor py-1.5 border border-terminal-border hover:border-phosphor transition-colors flex items-center justify-center gap-2"
+              className="flex-1 min-h-11 text-[9px] text-terminal-muted hover:text-phosphor py-1.5 border border-terminal-border hover:border-phosphor transition-colors flex items-center justify-center gap-2"
             >
-              <span>+</span> NEW
+              <span>+</span> New
             </button>
             <button
               onClick={async () => {
                 try {
-                  const res = await fetch('http://localhost:8000/api/sessions/open-folder', { method: 'POST' })
+                  const res = await fetch(`${API_BASE}/api/sessions/open-folder`, { method: 'POST' })
                   if (!res.ok) {
                     console.error('Failed to open folder')
                   }
@@ -254,7 +319,7 @@ export function SessionPanel({
                 }
               }}
               title="Open data folder in Finder"
-              className="text-[9px] text-terminal-muted hover:text-phosphor py-1.5 px-2 border border-terminal-border hover:border-phosphor transition-colors flex items-center justify-center"
+              className="min-h-11 min-w-11 text-[9px] text-terminal-muted hover:text-phosphor py-1.5 px-2 border border-terminal-border hover:border-phosphor transition-colors flex items-center justify-center"
             >
               📁
             </button>
@@ -266,15 +331,15 @@ export function SessionPanel({
       {isCollapsed && (
         <div className="border-t border-terminal-border p-1 space-y-1">
           <button
-            onClick={onSaveSession}
-            className="w-full text-terminal-muted hover:text-phosphor p-1.5 flex items-center justify-center"
+            onClick={handleSaveClick}
+            className="w-full min-h-11 text-terminal-muted hover:text-phosphor p-1.5 flex items-center justify-center"
             title="Save session"
           >
             ▣
           </button>
           <button
-            onClick={onNewSession}
-            className="w-full text-terminal-muted hover:text-phosphor p-1.5 flex items-center justify-center"
+            onClick={handleNewClick}
+            className="w-full min-h-11 text-terminal-muted hover:text-phosphor p-1.5 flex items-center justify-center"
             title="New session"
           >
             +
@@ -282,19 +347,20 @@ export function SessionPanel({
           <button
             onClick={async () => {
               try {
-                await fetch('http://localhost:8000/api/sessions/open-folder', { method: 'POST' })
+                await fetch(`${API_BASE}/api/sessions/open-folder`, { method: 'POST' })
               } catch (e) {
                 console.error('Failed to open folder:', e)
               }
             }}
-            className="w-full text-terminal-muted hover:text-phosphor p-1.5 flex items-center justify-center"
+            className="w-full min-h-11 text-terminal-muted hover:text-phosphor p-1.5 flex items-center justify-center"
             title="Open data folder in Finder"
           >
             📁
           </button>
         </div>
       )}
-    </div>
+      </div>
+    </>
   )
 }
 
@@ -314,6 +380,18 @@ export function SaveSessionModal({ isOpen, onClose, onSave, defaultName }: SaveM
       setName(defaultName || `session-${Date.now()}`)
     }
   }, [isOpen, defaultName])
+
+  useEffect(() => {
+    if (!isOpen) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [isOpen, onClose])
 
   if (!isOpen) return null
 
@@ -346,13 +424,13 @@ export function SaveSessionModal({ isOpen, onClose, onSave, defaultName }: SaveM
               onClick={onClose}
               className="flex-1 text-[10px] text-terminal-muted py-1.5 border border-terminal-border hover:border-phosphor transition-colors"
             >
-              CANCEL
+              Cancel
             </button>
             <button
               type="submit"
               className="flex-1 text-[10px] text-void bg-phosphor py-1.5 hover:bg-phosphor-dim transition-colors"
             >
-              SAVE
+              Save
             </button>
           </div>
         </form>

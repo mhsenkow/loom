@@ -11,6 +11,9 @@ import re
 import asyncio
 from datetime import datetime
 import hashlib
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class TextChunker:
@@ -211,10 +214,10 @@ class VectorStore:
             # Initialize default collection
             self._get_collection(self.default_collection_name)
             
-            print(f"[LOOM] VectorStore initialized: {self.persist_directory}")
+            logger.debug(f"[LOOM] VectorStore initialized: {self.persist_directory}")
             
         except Exception as e:
-            print(f"[LOOM] VectorStore initialization error: {e}")
+            logger.debug(f"[LOOM] VectorStore initialization error: {e}")
             self._client = None
             self._collections = {}
     
@@ -246,29 +249,29 @@ class VectorStore:
             Embedding vector or None if generation fails
         """
         if not self._ollama_client:
-            print("[LOOM] generate_embedding: No Ollama client available")
+            logger.debug("[LOOM] generate_embedding: No Ollama client available")
             return None
         
         if not text or not text.strip():
-            print("[LOOM] generate_embedding: Empty text provided")
+            logger.debug("[LOOM] generate_embedding: Empty text provided")
             return None
         
         try:
             # Use async embed method if available, otherwise run sync
             if hasattr(self._ollama_client, 'embed'):
-                print(f"[LOOM] Generating embedding using model: {self.embedding_model}")
+                logger.debug(f"[LOOM] Generating embedding using model: {self.embedding_model}")
                 embedding = await self._ollama_client.embed(text, self.embedding_model)
                 if embedding and len(embedding) > 0:
-                    print(f"[LOOM] Successfully generated embedding of length: {len(embedding)}")
+                    logger.debug(f"[LOOM] Successfully generated embedding of length: {len(embedding)}")
                     return embedding
                 else:
-                    print("[LOOM] Embedding generation returned empty result")
+                    logger.debug("[LOOM] Embedding generation returned empty result")
                     return None
             else:
-                print("[LOOM] Ollama client does not have embed method")
+                logger.debug("[LOOM] Ollama client does not have embed method")
                 return None
         except Exception as e:
-            print(f"[LOOM] Embedding generation error: {e}")
+            logger.debug(f"[LOOM] Embedding generation error: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -307,14 +310,14 @@ class VectorStore:
             # Generate embedding if needed - CRITICAL for semantic search
             if embedding is None and generate_embedding:
                 if not self._ollama_client:
-                    print(f"[LOOM] VectorStore add: No Ollama client available, cannot generate embedding for {document_id}")
+                    logger.debug(f"[LOOM] VectorStore add: No Ollama client available, cannot generate embedding for {document_id}")
                     # Still add without embedding, but warn
-                    print("[LOOM] WARNING: Document added without embedding - semantic search may not work")
+                    logger.debug("[LOOM] WARNING: Document added without embedding - semantic search may not work")
                 else:
-                    print(f"[LOOM] Generating embedding for document: {document_id}")
+                    logger.debug(f"[LOOM] Generating embedding for document: {document_id}")
                     embedding = await self.generate_embedding(content)
                     if not embedding:
-                        print(f"[LOOM] WARNING: Failed to generate embedding for {document_id} - document added without embedding")
+                        logger.debug(f"[LOOM] WARNING: Failed to generate embedding for {document_id} - document added without embedding")
             
             # Prepare metadata with defaults
             final_metadata = {
@@ -330,15 +333,15 @@ class VectorStore:
             
             if embedding:
                 add_kwargs["embeddings"] = [embedding]
-                print(f"[LOOM] Adding document {document_id} with embedding")
+                logger.debug(f"[LOOM] Adding document {document_id} with embedding")
             else:
-                print(f"[LOOM] Adding document {document_id} without embedding (text search only)")
+                logger.debug(f"[LOOM] Adding document {document_id} without embedding (text search only)")
             
             collection.add(**add_kwargs)
             return True
             
         except Exception as e:
-            print(f"[LOOM] VectorStore add error: {e}")
+            logger.debug(f"[LOOM] VectorStore add error: {e}")
             return False
     
     async def add_document_chunked(
@@ -462,7 +465,7 @@ class VectorStore:
             return len(ids)
             
         except Exception as e:
-            print(f"[LOOM] VectorStore batch add error: {e}")
+            logger.debug(f"[LOOM] VectorStore batch add error: {e}")
             return 0
     
     def update(
@@ -501,7 +504,7 @@ class VectorStore:
             return True
             
         except Exception as e:
-            print(f"[LOOM] VectorStore update error: {e}")
+            logger.debug(f"[LOOM] VectorStore update error: {e}")
             return False
     
     def delete(self, document_id: str, collection_name: Optional[str] = None) -> bool:
@@ -517,7 +520,7 @@ class VectorStore:
             collection.delete(ids=[document_id])
             return True
         except Exception as e:
-            print(f"[LOOM] VectorStore delete error: {e}")
+            logger.debug(f"[LOOM] VectorStore delete error: {e}")
             return False
     
     def delete_by_metadata(
@@ -552,7 +555,7 @@ class VectorStore:
             collection.delete(ids=ids_to_delete)
             return len(ids_to_delete)
         except Exception as e:
-            print(f"[LOOM] VectorStore delete_by_metadata error: {e}")
+            logger.debug(f"[LOOM] VectorStore delete_by_metadata error: {e}")
             return 0
     
     async def query(
@@ -579,12 +582,12 @@ class VectorStore:
             List of matching documents with scores
         """
         if not self.is_connected():
-            print("[LOOM] VectorStore query: Not connected")
+            logger.debug("[LOOM] VectorStore query: Not connected")
             return []
         
         collection = self._get_collection(collection_name or self.default_collection_name)
         if not collection:
-            print("[LOOM] VectorStore query: Collection not found")
+            logger.debug("[LOOM] VectorStore query: Collection not found")
             return []
         
         try:
@@ -593,26 +596,26 @@ class VectorStore:
             # Generate embedding if needed - this is critical for semantic search
             if query_text and not query_embedding and generate_embedding:
                 if not self._ollama_client:
-                    print("[LOOM] VectorStore query: No Ollama client available for embedding generation")
+                    logger.debug("[LOOM] VectorStore query: No Ollama client available for embedding generation")
                     return []
                 
-                print(f"[LOOM] Generating embedding for query: {query_text[:50]}...")
+                logger.debug(f"[LOOM] Generating embedding for query: {query_text[:50]}...")
                 query_embedding = await self.generate_embedding(query_text)
                 
                 if not query_embedding:
-                    print("[LOOM] VectorStore query: Failed to generate embedding")
+                    logger.debug("[LOOM] VectorStore query: Failed to generate embedding")
                     return []
                 
-                print(f"[LOOM] Generated embedding of length: {len(query_embedding)}")
+                logger.debug(f"[LOOM] Generated embedding of length: {len(query_embedding)}")
             
             if query_embedding:
                 query_kwargs["query_embeddings"] = [query_embedding]
             elif query_text:
                 # Fallback to text search if no embedding (less effective)
-                print("[LOOM] VectorStore query: Using text search fallback (no embedding)")
+                logger.debug("[LOOM] VectorStore query: Using text search fallback (no embedding)")
                 query_kwargs["query_texts"] = [query_text]
             else:
-                print("[LOOM] VectorStore query: No query text or embedding provided")
+                logger.debug("[LOOM] VectorStore query: No query text or embedding provided")
                 return []
             
             if where:
@@ -620,10 +623,10 @@ class VectorStore:
             
             # Check collection count
             collection_count = collection.count()
-            print(f"[LOOM] Querying collection '{collection_name or self.default_collection_name}' with {collection_count} documents")
+            logger.debug(f"[LOOM] Querying collection '{collection_name or self.default_collection_name}' with {collection_count} documents")
             
             if collection_count == 0:
-                print("[LOOM] VectorStore query: Collection is empty, no results possible")
+                logger.debug("[LOOM] VectorStore query: Collection is empty, no results possible")
                 return []
             
             results = collection.query(**query_kwargs)
@@ -631,7 +634,7 @@ class VectorStore:
             # Format results with similarity scores
             formatted = []
             if results and results.get("ids") and len(results["ids"]) > 0 and len(results["ids"][0]) > 0:
-                print(f"[LOOM] Found {len(results['ids'][0])} results")
+                logger.debug(f"[LOOM] Found {len(results['ids'][0])} results")
                 for i, doc_id in enumerate(results["ids"][0]):
                     distance = results["distances"][0][i] if results.get("distances") and len(results["distances"]) > 0 and len(results["distances"][0]) > i else None
                     # Convert distance to similarity score (1 - normalized distance)
@@ -648,12 +651,12 @@ class VectorStore:
                         "similarity": similarity,
                     })
             else:
-                print("[LOOM] VectorStore query: No results returned from ChromaDB")
+                logger.debug("[LOOM] VectorStore query: No results returned from ChromaDB")
             
             return formatted
             
         except Exception as e:
-            print(f"[LOOM] VectorStore query error: {e}")
+            logger.debug(f"[LOOM] VectorStore query error: {e}")
             import traceback
             traceback.print_exc()
             return []
@@ -733,7 +736,7 @@ class VectorStore:
             return None
             
         except Exception as e:
-            print(f"[LOOM] VectorStore get error: {e}")
+            logger.debug(f"[LOOM] VectorStore get error: {e}")
             return None
     
     def get_all_chunks(self, document_id: str, collection_name: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -779,7 +782,7 @@ class VectorStore:
         try:
             return collection.count()
         except Exception as e:
-            print(f"[LOOM] VectorStore count error: {e}")
+            logger.debug(f"[LOOM] VectorStore count error: {e}")
             return 0
     
     def reset(self, collection_name: Optional[str] = None) -> bool:
@@ -795,7 +798,7 @@ class VectorStore:
             self._get_collection(target_collection)
             return True
         except Exception as e:
-            print(f"[LOOM] VectorStore reset error: {e}")
+            logger.debug(f"[LOOM] VectorStore reset error: {e}")
             return False
     
     async def search_for_rag(

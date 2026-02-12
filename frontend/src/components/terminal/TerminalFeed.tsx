@@ -1,4 +1,6 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import type { CSSProperties } from 'react'
+import type { Editor } from '@tiptap/core'
 import { CommandInput } from './CommandInput'
 import { SessionPanel, SaveSessionModal } from './SessionPanel'
 import { CircuitTrace } from './CircuitTrace'
@@ -11,9 +13,12 @@ import { CodeContextPanel } from './CodeContextPanel'
 import { MusicSetupPanel } from './MusicSetupPanel'
 import { MusicGenerationPanel } from './MusicGenerationPanel'
 import { MusicPlayerCard } from './MusicPlayerCard'
+import { ProviderSetup } from './ProviderSetup'
+import { DialogModal } from '../shell/DialogModal'
+import { loadSettings, saveSettings } from '../shell/SettingsModal'
 import { AvatarPanel } from '../avatar/AvatarPanel'
 import { VoiceChatModal } from '../avatar/VoiceChatModal'
-import { useSocket } from '../../hooks/useSocket'
+import { getSocketInstance, type PullStatus, useSocket } from '../../hooks/useSocket'
 import { useAudioAnalyzer } from '../../hooks/useAudioAnalyzer'
 import { useSpeechSynthesis } from '../../hooks/useSpeechSynthesis'
 import { useMicrophoneRecorder } from '../../hooks/useMicrophoneRecorder'
@@ -21,14 +26,8 @@ import { getAvatarConfig, DEFAULT_AVATAR_ID, type AvatarSoundVisualParams, DEFAU
 import type { TTSModelType, OrpheusTTSParams } from '../../types/tts'
 import { DEFAULT_TTS_MODEL_TYPE, DEFAULT_ORPHEUS_PARAMS } from '../../types/tts'
 import { useOrpheusTTS } from '../../hooks/useOrpheusTTS'
-
-// Recommended image generation models (matching ImageGenerationPanel)
-const RECOMMENDED_IMAGE_GEN_MODELS = [
-  { name: 'x/flux2-klein', description: 'FLUX.2 Klein - Fast, great text rendering, macOS only', size: '~5.7GB (4B) or ~12GB (9B)' },
-  { name: 'x/flux2-klein:4b', description: 'FLUX.2 Klein 4B - Smaller, faster version', size: '~5.7GB' },
-  { name: 'x/flux2-klein:9b', description: 'FLUX.2 Klein 9B - Higher quality version', size: '~12GB' },
-]
 import { useSystemStatus } from '../../hooks/useSystemStatus'
+import type { CloudModelInfo } from '../../store/systemStore'
 import { terminalOutputBus, getCircuitContext } from '../../hooks/useTerminalOutput'
 import {
   useCircuitRunner,
@@ -36,19 +35,79 @@ import {
   getCircuitNames,
   loadSavedCircuits,
   saveCircuit,
-  SavedCircuit,
 } from '../../hooks/useCircuitRunner'
 import { NOTEBOOK_TEMPLATES } from '../circuit/TemplatesSidebar'
 import type { LogEntry } from '../../types/module'
 import { buildConversationContext, buildEnhancedPrompt } from '../../utils/conversationContext'
+import { API_BASE_URL } from '../../config/api'
+import { loadEntriesFromLocalStorage } from '../../utils/terminalHistory'
+import {
+  deleteSessionAsync,
+  generateSessionName,
+  loadSessionAsync,
+  saveSessionAsync,
+  saveSessionSilent,
+} from '../../utils/terminalSessionApi'
+import { handleSessionCommand } from '../../utils/terminalSessionCommands'
+import { handleWebCommand } from '../../utils/terminalWebCommands'
+import { handleModelCommand } from '../../utils/terminalModelCommands'
+import { handleModelBootstrapCommand } from '../../utils/terminalModelBootstrapCommand'
+import { handleImageModelCommand } from '../../utils/terminalImageModelCommands'
+import { handlePullCommand } from '../../utils/terminalPullCommand'
+import { handleImageCommand } from '../../utils/terminalImageCommands'
+import { parseSlashCommand } from '../../utils/commandParser'
+import { handleCircuitCommand } from '../../utils/terminalCircuitCommands'
+import { handleSimpleCommand } from '../../utils/terminalSimpleCommands'
+import {
+  fetchCodeContextStatus,
+  indexCodeContextFolder,
+  type CodeContextIndexOptions,
+} from '../../utils/codeContextApi'
+import { showErrorToast, showInfoToast, showSuccessToast } from '../../utils/uiNotifications'
 
-const BACKEND_URL = 'http://localhost:8000'
+const BACKEND_URL = API_BASE_URL
 const STORAGE_KEY = 'loom-terminal-history'
-const SESSIONS_KEY = 'loom-terminal-sessions'
-const BEFORE_CLEAR_KEY = 'loom-terminal-before-clear'
 const MAX_STORED_ENTRIES = 500
 const PANEL_COLLAPSED_KEY = 'loom-session-panel-collapsed'
-const API_BASE = 'http://localhost:8000'
+const API_BASE = API_BASE_URL
+const CODE_CONTEXT_STATUS_POLL_MS = 30000
+const SESSION_SIDEBAR_REFRESH_THROTTLE_MS = 30000
+const HISTORY_FILTERS_KEY = 'loom-terminal-history-filters-v1'
+const VIRTUAL_ROW_ESTIMATE_PX = 110
+const VIRTUAL_OVERSCAN_ROWS = 18
+const AUTO_FOLLOW_BOTTOM_THRESHOLD_PX = 96
+const CONNECTION_NOTICE_COOLDOWN_MS = 120000
+const STREAM_SIGNAL_NORMALIZER_CPS = 180
+const TELEMETRY_RAIL_MAX_LINES = 42
+const IDLE_MATRIX_CHARSET = '01ABCDEF[]{}<>/\\|*+-._:;'.split('')
+
+const CHAT_MODEL_EXCLUDE_KEYWORDS = ['flux', 'flux2', 'stable-diffusion', 'sdxl', 'llava', 'bakllava', 'moondream', 'vision']
+const QUICK_MODEL_PRIORITY_HINTS = [
+  'gemini:gemini-2.0-flash',
+  'gemini:gemini-2.5-flash',
+  'openai:gpt-4.1-nano',
+  'openai:gpt-4o-mini',
+  'anthropic:claude-3-5-haiku',
+  'mistral:mistral-small',
+  'deepseek:deepseek-chat',
+]
+const QUICK_MODEL_FALLBACK_HINTS = ['flash', 'nano', 'mini', 'haiku', 'small']
+const QUICK_LOCAL_HINTS = ['tiny', ':1b', ':2b', ':3b', 'phi3:mini', 'gemma:2b']
+const CONTEXT_FOLLOWUP_HINTS = [
+  'as we discussed',
+  'as discussed',
+  'as mentioned',
+  'like before',
+  'continue',
+  'follow up',
+  'follow-up',
+  'that one',
+  'the same',
+]
+const CONTEXT_FOLLOWUP_STARTS = ['and ', 'also ', 'what about', 'how about', 'can we', 'now ']
+const ASSIST_CONFIRM_YES = new Set(['yes', 'y', 'ok', 'okay', 'do it', 'run it', 'go', 'sure'])
+const ASSIST_CONFIRM_NO = new Set(['no', 'n', 'cancel', 'stop', 'nevermind', 'never mind'])
+const ASSIST_CONFIRM_EDIT_PREFIXES = ['edit:', 'change:', 'update:']
 
 // State for collecting circuit inputs
 interface CircuitInputState {
@@ -58,272 +117,246 @@ interface CircuitInputState {
   currentInputIndex: number
 }
 
-// Extract media file URLs from entries (for shared datapool tracking)
-function extractMediaFiles(entries: LogEntry[]): string[] {
-  const mediaFiles: string[] = []
-  for (const entry of entries) {
-    // Check for image URLs (directly on entry or in content)
-    if (entry.imageUrl?.includes('/api/images/files/')) {
-      mediaFiles.push(entry.imageUrl)
-    }
-    // Check for audio/music URLs
-    if (entry.audioUrl?.includes('/api/music/files/')) {
-      mediaFiles.push(entry.audioUrl)
-    }
-    // Also scan content for any embedded URLs
-    if (entry.content?.includes('/api/images/files/')) {
-      const matches = entry.content.match(/\/api\/images\/files\/[^\s"')]+/g)
-      if (matches) mediaFiles.push(...matches)
-    }
-    if (entry.content?.includes('/api/music/files/')) {
-      const matches = entry.content.match(/\/api\/music\/files\/[^\s"')]+/g)
-      if (matches) mediaFiles.push(...matches)
-    }
-  }
-  return [...new Set(mediaFiles)] // Deduplicate
+type AssistantActionType = 'image' | 'music' | 'speech' | 'quick_cloud' | 'qdc_job'
+
+interface PendingAssistantAction {
+  type: AssistantActionType
+  prompt: string
+  note: string
 }
 
-// Load saved sessions index (from backend with localStorage fallback)
-async function loadSessionsIndexAsync(): Promise<Record<string, { savedAt: number; entryCount: number; mediaFiles?: string[] }>> {
-  try {
-    const res = await fetch(`${API_BASE}/api/sessions`)
-    if (res.ok) {
-      const data = await res.json()
-      return data.sessions || {}
-    }
-  } catch (e) {
-    console.warn('[LOOM] Backend unavailable, using localStorage:', e)
-  }
-  // Fallback to localStorage
-  try {
-    const stored = localStorage.getItem(SESSIONS_KEY)
-    if (stored) return JSON.parse(stored)
-  } catch (e) {
-    console.warn('[LOOM] Failed to load sessions index:', e)
-  }
-  return {}
+type CommandLifecycleState = 'working' | 'done' | 'failed'
+
+const COMMAND_STATUS_METADATA_KIND = 'command_status'
+type HistoryWindow = 'all' | '15m' | '1h' | '24h' | '7d'
+const HISTORY_WINDOW_OPTIONS: Array<{ value: HistoryWindow; label: string; ms?: number }> = [
+  { value: 'all', label: 'All time' },
+  { value: '15m', label: 'Last 15m', ms: 15 * 60 * 1000 },
+  { value: '1h', label: 'Last 1h', ms: 60 * 60 * 1000 },
+  { value: '24h', label: 'Last 24h', ms: 24 * 60 * 60 * 1000 },
+  { value: '7d', label: 'Last 7d', ms: 7 * 24 * 60 * 60 * 1000 },
+]
+const FILTERABLE_ENTRY_TYPES: LogEntry['type'][] = ['user', 'ai', 'system', 'error', 'image', 'audio']
+
+interface PersistedHistoryFilters {
+  query?: string
+  window?: HistoryWindow
+  types?: LogEntry['type'][]
+  models?: string[]
+  open?: boolean
 }
 
-// Sync version for compatibility
-function loadSessionsIndex(): Record<string, { savedAt: number; entryCount: number }> {
+function loadPersistedHistoryFilters(): PersistedHistoryFilters {
   try {
-    const stored = localStorage.getItem(SESSIONS_KEY)
-    if (stored) {
-      return JSON.parse(stored)
-    }
-  } catch (e) {
-    console.warn('[LOOM] Failed to load sessions index:', e)
-  }
-  return {}
-}
-
-// Save a session (to backend - no localStorage backup needed)
-async function saveSessionAsync(name: string, entries: LogEntry[]): Promise<boolean> {
-  const mediaFiles = extractMediaFiles(entries)
-
-  try {
-    const res = await fetch(`${API_BASE}/api/sessions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, entries, mediaFiles }),
-    })
-    if (res.ok) {
-      // Backend saved successfully - just trigger UI refresh
-      window.dispatchEvent(new CustomEvent('loom:session-saved', { detail: { name } }))
-      return true
-    }
-  } catch (e) {
-    console.warn('[LOOM] Backend save failed, trying localStorage:', e)
-  }
-
-  // Fallback to localStorage only (when backend unavailable)
-  return saveSession(name, entries)
-}
-
-// Sync version - localStorage only (with quota handling)
-function saveSession(name: string, entries: LogEntry[]): boolean {
-  try {
-    localStorage.setItem(`${SESSIONS_KEY}:${name}`, JSON.stringify(entries))
-    const index = loadSessionsIndex()
-    index[name] = { savedAt: Date.now(), entryCount: entries.length }
-    localStorage.setItem(SESSIONS_KEY, JSON.stringify(index))
-    window.dispatchEvent(new CustomEvent('loom:session-saved', { detail: { name } }))
-    return true
-  } catch (e) {
-    console.warn('[LOOM] Failed to save session:', e)
-    return false
-  }
-}
-
-// Load a session (from backend with localStorage fallback)
-async function loadSessionAsync(name: string): Promise<LogEntry[] | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/sessions/${encodeURIComponent(name)}`)
-    if (res.ok) {
-      const data = await res.json()
-      return data.entries || null
-    }
-  } catch (e) {
-    console.warn('[LOOM] Backend load failed, using localStorage:', e)
-  }
-  // Fallback to localStorage
-  return loadSession(name)
-}
-
-// Sync version for compatibility
-function loadSession(name: string): LogEntry[] | null {
-  try {
-    const stored = localStorage.getItem(`${SESSIONS_KEY}:${name}`)
-    if (stored) {
-      return JSON.parse(stored)
-    }
-  } catch (e) {
-    console.warn('[LOOM] Failed to load session:', e)
-  }
-  return null
-}
-
-// Delete a session (from backend with localStorage cleanup)
-async function deleteSessionAsync(name: string): Promise<boolean> {
-  try {
-    const res = await fetch(`${API_BASE}/api/sessions/${encodeURIComponent(name)}`, {
-      method: 'DELETE',
-    })
-    if (res.ok) {
-      // Also remove from localStorage
-      localStorage.removeItem(`${SESSIONS_KEY}:${name}`)
-      const index = loadSessionsIndex()
-      delete index[name]
-      localStorage.setItem(SESSIONS_KEY, JSON.stringify(index))
-      window.dispatchEvent(new CustomEvent('loom:session-deleted', { detail: { name } }))
-      return true
-    }
-  } catch (e) {
-    console.warn('[LOOM] Backend delete failed, using localStorage:', e)
-  }
-  // Fallback to localStorage only
-  return deleteSession(name)
-}
-
-// Sync version for compatibility
-function deleteSession(name: string): boolean {
-  try {
-    localStorage.removeItem(`${SESSIONS_KEY}:${name}`)
-    const index = loadSessionsIndex()
-    delete index[name]
-    localStorage.setItem(SESSIONS_KEY, JSON.stringify(index))
-    window.dispatchEvent(new CustomEvent('loom:session-deleted', { detail: { name } }))
-    return true
-  } catch (e) {
-    console.warn('[LOOM] Failed to delete session:', e)
-    return false
-  }
-}
-
-// Stash current entries for /restore (used before /clear)
-function stashBeforeClear(entries: LogEntry[]): void {
-  const isAlreadyCleared = entries.length === 1 &&
-    entries[0].type === 'system' &&
-    entries[0].content?.includes('Display cleared')
-  if (entries.length === 0 || isAlreadyCleared) return
-  try {
-    localStorage.setItem(BEFORE_CLEAR_KEY, JSON.stringify(entries))
-  } catch (e) {
-    console.warn('[LOOM] Failed to stash before clear:', e)
-  }
-}
-
-// Load stashed entries (from before /clear)
-function loadBeforeClear(): LogEntry[] | null {
-  try {
-    const stored = localStorage.getItem(BEFORE_CLEAR_KEY)
-    if (stored) {
-      const parsed = JSON.parse(stored)
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed
-    }
-  } catch (e) {
-    console.warn('[LOOM] Failed to load before-clear stash:', e)
-  }
-  return null
-}
-
-// Generate auto session name from first user prompt (ChatGPT style)
-function generateSessionName(entries: LogEntry[]): string {
-  // Find first user entry
-  const firstUserEntry = entries.find(e => e.type === 'user')
-  if (firstUserEntry?.content) {
-    // Clean and truncate to ~30 chars
-    const clean = firstUserEntry.content
-      .replace(/^\/\w+\s*/, '') // Remove slash commands
-      .replace(/[^\w\s]/g, ' ') // Remove special chars
-      .trim()
-      .split(/\s+/)
-      .slice(0, 5) // First 5 words
-      .join(' ')
-    if (clean.length > 0) {
-      return clean.slice(0, 30).trim()
-    }
-  }
-  // Fallback to timestamp
-  return `session-${Date.now()}`
-}
-
-// Save session to backend silently (returns promise)
-async function saveSessionSilent(name: string, entries: LogEntry[]): Promise<boolean> {
-  try {
-    const res = await fetch(`${API_BASE}/api/sessions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name,
-        entries: entries.slice(-MAX_STORED_ENTRIES),
-        mediaFiles: extractMediaFiles(entries),
-      }),
-    })
-    return res.ok
+    const raw = localStorage.getItem(HISTORY_FILTERS_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as PersistedHistoryFilters
+    return parsed || {}
   } catch {
-    return false
+    return {}
   }
 }
 
-// Load entries from localStorage
-function loadEntries(): LogEntry[] {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    if (stored) {
-      const parsed = JSON.parse(stored)
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed
+function isLikelyChatModel(modelName: string): boolean {
+  const lower = modelName.toLowerCase()
+  return !CHAT_MODEL_EXCLUDE_KEYWORDS.some(keyword => lower.includes(keyword))
+}
+
+function shouldAutoUseKeyContext(prompt: string, entries: LogEntry[]): boolean {
+  const trimmed = prompt.trim()
+  if (!trimmed) return false
+
+  const hasHistory = entries.some(entry => entry.type === 'user' || entry.type === 'ai')
+  if (!hasHistory) return false
+
+  const lower = trimmed.toLowerCase()
+  const wordCount = trimmed.split(/\s+/).filter(Boolean).length
+
+  if (CONTEXT_FOLLOWUP_HINTS.some(hint => lower.includes(hint))) {
+    return true
+  }
+  if (CONTEXT_FOLLOWUP_STARTS.some(prefix => lower.startsWith(prefix))) {
+    return true
+  }
+  if (wordCount <= 18 && /\b(it|that|this|those|these|same|again|earlier|above)\b/i.test(trimmed)) {
+    return true
+  }
+  return false
+}
+
+function pickQuickModel(
+  cloudModels: CloudModelInfo[],
+  localModels: string[],
+  activeModel?: string,
+): { model: string; reason: string } {
+  const cloudCandidates = cloudModels
+    .filter(model => model.provider_type === 'cloud' && !!model.id && model.supports_quick !== false)
+    .map(model => model.id)
+
+  if (cloudCandidates.length > 0) {
+    const freeCandidates = cloudModels
+      .filter(model => model.provider_type === 'cloud' && model.supports_quick !== false && model.is_free && !!model.id)
+      .map(model => model.id)
+    if (freeCandidates.length > 0) {
+      return { model: freeCandidates[0], reason: 'free-tier cloud preference' }
+    }
+
+    const byLower = new Map(cloudCandidates.map(model => [model.toLowerCase(), model]))
+
+    for (const hint of QUICK_MODEL_PRIORITY_HINTS) {
+      const exact = byLower.get(hint)
+      if (exact) {
+        return { model: exact, reason: 'free-tier cloud preference' }
+      }
+      const prefix = cloudCandidates.find(model => model.toLowerCase().startsWith(`${hint}-`))
+      if (prefix) {
+        return { model: prefix, reason: 'free-tier cloud preference' }
       }
     }
-  } catch (e) {
-    console.warn('[LOOM] Failed to load terminal history:', e)
+
+    const hinted = cloudCandidates.find(model => QUICK_MODEL_FALLBACK_HINTS.some(hint => model.toLowerCase().includes(hint)))
+    if (hinted) {
+      return { model: hinted, reason: 'low-cost cloud fallback' }
+    }
+
+    return { model: cloudCandidates[0], reason: 'connected cloud fallback' }
   }
 
-  // Default initial entries
-  return [
-    {
-      id: '1',
-      type: 'system',
-      content: 'LOOM TERMINAL v0.1.0 INITIALIZED',
-      timestamp: Date.now(),
-    },
-    {
-      id: '2',
-      type: 'system',
-      content: 'Type /help for available commands. Press Enter to submit.',
-      timestamp: Date.now(),
-    },
-  ]
+  const chatModels = localModels.filter(isLikelyChatModel)
+  const tinyLocal = chatModels.find(model => QUICK_LOCAL_HINTS.some(hint => model.toLowerCase().includes(hint)))
+  if (tinyLocal) {
+    return { model: tinyLocal, reason: 'tiny local fallback' }
+  }
+
+  if (activeModel && isLikelyChatModel(activeModel)) {
+    return { model: activeModel, reason: 'active local model' }
+  }
+
+  return { model: chatModels[0] || localModels[0] || 'llama3.1:8b', reason: 'default local fallback' }
 }
+
+function extractPromptFromActionRequest(input: string): string {
+  return input
+    .replace(/^(can you|could you|please|help me)\s+/i, '')
+    .replace(/^(make|create|generate|write|do)\s+/i, '')
+    .replace(/\?+$/g, '')
+    .trim()
+}
+
+function detectAssistantAction(input: string): PendingAssistantAction | null {
+  const message = input.trim()
+  if (!message) return null
+
+  const imageIntent = /\b(image|picture|photo|logo|poster|illustration|artwork|render|draw)\b/i.test(message)
+    && /\b(make|create|generate|design|draw|render)\b/i.test(message)
+  if (imageIntent) {
+    return {
+      type: 'image',
+      prompt: extractPromptFromActionRequest(message),
+      note: 'I can create this as an image generation node.',
+    }
+  }
+
+  const musicIntent = /\b(song|music|beat|track|melody|instrumental)\b/i.test(message)
+    && /\b(make|create|generate|compose|write)\b/i.test(message)
+  if (musicIntent) {
+    return {
+      type: 'music',
+      prompt: extractPromptFromActionRequest(message),
+      note: 'I can run this as a music generation node.',
+    }
+  }
+
+  const speechIntent = /\b(read this|speak this|say this|voice mode|text to speech|tts|read aloud)\b/i.test(message)
+  if (speechIntent) {
+    return {
+      type: 'speech',
+      prompt: message,
+      note: 'I can open speech mode and read responses out loud.',
+    }
+  }
+
+  const quickCloudIntent = /\b(quick|fast|cheap|free)\b/i.test(message) && /\b(cloud|online|remote)\b/i.test(message)
+  const qdcIntent = /\b(qdc|qualcomm)\b/i.test(message) || (
+    /\b(remote|cloud|device)\b/i.test(message) && /\b(job|run|offload)\b/i.test(message)
+  )
+  if (qdcIntent) {
+    return {
+      type: 'qdc_job',
+      prompt: extractPromptFromActionRequest(message),
+      note: 'I can launch this as an async QDC remote job and stream progress.',
+    }
+  }
+
+  if (quickCloudIntent) {
+    return {
+      type: 'quick_cloud',
+      prompt: extractPromptFromActionRequest(message),
+      note: 'I can run this through the quick cloud lane.',
+    }
+  }
+
+  return null
+}
+
+function buildCommandStatusContent(commandText: string, state: CommandLifecycleState, detail?: string): string {
+  const marker = state === 'working' ? '[WORKING]' : state === 'done' ? '[DONE]' : '[FAILED]'
+  if (!detail) {
+    return `${marker} ${commandText}`
+  }
+  return `${marker} ${commandText}\n${detail}`
+}
+
+function emitCrtBurst(kind: string, strength = 1, durationMs = 170) {
+  window.dispatchEvent(new CustomEvent('loom:crt-burst', {
+    detail: { kind, strength, durationMs },
+  }))
+}
+
+function sanitizeTelemetryToken(value: string): string {
+  return value
+    .toUpperCase()
+    .replace(/[^A-Z0-9:._/-]/g, '_')
+    .replace(/_+/g, '_')
+    .slice(0, 26)
+}
+
+function randomGlyphLine(minLen = 4, maxLen = 9): string {
+  const targetLength = minLen + Math.floor(Math.random() * (maxLen - minLen + 1))
+  let out = ''
+  for (let i = 0; i < targetLength; i += 1) {
+    out += IDLE_MATRIX_CHARSET[Math.floor(Math.random() * IDLE_MATRIX_CHARSET.length)]
+  }
+  return out
+}
+
+function buildTelemetryRailLine(tokens: string[], mode: 'idle' | 'active'): { text: string; isToken: boolean } {
+  const safeTokens = tokens.length > 0 ? tokens : ['SOCKET:DOWN', 'MODEL:NONE', 'PHASE:IDLE']
+  const tokenChance = mode === 'active' ? 0.95 : 0.88
+  const useToken = Math.random() < tokenChance
+  if (!useToken) {
+    return { text: randomGlyphLine(3, 7), isToken: false }
+  }
+
+  const token = safeTokens[Math.floor(Math.random() * safeTokens.length)]
+  const noisyPrefix = randomGlyphLine(1, 2)
+  const noisySuffix = randomGlyphLine(1, 2)
+  return {
+    text: `${noisyPrefix} ${token} ${noisySuffix}`,
+    isToken: true,
+  }
+}
+
+type FeedDisplayItem =
+  { key: string; entry: LogEntry }
 
 export function TerminalFeed() {
   const { connected, sendChat, pullModel } = useSocket()
-  const { status, models, fetchModels, setActiveModel, setVisionModel, setImageGenModel } = useSystemStatus()
+  const { status, models, cloudModels, fetchModels, setActiveModel, setVisionModel, setImageGenModel } = useSystemStatus()
   const { runCircuit, getRequiredInputs } = useCircuitRunner()
   const circuitExecution = useCircuitExecution()
 
-  const [entries, setEntries] = useState<LogEntry[]>(loadEntries)
+  const [entries, setEntries] = useState<LogEntry[]>(() => loadEntriesFromLocalStorage(STORAGE_KEY))
   const [panelCollapsed, setPanelCollapsed] = useState(() => {
     try {
       return localStorage.getItem(PANEL_COLLAPSED_KEY) === 'true'
@@ -332,6 +365,8 @@ export function TerminalFeed() {
     }
   })
   const [showSaveModal, setShowSaveModal] = useState(false)
+  const [newSessionConfirmOpen, setNewSessionConfirmOpen] = useState(false)
+  const [deleteSessionTarget, setDeleteSessionTarget] = useState<string | null>(null)
   const [circuitInputState, setCircuitInputState] = useState<CircuitInputState | null>(null)
   const [downloadProgress, setDownloadProgress] = useState<{
     model: string
@@ -378,6 +413,15 @@ export function TerminalFeed() {
   const [codeContextFolder, setCodeContextFolder] = useState<string | null>(null)
   const [codeContextFilesIndexed, setCodeContextFilesIndexed] = useState(0)
   const [codeContextIndexing, setCodeContextIndexing] = useState(false)
+  const [showProviderSetup, setShowProviderSetup] = useState(false)
+  const [historyFiltersOpen, setHistoryFiltersOpen] = useState(() => loadPersistedHistoryFilters().open ?? false)
+  const [historyQuery, setHistoryQuery] = useState(() => loadPersistedHistoryFilters().query ?? '')
+  const [historyWindow, setHistoryWindow] = useState<HistoryWindow>(() => loadPersistedHistoryFilters().window ?? 'all')
+  const [historyTypeFilters, setHistoryTypeFilters] = useState<LogEntry['type'][]>(() => loadPersistedHistoryFilters().types ?? [])
+  const [historyModelFilters, setHistoryModelFilters] = useState<string[]>(() => loadPersistedHistoryFilters().models ?? [])
+  const [feedScrollTop, setFeedScrollTop] = useState(0)
+  const [feedViewportHeight, setFeedViewportHeight] = useState(0)
+  const [autoFollowFeed, setAutoFollowFeed] = useState(true)
   const [musicSetupPanelOpen, setMusicSetupPanelOpen] = useState(false)
   const [musicGeneration, setMusicGeneration] = useState<{
     prompt: string
@@ -390,6 +434,18 @@ export function TerminalFeed() {
     message?: string
     seed?: number
   } | null>(null)
+  const [pendingAssistantAction, setPendingAssistantAction] = useState<PendingAssistantAction | null>(null)
+  const [aiRuntimeTelemetry, setAiRuntimeTelemetry] = useState({
+    active: false,
+    phase: 'Idle',
+    signal: 0,
+    charsPerSec: 0,
+  })
+  const aiStreamStatsRef = useRef({
+    lastChunkAt: 0,
+    charsPerSec: 0,
+  })
+  const activeQdcPollersRef = useRef<Set<string>>(new Set())
 
   const [avatarPanelOpen, setAvatarPanelOpen] = useState(false)
   const [voiceChatModalOpen, setVoiceChatModalOpen] = useState(false)
@@ -400,7 +456,7 @@ export function TerminalFeed() {
   const speakNextAiResponseRef = useRef(false)
   const voiceChatContentRef = useRef('')
   const voiceChatRecordingRef = useRef(false)
-  const handleAIRequestRef = useRef<((prompt: string, timestamp: number, contextMode: 'input' | 'key' | 'full') => void) | null>(null)
+  const handleAIRequestRef = useRef<((prompt: string, timestamp: number, contextMode: 'input' | 'key' | 'full', modelOverride?: string) => void) | null>(null)
 
   const [avatarConfig, setAvatarConfig] = useState(() => {
     try {
@@ -629,13 +685,22 @@ export function TerminalFeed() {
     }
   })
   const lastSavedEntriesCountRef = useRef(0)
+  const lastSessionRefreshEventMsRef = useRef(0)
 
   const feedRef = useRef<HTMLDivElement>(null)
   const currentAIEntryRef = useRef<string | null>(null)
   /** Accumulated content for the current AI stream (so handleStatus has full text for TTS) */
   const currentAIContentRef = useRef<string>('')
   const pendingImageUrlRef = useRef<string | null>(null)
-  const commandInputEditorRef = useRef<any>(null)
+  const commandInputEditorRef = useRef<Editor | null>(null)
+  const lastDownloadToastKeyRef = useRef<string | null>(null)
+  const wasConnectedRef = useRef(false)
+  const lastConnectedNoticeRef = useRef(0)
+
+  const isNearFeedBottom = useCallback((el: HTMLDivElement) => {
+    const distanceFromBottom = el.scrollHeight - el.clientHeight - el.scrollTop
+    return distanceFromBottom <= AUTO_FOLLOW_BOTTOM_THRESHOLD_PX
+  }, [])
 
   // Persist panel state
   useEffect(() => {
@@ -644,12 +709,79 @@ export function TerminalFeed() {
     } catch { }
   }, [panelCollapsed])
 
-  // Auto-scroll to bottom on new entries
   useEffect(() => {
-    if (feedRef.current) {
-      feedRef.current.scrollTop = feedRef.current.scrollHeight
+    if (!downloadProgress) return
+    const key = `${downloadProgress.model}:${downloadProgress.status}`
+    if (lastDownloadToastKeyRef.current === key) return
+
+    if (downloadProgress.status === 'success') {
+      showSuccessToast(`Model "${downloadProgress.model}" is ready.`, 'Model Download')
+      lastDownloadToastKeyRef.current = key
+      return
     }
-  }, [entries])
+    if (downloadProgress.status === 'error') {
+      showErrorToast(`Failed to pull "${downloadProgress.model}".`, 'Model Download')
+      lastDownloadToastKeyRef.current = key
+    }
+  }, [downloadProgress])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(HISTORY_FILTERS_KEY, JSON.stringify({
+        query: historyQuery,
+        window: historyWindow,
+        types: historyTypeFilters,
+        models: historyModelFilters,
+        open: historyFiltersOpen,
+      } as PersistedHistoryFilters))
+    } catch {
+      // ignore storage failures
+    }
+  }, [historyFiltersOpen, historyModelFilters, historyQuery, historyTypeFilters, historyWindow])
+
+  useEffect(() => {
+    const feedEl = feedRef.current
+    if (!feedEl) return
+
+    const updateMetrics = () => {
+      const nextViewportHeight = feedEl.clientHeight
+      const nextScrollTop = feedEl.scrollTop
+      setFeedViewportHeight(nextViewportHeight)
+      setFeedScrollTop(nextScrollTop)
+      setAutoFollowFeed(isNearFeedBottom(feedEl))
+    }
+
+    updateMetrics()
+
+    const resizeObserver = new ResizeObserver(updateMetrics)
+    resizeObserver.observe(feedEl)
+    return () => resizeObserver.disconnect()
+  }, [isNearFeedBottom])
+
+  const handleFeedScroll = useCallback(() => {
+    const feedEl = feedRef.current
+    if (!feedEl) return
+
+    const nextScrollTop = feedEl.scrollTop
+    setFeedScrollTop(nextScrollTop)
+    setAutoFollowFeed(isNearFeedBottom(feedEl))
+  }, [isNearFeedBottom])
+
+  useEffect(() => {
+    if (!autoFollowFeed) return
+
+    const feedEl = feedRef.current
+    if (!feedEl) {
+      return
+    }
+
+    requestAnimationFrame(() => {
+      const latestFeed = feedRef.current
+      if (!latestFeed) return
+      latestFeed.scrollTop = latestFeed.scrollHeight
+      setFeedScrollTop(latestFeed.scrollTop)
+    })
+  }, [entries, autoFollowFeed])
 
   // Persist entries to localStorage (debounced) - this is fast local backup
   useEffect(() => {
@@ -686,11 +818,18 @@ export function TerminalFeed() {
       }
 
       // Save to backend silently
-      saveSessionSilent(sessionName, entries).then(success => {
+      saveSessionSilent(API_BASE, sessionName, entries, MAX_STORED_ENTRIES).then(success => {
         if (success) {
           lastSavedEntriesCountRef.current = entries.length
-          // Trigger sidebar refresh
-          window.dispatchEvent(new CustomEvent('loom:session-saved', { detail: { name: sessionName } }))
+          const now = Date.now()
+          const shouldRefreshSidebar =
+            now - lastSessionRefreshEventMsRef.current >= SESSION_SIDEBAR_REFRESH_THROTTLE_MS
+            || lastSessionRefreshEventMsRef.current === 0
+
+          if (shouldRefreshSidebar) {
+            lastSessionRefreshEventMsRef.current = now
+            window.dispatchEvent(new CustomEvent('loom:session-saved', { detail: { name: sessionName, auto: true } }))
+          }
         }
       })
     }, 1500) // 1.5s debounce
@@ -702,44 +841,59 @@ export function TerminalFeed() {
   useEffect(() => {
     const timestamp = Date.now()
     if (connected) {
-      setEntries(prev => [...prev, {
-        id: `system-${timestamp}`,
-        type: 'system',
-        content: '[BACKEND CONNECTED] Ready for AI processing.',
-        timestamp,
-      }])
-      // Fetch models when backend connects (with retry)
-      const fetchWithRetry = async (attempts = 3) => {
-        for (let i = 0; i < attempts; i++) {
-          const modelList = await fetchModels()
-          if (modelList.length > 0) {
-            console.log(`[LOOM] Loaded ${modelList.length} models on connect`)
-            return
-          }
-          if (i < attempts - 1) {
-            // Wait before retry
-            await new Promise(resolve => setTimeout(resolve, 2000))
-          }
-        }
-        // This is normal - models will load when available
-        console.debug('[LOOM] Models will load automatically when available')
+      const isRisingEdge = !wasConnectedRef.current
+      const cooldownElapsed = timestamp - lastConnectedNoticeRef.current >= CONNECTION_NOTICE_COOLDOWN_MS
+
+      if (isRisingEdge || cooldownElapsed) {
+        setEntries(prev => {
+          const last = prev[prev.length - 1]
+          const duplicateConnectedNotice = !!last
+            && last.type === 'system'
+            && typeof last.content === 'string'
+            && last.content.includes('[BACKEND CONNECTED]')
+            && timestamp - last.timestamp < CONNECTION_NOTICE_COOLDOWN_MS
+
+          if (duplicateConnectedNotice) return prev
+
+          return [...prev, {
+            id: `system-${timestamp}`,
+            type: 'system',
+            content: '[BACKEND CONNECTED] Ready for AI processing.',
+            timestamp,
+          }]
+        })
+        lastConnectedNoticeRef.current = timestamp
       }
-      fetchWithRetry()
+
+      if (isRisingEdge) {
+        // Fetch models when backend first reconnects (with retry)
+        const fetchWithRetry = async (attempts = 3) => {
+          for (let i = 0; i < attempts; i++) {
+            const modelList = await fetchModels()
+            if (modelList.length > 0) {
+              return
+            }
+            if (i < attempts - 1) {
+              await new Promise(resolve => setTimeout(resolve, 2000))
+            }
+          }
+          return
+        }
+        void fetchWithRetry()
+      }
     }
+    wasConnectedRef.current = connected
   }, [connected, fetchModels])
 
-  // Listen for models_updated event
   useEffect(() => {
-    const handleModelsUpdated = () => {
-      console.log('[LOOM] Models updated, refreshing list...')
-      fetchModels()
-    }
-
-    window.addEventListener('loom:models_updated', handleModelsUpdated)
-    return () => {
-      window.removeEventListener('loom:models_updated', handleModelsUpdated)
-    }
-  }, [fetchModels])
+    if (connected) return
+    setAiRuntimeTelemetry({
+      active: false,
+      phase: 'Backend disconnected',
+      signal: 0,
+      charsPerSec: 0,
+    })
+  }, [connected])
 
   // Listen for output from Circuit notebook
   useEffect(() => {
@@ -767,117 +921,157 @@ export function TerminalFeed() {
     }])
   }, [])
 
-  // Check code context status on mount and periodically
+  useEffect(() => {
+    if (!aiRuntimeTelemetry.active) return
+    const interval = window.setInterval(() => {
+      setAiRuntimeTelemetry(prev => {
+        if (!prev.active) return prev
+        return {
+          ...prev,
+          signal: Math.max(0.12, prev.signal * 0.86),
+          charsPerSec: prev.charsPerSec * 0.9,
+        }
+      })
+    }, 220)
+    return () => window.clearInterval(interval)
+  }, [aiRuntimeTelemetry.active])
+
+  useEffect(() => {
+    if (aiRuntimeTelemetry.active) return
+    const phase = (aiRuntimeTelemetry.phase || '').toLowerCase()
+    if (!phase || phase === 'idle' || phase.includes('disconnected') || phase.includes('offline')) {
+      return
+    }
+
+    const timeout = window.setTimeout(() => {
+      setAiRuntimeTelemetry(prev => {
+        if (prev.active) return prev
+        return { ...prev, phase: 'Idle' }
+      })
+    }, 1600)
+
+    return () => window.clearTimeout(timeout)
+  }, [aiRuntimeTelemetry.active, aiRuntimeTelemetry.phase])
+
+  const withFixHint = useCallback((content: string): string => {
+    const lower = content.toLowerCase()
+    const hints: string[] = []
+
+    if (lower.includes('unknown command')) {
+      hints.push('Try /help to see all available commands.')
+    }
+    if (lower.includes('not found') && lower.includes('model')) {
+      hints.push('Try /models to list installed models.')
+      hints.push('Try /pull llama3.1:8b to install a reliable default.')
+    }
+    if (lower.includes('backend not connected') || lower.includes('failed to fetch')) {
+      hints.push('Start backend: `cd backend && python run.py`.')
+    }
+    if (lower.includes('session') && lower.includes('not found')) {
+      hints.push('Try /sessions to list saved sessions.')
+    }
+
+    if (hints.length === 0) return content
+    const dedupedHints = [...new Set(hints)]
+    return `${content}\n\nTry:\n${dedupedHints.map(h => `- ${h}`).join('\n')}`
+  }, [])
+
+  // Check code-context status when relevant; avoid noisy constant polling.
   useEffect(() => {
     const checkCodeContextStatus = async () => {
       try {
-        const response = await fetch('http://localhost:8000/api/code-context/status')
-        if (!response.ok) {
-          // Endpoint might not exist yet or backend error
-          return
-        }
-        const data = await response.json()
+        const data = await fetchCodeContextStatus(API_BASE)
         setCodeContextActive(data.active || false)
         setCodeContextFolder(data.folder_path || null)
         setCodeContextFilesIndexed(data.files_indexed || 0)
       } catch (e) {
         // Backend not available or endpoint doesn't exist, ignore silently
-        console.debug('[LOOM] Code context status check failed (this is normal if backend is starting):', e)
+        return
       }
     }
 
-    // Only check if backend is connected
-    if (connected) {
-      checkCodeContextStatus()
-      const interval = setInterval(checkCodeContextStatus, 5000) // Check every 5 seconds
+    if (!connected) return
+
+    checkCodeContextStatus()
+
+    // Keep polling only while code context is active or panel is open.
+    if (codeContextPanelOpen || codeContextActive) {
+      const interval = setInterval(() => {
+        if (document.visibilityState === 'visible') {
+          checkCodeContextStatus()
+        }
+      }, CODE_CONTEXT_STATUS_POLL_MS)
       return () => clearInterval(interval)
     }
-  }, [connected])
+  }, [connected, codeContextPanelOpen, codeContextActive])
 
   // Listen for models_updated event & Orchestrator events
   useEffect(() => {
     const handleModelsUpdated = () => {
-      console.log('[LOOM] Models updated, refreshing list...')
       fetchModels()
     }
 
-    const handleOrchestratorEvent = (event: CustomEvent<any>) => {
-      const { type, circuit, model, reason } = event.detail
+    const handleOrchestratorEvent = (event: Event) => {
+      const detail = (event as CustomEvent<Record<string, unknown>>).detail || {}
+      const type = typeof detail.type === 'string' ? detail.type : ''
+      const circuit = typeof detail.circuit === 'string' ? detail.circuit : ''
+      const model = typeof detail.model === 'string' ? detail.model : ''
+      const previousModel = typeof detail.previous_model === 'string' ? detail.previous_model : ''
+      const reason = typeof detail.reason === 'string' ? detail.reason : ''
       if (type === 'circuit_suggestion') {
         addSystemEntry(`🧠 Orchestrator Suggestion:\nI noticed you might want to run the "${circuit}" circuit.\nReason: ${reason}\n\nType /${circuit} to run it.`, Date.now())
-      } else if (type === 'model_selected') {
-        console.log(`[ORCHESTRATOR] Auto-selected model: ${model} (${reason})`)
-        // Do NOT overwrite activeModel if it's set to 'auto' - keep user preference
-        // setActiveModel(model) 
+      }
+      if (type === 'model_switched' && model) {
+        const fromLabel = previousModel || 'previous model'
+        addSystemEntry(`🧠 Auto Model Switch:\n${fromLabel} → ${model}\nReason: ${reason}`, Date.now())
       }
     }
 
-    window.addEventListener('loom:models_updated', handleModelsUpdated)
-    window.addEventListener('orchestrator_event', handleOrchestratorEvent as any)
+    const handleQdcJobEvent = (event: Event) => {
+      const detail = (event as CustomEvent<Record<string, unknown>>).detail || {}
+      const jobId = typeof detail.job_id === 'string' ? detail.job_id : ''
+      const statusValue = typeof detail.status === 'string' ? detail.status : ''
+      const progress = typeof detail.progress === 'number' ? detail.progress : undefined
+      const message = typeof detail.message === 'string' ? detail.message : ''
+      if (!jobId) return
 
-    const socket = (window as any).loomSocket
-    if (socket) {
-      socket.on('orchestrator_event', (data: any) => {
-        handleOrchestratorEvent({ detail: data } as any)
-      })
+      const parts = [`📡 QDC ${jobId}`]
+      if (statusValue) parts.push(statusValue)
+      if (typeof progress === 'number') parts.push(`${progress}%`)
+      if (message) parts.push(`- ${message}`)
+      addSystemEntry(parts.join(' '), Date.now())
     }
+
+    window.addEventListener('loom:models_updated', handleModelsUpdated)
+    window.addEventListener('orchestrator_event', handleOrchestratorEvent)
+    window.addEventListener('qdc_job_event', handleQdcJobEvent)
+    getSocketInstance()
 
     return () => {
       window.removeEventListener('loom:models_updated', handleModelsUpdated)
-      window.removeEventListener('orchestrator_event', handleOrchestratorEvent as any)
-      if (socket) socket.off('orchestrator_event')
+      window.removeEventListener('orchestrator_event', handleOrchestratorEvent)
+      window.removeEventListener('qdc_job_event', handleQdcJobEvent)
     }
-  }, [fetchModels, addSystemEntry, setActiveModel])
+  }, [fetchModels, addSystemEntry])
 
   // Handle folder indexing
-  const handleIndexFolder = useCallback(async (folderPath: string, options?: any) => {
+  const handleIndexFolder = useCallback(async (folderPath: string, options?: CodeContextIndexOptions) => {
     setCodeContextIndexing(true)
+    showInfoToast(`Indexing ${folderPath}...`, 'Code Context', 1800)
     try {
       // Check if backend is connected first
       if (!connected) {
         throw new Error('Backend not connected. Please wait for connection or restart the backend server.')
       }
 
-      // Backend will handle path normalization (expanduser, resolve)
-      // Use AbortController for timeout (indexing can take a while for large folders)
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 300000) // 5 minute timeout
+      const data = await indexCodeContextFolder(API_BASE, folderPath, options)
+      setCodeContextActive(true)
+      setCodeContextFolder(data.folder_path || folderPath)
+      setCodeContextFilesIndexed(data.files_indexed || 0)
 
-      try {
-        const response = await fetch('http://localhost:8000/api/code-context/index-folder', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            folder_path: folderPath,
-            ...options,
-          }),
-          signal: controller.signal,
-        })
-
-        clearTimeout(timeoutId)
-
-        if (!response.ok) {
-          let errorMessage = 'Failed to index folder'
-          try {
-            const error = await response.json()
-            errorMessage = error.detail || error.message || errorMessage
-          } catch (e) {
-            // If response isn't JSON, use status text
-            errorMessage = `${errorMessage}: ${response.status} ${response.statusText}`
-          }
-          throw new Error(errorMessage)
-        }
-
-        const data = await response.json()
-        setCodeContextActive(true)
-        setCodeContextFolder(data.folder_path)
-        setCodeContextFilesIndexed(data.files_indexed || 0)
-
-        // Show success message
-        addSystemEntry(`✓ Folder indexed: ${data.files_indexed} files, ${data.chunks_created || 0} chunks created\n\nFolder context is now active. Code will be included in chat automatically.`, Date.now())
-      } finally {
-        clearTimeout(timeoutId)
-      }
+      // Show success message
+      addSystemEntry(`✓ Folder indexed: ${data.files_indexed || 0} files, ${data.chunks_created || 0} chunks created\n\nFolder context is now active. Code will be included in chat automatically.`, Date.now())
+      showSuccessToast(`Indexed ${data.files_indexed || 0} files in ${folderPath}.`, 'Code Context')
     } catch (error) {
       let errorMessage = 'Unknown error'
       if (error instanceof Error) {
@@ -887,7 +1081,7 @@ export function TerminalFeed() {
           if (errorMessage.includes('aborted')) {
             errorMessage = `Request timed out (indexing took too long).\n\nTry indexing a smaller folder or check backend logs.\n\nOriginal error: ${errorMessage}`
           } else {
-            errorMessage = `Backend connection failed.\n\nPossible causes:\n- Backend not running (start with: cd backend && uvicorn app.main:socket_app --reload --port 8000)\n- CORS issue (check backend logs)\n- Network error\n\nOriginal error: ${errorMessage}`
+            errorMessage = `Backend connection failed.\n\nPossible causes:\n- Backend not running (start with: cd backend && python run.py)\n- CORS issue (check backend logs)\n- Network error\n\nOriginal error: ${errorMessage}`
           }
         } else if (errorMessage.includes('404')) {
           errorMessage = `API endpoint not found (404).\n\nThe code-context router may not be loaded.\nCheck backend logs for import errors.\n\nError: ${errorMessage}`
@@ -898,6 +1092,7 @@ export function TerminalFeed() {
         }
       }
       addErrorEntry(`Failed to index folder: ${errorMessage}`, Date.now())
+      showErrorToast('Folder indexing failed. Check the terminal details for fixes.', 'Code Context')
     } finally {
       setCodeContextIndexing(false)
     }
@@ -906,11 +1101,45 @@ export function TerminalFeed() {
   const handleAIRequest = useCallback((
     prompt: string,
     timestamp: number,
-    contextMode: 'input' | 'key' | 'full' = 'input'
+    contextMode: 'input' | 'key' | 'full' = 'input',
+    modelOverride?: string,
   ) => {
+    let effectiveContextMode: 'input' | 'key' | 'full' = contextMode
+    if (contextMode === 'input' && shouldAutoUseKeyContext(prompt, entries)) {
+      effectiveContextMode = 'key'
+      addSystemEntry('[SMART CONTEXT] Follow-up detected, using key context.', timestamp)
+    }
+
     const entryId = `ai-${timestamp}`
     currentAIEntryRef.current = entryId
     currentAIContentRef.current = ''
+    aiStreamStatsRef.current = { lastChunkAt: 0, charsPerSec: 0 }
+    setAiRuntimeTelemetry({
+      active: true,
+      phase: 'Dispatching request',
+      signal: 0.22,
+      charsPerSec: 0,
+    })
+    emitCrtBurst('ai-start', 0.85, 130)
+
+    const getChatModel = (preferredModel?: string) => {
+      if (preferredModel && isLikelyChatModel(preferredModel)) {
+        return preferredModel
+      }
+
+      if (status.activeModel && isLikelyChatModel(status.activeModel)) {
+        return status.activeModel
+      }
+
+      const chatModels = models.filter(isLikelyChatModel)
+      const fallbackModel = chatModels[0] || models[0] || 'llama3.1:8b'
+      if (!preferredModel && status.activeModel && fallbackModel !== status.activeModel && !isLikelyChatModel(status.activeModel)) {
+        setActiveModel(fallbackModel)
+      }
+      return fallbackModel
+    }
+
+    const modelToUse = getChatModel(modelOverride)
 
     setEntries(prev => [...prev, {
       id: entryId,
@@ -918,22 +1147,75 @@ export function TerminalFeed() {
       content: '',
       timestamp,
       status: 'running',
+      metadata: {
+        model: modelToUse,
+        requestedModel: modelToUse,
+        sourcePrompt: prompt,
+        contextMode: effectiveContextMode,
+      },
     }])
 
     const handleChunk = (chunk: { content: string }) => {
+      const now = Date.now()
+      const chunkChars = Math.max(1, chunk.content.length || 0)
+      const streamStats = aiStreamStatsRef.current
+      if (streamStats.lastChunkAt > 0) {
+        const deltaMs = Math.max(16, now - streamStats.lastChunkAt)
+        const instantCharsPerSec = chunkChars / (deltaMs / 1000)
+        streamStats.charsPerSec = streamStats.charsPerSec > 0
+          ? (streamStats.charsPerSec * 0.72) + (instantCharsPerSec * 0.28)
+          : instantCharsPerSec
+      } else {
+        streamStats.charsPerSec = Math.max(streamStats.charsPerSec, chunkChars * 9)
+      }
+      streamStats.lastChunkAt = now
+
+      const signal = Math.max(0.18, Math.min(1, streamStats.charsPerSec / STREAM_SIGNAL_NORMALIZER_CPS))
+      setAiRuntimeTelemetry(prev => ({
+        active: true,
+        phase: 'Streaming response',
+        signal: Math.max(signal, prev.signal * 0.72),
+        charsPerSec: streamStats.charsPerSec,
+      }))
+
       currentAIContentRef.current += chunk.content
       setEntries(prev => prev.map(entry =>
         entry.id === entryId
-          ? { ...entry, content: entry.content + chunk.content }
+          ? {
+            ...entry,
+            content: entry.content + chunk.content,
+            metadata: {
+              ...(entry.metadata || {}),
+              streamSignal: signal,
+              streamCharsPerSec: streamStats.charsPerSec,
+              streamUpdatedAt: now,
+            },
+          }
           : entry
       ))
     }
 
-    const handleStatus = (statusData: { status: string; message: string }) => {
+    const handleStatus = (statusData: { status: string; message: string; model?: string }) => {
+      if (statusData.status === 'running') {
+        setAiRuntimeTelemetry(prev => ({
+          active: true,
+          phase: (statusData.message || 'Processing').trim(),
+          signal: Math.max(prev.signal, 0.22),
+          charsPerSec: prev.charsPerSec,
+        }))
+        return
+      }
+
       if (statusData.status === 'success' || statusData.status === 'error') {
         const isSuccess = statusData.status === 'success'
+        emitCrtBurst(isSuccess ? 'ai-done' : 'ai-error', isSuccess ? 0.95 : 1.35, isSuccess ? 140 : 200)
+        setAiRuntimeTelemetry({
+          active: false,
+          phase: isSuccess ? 'Complete' : (statusData.message || 'Error').trim(),
+          signal: 0,
+          charsPerSec: 0,
+        })
         const content = (currentAIContentRef.current || '').trim()
-        // Full-chunk TTS: generate once response is complete (fast, reliable)
         if (isSuccess && content && autoGenerateAudio && ttsModelType === 'orpheus') {
           setGeneratingEntryId(entryId)
           setSelectedAiEntryId(entryId)
@@ -961,6 +1243,14 @@ export function TerminalFeed() {
               ? {
                 ...ent,
                 status: statusData.status as 'success' | 'error',
+                metadata: {
+                  ...(ent.metadata || {}),
+                  model: statusData.model || (ent.metadata?.model as string | undefined) || modelToUse,
+                  requestedModel: (ent.metadata?.requestedModel as string | undefined) || modelToUse,
+                  sourcePrompt: (ent.metadata?.sourcePrompt as string | undefined) || prompt,
+                  contextMode: (ent.metadata?.contextMode as string | undefined) || effectiveContextMode,
+                  streamSignal: 0,
+                },
                 content: statusData.status === 'error'
                   ? (ent.content || `Error: ${statusData.message}`)
                   : (currentAIContentRef.current || ent.content || 'No response received.'),
@@ -972,1482 +1262,683 @@ export function TerminalFeed() {
       }
     }
 
-    // Ensure we use a chat model, not image generation or vision models
-    const getChatModel = () => {
-      const imageGenKeywords = ['flux', 'flux2', 'stable-diffusion', 'sdxl']
-      const visionKeywords = ['llava', 'bakllava', 'moondream', 'vision']
-
-      // Check if current activeModel is actually a chat model
-      if (status.activeModel) {
-        const lower = status.activeModel.toLowerCase()
-        const isImageGen = imageGenKeywords.some(k => lower.includes(k))
-        const isVision = visionKeywords.some(k => lower.includes(k))
-
-        // If activeModel is a chat model, use it
-        if (!isImageGen && !isVision) {
-          return status.activeModel
-        }
-        // Otherwise, it's incorrectly set to an image gen or vision model, so we need to find a chat model
-      }
-
-      // Filter out image generation and vision models from fallback
-      const chatModels = models.filter(m => {
-        const lower = m.toLowerCase()
-        return !imageGenKeywords.some(k => lower.includes(k)) &&
-          !visionKeywords.some(k => lower.includes(k))
-      })
-
-      // If we found a chat model, use it and optionally update activeModel
-      const chatModel = chatModels[0] || models[0] || 'llama3.1:8b'
-
-      // If activeModel was incorrectly set to a non-chat model, update it
-      if (status.activeModel && chatModel !== status.activeModel) {
-        const lowerActive = status.activeModel.toLowerCase()
-        if (imageGenKeywords.some(k => lowerActive.includes(k)) ||
-          visionKeywords.some(k => lowerActive.includes(k))) {
-          // Silently switch to a proper chat model
-          setActiveModel(chatModel)
-        }
-      }
-
-      return chatModel
-    }
-
-    const modelToUse = getChatModel()
     const circuitContext = getCircuitContext()
-
-    // Build prompt based on context mode
     let enhancedPrompt: string
 
-    if (contextMode === 'input') {
+    if (effectiveContextMode === 'input') {
       enhancedPrompt = circuitContext
         ? `${circuitContext}\n\n---\n\nUser question: ${prompt}`
         : prompt
     } else {
-      const conversationBlock = buildConversationContext(entries, { contextMode, maxTurns: 16 })
+      const maxTurns = effectiveContextMode === 'full' ? 100 : 24
+      const conversationBlock = buildConversationContext(entries, { contextMode: effectiveContextMode, maxTurns })
       enhancedPrompt = buildEnhancedPrompt(prompt, conversationBlock, circuitContext)
     }
 
-    // Include code context if active
     const useCodeContext = codeContextActive
-
-    const sent = sendChat(enhancedPrompt, modelToUse, handleChunk, handleStatus, useCodeContext)
+    const sent = sendChat(
+      enhancedPrompt,
+      modelToUse,
+      handleChunk,
+      handleStatus,
+      useCodeContext,
+      { rawPrompt: prompt, contextMode: effectiveContextMode },
+    )
 
     if (!sent) {
+      setAiRuntimeTelemetry({
+        active: false,
+        phase: 'Backend offline',
+        signal: 0,
+        charsPerSec: 0,
+      })
       setEntries(prev => prev.map(entry =>
         entry.id === entryId
           ? {
             ...entry,
-            content: `[OFFLINE MODE]\n\nBackend not connected. Start the backend server:\n\ncd backend && uvicorn app.main:socket_app --reload --port 8000\n\nYour prompt was: "${prompt}"`,
+            content: `[OFFLINE MODE]\n\nBackend not connected. Start the backend server:\n\ncd backend && python run.py\n\nYour prompt was: "${prompt}"`,
             status: 'error',
           }
           : entry
       ))
     }
-  }, [sendChat, status.activeModel, models, entries, speakTTSUnified, autoGenerateAudio, ttsModelType, generateOrpheus, playOrpheusBlob, saveTTSBlobToBackend, setGeneratingEntryId, setAudioCacheByEntryId, setSelectedAiEntryId])
+  }, [sendChat, status.activeModel, models, entries, speakTTSUnified, autoGenerateAudio, ttsModelType, generateOrpheus, playOrpheusBlob, saveTTSBlobToBackend, setGeneratingEntryId, setAudioCacheByEntryId, setSelectedAiEntryId, codeContextActive, setActiveModel, addSystemEntry])
 
   useEffect(() => {
     handleAIRequestRef.current = handleAIRequest
   }, [handleAIRequest])
 
-  const handleSlashCommand = useCallback((command: string, timestamp: number) => {
-    // Helper for web interaction responses
-    const handleWebInteractionResponse = (data: any, ts: number) => {
-      if (data.status === 'success') {
-        let displayContent = `WEB INTERACTION: ${data.title}\n\n${data.text_content}`
-        if (data.vision_analysis) {
-          displayContent += `\n\n---\n🖼️ VISUAL ANALYSIS:\n${data.vision_analysis}`
-        }
-
-        setEntries(prev => [...prev, {
-          id: `web-${ts}`,
-          type: 'system',
-          content: displayContent,
-          imageUrl: data.screenshot_url,
-          timestamp: ts,
-        }])
-
-        // Auto-TL;DR trigger
-        let aiContext = `Here is the current state of the page "${data.title}" (${data.url}):\n\n${data.text_content}`
-        if (data.vision_analysis) {
-          aiContext += `\n\nVisual observations:\n${data.vision_analysis}`
-        }
-        aiContext += `\n\nPlease summarize the result of the interaction.`
-        handleAIRequest(aiContext, ts + 1)
-      } else {
-        addErrorEntry(`Interaction failed: ${data.error}`, ts)
+  const fetchQuickModelSuggestion = useCallback(async (): Promise<{ model: string; reason: string }> => {
+    try {
+      const params = new URLSearchParams()
+      if (status.activeModel) {
+        params.set('active_model', status.activeModel)
       }
+      const res = await fetch(`${API_BASE}/api/providers/quick-model?${params.toString()}`)
+      if (res.ok) {
+        const data = await res.json()
+        if (typeof data?.model === 'string' && data.model.trim()) {
+          return {
+            model: data.model.trim(),
+            reason: typeof data?.reason === 'string' ? data.reason : 'backend quick selection',
+          }
+        }
+      }
+    } catch {
+      // Fallback below
     }
 
-    const [cmd, ...args] = command.slice(1).split(' ')
+    return pickQuickModel(cloudModels, models, status.activeModel)
+  }, [cloudModels, models, status.activeModel])
 
-    switch (cmd.toLowerCase()) {
-      case 'help':
-        addSystemEntry([
-          'AVAILABLE COMMANDS:',
-          '',
-          'CHAT:',
-          '  /ai <prompt>   - Send prompt to AI processor',
-          '  /model <name>  - Switch chat model',
-          '  /vision <name> - Switch vision/image analysis model',
-          '  /gen <name>    - Switch image generation model',
-          '  /models        - List available Ollama models',
-          '  /pull <name>   - Download a new Ollama model',
-          '',
-          'IMAGES:',
-          '  /image-models  - List available image generation models',
-          '  /pull-image <name> - Download image model (Flux, SDXL, etc.)',
-          '  /set-hf-token <token> - Set HuggingFace token (needed for Flux)',
-          '',
-          'IMAGES:',
-          '  /image          - Upload and analyze an image (or use 📷 button)',
-          '  /imagine <prompt> - Generate an image using Ollama (flux2-klein)',
-          '  /dream <prompt>   - Alias for /imagine',
-          '  Click 📷 button - Upload image for vision analysis',
-          '',
-          'CIRCUITS:',
-          '  /circuits           - List saved circuits',
-          '  /run <name>         - Run a saved circuit',
-          '  /<circuit-name>     - Shorthand to run a circuit',
-          '',
-          'SESSION:',
-          '  /clear              - Clear display; /restore to bring back',
-          '  /restore            - Restore content from before /clear',
-          '  /reset              - Wipe everything (no restore)',
-          '  /saveas <name>      - Save current session to a named slot',
-          '  /saveas <name> last:N - Save only last N entries',
-          '  /sessions           - List saved sessions',
-          '  /load <name>        - Load a saved session (replaces current)',
-          '  /delete <name>      - Delete a saved session',
-          '',
-          '  /status        - Show system status',
-          '  /suggest       - Get model suggestions for your system',
-          '  /image         - Upload and analyze an image (or click 📷 button)',
-          '  /imagine <prompt> - Generate an image (uses Ollama flux2-klein)',
-          '  /dream <prompt>   - Alias for /imagine',
-          '  /song <style>     - Generate a quick music track',
-          '  /compose          - Info on advanced composition',
-          '  /music-setup      - Setup/download music generation model',
-          '  /help          - Show this message',
-          '',
-          'Current session auto-saves. Use SAVE in the Sessions panel or /saveas to name it.',
-        ].join('\n'), timestamp)
-        break
+  const generateImageFromPrompt = useCallback((prompt: string, modelName?: string) => {
+    const model = modelName || status.imageGenModel || 'auto-detecting'
+    setImageGeneration({
+      prompt,
+      model,
+      status: 'generating',
+      progress: 0,
+      message: 'Starting image node...',
+    })
 
-      case 'image':
-        addSystemEntry('Click the 📷 button next to the input field to upload and analyze an image.', timestamp)
-        // Trigger file input click via a small delay to ensure UI is ready
-        setTimeout(() => {
-          const fileInput = document.querySelector('input[type="file"][accept="image/*"]') as HTMLInputElement
-          if (fileInput) {
-            fileInput.click()
-          }
-        }, 100)
-        break
-
-      case 'imagine':
-      case 'dream':
-        const imagePrompt = args.join(' ')
-        if (!imagePrompt) {
-          // Open empty state panel
+    fetch(`${BACKEND_URL}/api/images/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt,
+        provider: 'ollama',
+        model: modelName || status.imageGenModel || undefined,
+      }),
+    })
+      .then(async res => {
+        const data = await res.json()
+        if (res.ok && data.status === 'success' && data.image) {
           setImageGeneration({
-            prompt: '',
-            model: status.imageGenModel || 'auto-detecting',
-            status: 'empty',
-            availableModels: [],
+            prompt,
+            imageUrl: data.image,
+            model: data.model || model,
+            status: 'success',
           })
-        } else {
-          console.log('[LOOM] Starting image generation for:', imagePrompt)
-          addSystemEntry('⏳ Generating image... Opening panel. This may take 1–2 minutes.', timestamp)
-          // Show generation panel
-          setImageGeneration({
-            prompt: imagePrompt,
-            model: status.imageGenModel || 'auto-detecting',
-            status: 'generating',
-            progress: 0,
-            message: 'Starting...',
-          })
-          console.log('[LOOM] Image generation panel state set')
-
-          // First check if we have image generation models
-          fetch(`${BACKEND_URL}/api/images/check-image-gen-models`)
-            .then(res => res.json())
-            .then(async (checkData) => {
-              console.log('[LOOM] Image gen models check:', checkData)
-              const available = checkData.available || []
-
-              if (available.length === 0 && !status.imageGenModel) {
-                // No models available - show recommendations in panel
-                const recommendations = checkData.recommendations || []
-                console.log('[LOOM] No models found, showing recommendations')
-                setImageGeneration({
-                  prompt: imagePrompt,
-                  model: 'none',
-                  status: 'no-model',
-                  availableModels: available,
-                  recommendedModels: recommendations,
-                })
-                return
-              }
-
-              console.log('[LOOM] Models available, proceeding with generation')
-              setImageGeneration(prev => prev ? { ...prev, message: 'Rendering…' } : null)
-              // Try Ollama first (flux2-klein), fallback to local
-              fetch(`${BACKEND_URL}/api/images/generate`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  prompt: imagePrompt,
-                  provider: 'ollama',
-                  model: status.imageGenModel || undefined, // Use selected or auto-detect
-                }),
-              })
-                .then(async res => {
-                  const data = await res.json()
-                  console.log('[LOOM] Image generation response:', { status: res.status, data: { ...data, image: data.image ? `${data.image.substring(0, 50)}...` : 'none' } })
-
-                  if (res.ok && data.status === 'success' && data.image) {
-                    // Update image gen model in status if it was auto-detected
-                    if (data.model && data.model !== status.imageGenModel) {
-                      setImageGenModel(data.model)
-                    }
-
-                    // Show in panel
-                    setImageGeneration({
-                      prompt: imagePrompt,
-                      imageUrl: data.image,
-                      model: data.model || 'Ollama',
-                      status: 'success',
-                    })
-                  } else {
-                    // Try fallback to local generation
-                    const errorMsg = data.error || data.message || data.detail || 'Ollama generation failed, trying local...'
-                    console.log('[LOOM] Ollama generation failed:', errorMsg)
-                    throw new Error(errorMsg)
-                  }
-                })
-                .catch(async (err) => {
-                  console.log('[LOOM] Ollama generation failed, trying local:', err)
-                  // Fallback to local generation
-                  try {
-                    const res = await fetch(`${BACKEND_URL}/api/images/generate`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        prompt: imagePrompt,
-                        provider: 'local',
-                        model: 'sdxl',
-                      }),
-                    })
-                    const data = await res.json()
-                    if (res.ok && data.status === 'success' && data.image) {
-                      setImageGeneration({
-                        prompt: imagePrompt,
-                        imageUrl: data.image,
-                        model: 'local SDXL',
-                        status: 'success',
-                      })
-                    } else {
-                      throw new Error(data.error || data.message || 'Image generation failed')
-                    }
-                  } catch (fallbackErr) {
-                    const errorMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)
-                    setImageGeneration({
-                      prompt: imagePrompt,
-                      model: status.imageGenModel || 'unknown',
-                      status: 'error',
-                      error: errorMsg,
-                    })
-                  }
-                })
-            })
-            .catch((err) => {
-              console.error('[LOOM] Error checking image gen models:', err)
-              // If check fails, try anyway
-              setImageGeneration({
-                prompt: imagePrompt,
-                model: 'checking...',
-                status: 'generating',
-                progress: 0,
-              })
-
-              // Try generation anyway
-              fetch(`${BACKEND_URL}/api/images/generate`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  prompt: imagePrompt,
-                  provider: 'ollama',
-                  model: status.imageGenModel || undefined,
-                }),
-              })
-                .then(async res => {
-                  const data = await res.json()
-                  if (res.ok && data.status === 'success' && data.image) {
-                    setImageGeneration({
-                      prompt: imagePrompt,
-                      imageUrl: data.image,
-                      model: data.model || 'Ollama',
-                      status: 'success',
-                    })
-                  } else {
-                    // Try local fallback
-                    throw new Error(data.error || data.message || 'Generation failed')
-                  }
-                })
-                .catch(async (fallbackErr) => {
-                  // Try local
-                  try {
-                    const res = await fetch(`${BACKEND_URL}/api/images/generate`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        prompt: imagePrompt,
-                        provider: 'local',
-                        model: 'sdxl',
-                      }),
-                    })
-                    const data = await res.json()
-                    if (res.ok && data.status === 'success' && data.image) {
-                      setImageGeneration({
-                        prompt: imagePrompt,
-                        imageUrl: data.image,
-                        model: 'local SDXL',
-                        status: 'success',
-                      })
-                    } else {
-                      throw new Error(data.error || data.message || 'Generation failed')
-                    }
-                  } catch (localErr) {
-                    setImageGeneration({
-                      prompt: imagePrompt,
-                      model: 'unknown',
-                      status: 'error',
-                      error: localErr instanceof Error ? localErr.message : String(localErr),
-                    })
-                  }
-                })
-            })
+          if (data.model) {
+            setImageGenModel(data.model)
+          }
+          return
         }
-        break
-
-      case 'song':
-        // Open music generation panel
-        setMusicGeneration({
-          prompt: args.join(' ') || '',
-          lyrics: '',
-          duration: 30,
-          status: 'empty',
+        throw new Error(data.error || data.message || 'Generation failed')
+      })
+      .catch(err => {
+        setImageGeneration({
+          prompt,
+          model,
+          status: 'error',
+          error: err instanceof Error ? err.message : String(err),
         })
-        break
+      })
+  }, [status.imageGenModel, setImageGenModel])
 
-      case 'compose':
-        addSystemEntry('🎹 To compose music with advanced controls (lyrics, duration, etc.), please switch to the Circuit Board view and add a Music Gen module.', timestamp)
-        break
+  const generateMusicFromPrompt = useCallback(
+    (prompt: string, lyrics = '', duration = 30, guidanceScale = 7.0, steps = 20, seed?: number) => {
+      setMusicGeneration({
+        prompt,
+        lyrics: lyrics || undefined,
+        duration,
+        status: 'generating',
+        progress: 0,
+        message: 'Starting music node...',
+        seed,
+      })
 
-      case 'music-setup':
-        setMusicSetupPanelOpen(true)
-        break
-
-      case 'clear': {
-        stashBeforeClear(entries)
-        setCircuitInputState(null)
-        setEntries([{
-          id: `system-${timestamp}`,
-          type: 'system',
-          content: 'Display cleared. Use /restore to bring back.',
-          timestamp,
-        }])
-        break
-      }
-
-      case 'restore': {
-        const stashed = loadBeforeClear()
-        if (stashed && stashed.length > 0) {
-          setEntries(() => [{
-            id: `system-${timestamp}`,
-            type: 'system',
-            content: 'Restored.',
-            timestamp,
-          }, ...stashed])
-        } else {
-          addErrorEntry('Nothing to restore. Use /clear first to stash the display.', timestamp)
-        }
-        break
-      }
-
-      case 'reset':
-        try {
-          localStorage.removeItem(STORAGE_KEY)
-          localStorage.removeItem(BEFORE_CLEAR_KEY)
-        } catch { }
-        setCircuitInputState(null)
-        setEntries([{
-          id: `system-${timestamp}`,
-          type: 'system',
-          content: 'TERMINAL RESET — All history and /restore stash deleted.',
-          timestamp,
-        }])
-        break
-
-      case 'saveas': {
-        const nameArg = args[0]
-        if (!nameArg) {
-          addErrorEntry('Usage: /saveas <name> [last:N]', timestamp)
-          break
-        }
-
-        // Check for last:N modifier
-        const lastArg = args.find(a => a.startsWith('last:'))
-        let entriesToSave = entries
-
-        if (lastArg) {
-          const count = parseInt(lastArg.split(':')[1], 10)
-          if (!isNaN(count) && count > 0) {
-            entriesToSave = entries.slice(-count)
+      fetch(`${BACKEND_URL}/api/music/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt,
+          lyrics: lyrics || undefined,
+          use_lyrics: !!lyrics,
+          duration,
+          guidance_scale: guidanceScale,
+          steps,
+          seed,
+        }),
+      })
+        .then(async res => {
+          if (!res.ok) {
+            const errData = await res.json().catch(() => ({}))
+            throw new Error(errData.detail || 'Generation failed')
           }
-        }
-
-        // Filter out system initialization messages for cleaner saves
-        const filtered = entriesToSave.filter(e =>
-          !(e.type === 'system' && (e.content.includes('INITIALIZED') || e.content.includes('BACKEND CONNECTED')))
-        )
-
-        if (filtered.length === 0) {
-          addErrorEntry('No entries to save', timestamp)
-          break
-        }
-
-        // Use async API with callback
-        saveSessionAsync(nameArg, filtered).then(success => {
-          if (success) {
-            addSystemEntry(`Session saved as "${nameArg}" (${filtered.length} entries)`, Date.now())
-          } else {
-            addErrorEntry('Failed to save session', Date.now())
-          }
-        })
-        break
-      }
-
-      case 'sessions': {
-        const index = loadSessionsIndex()
-        const names = Object.keys(index)
-
-        if (names.length === 0) {
-          addSystemEntry('No saved sessions.\n\nUse /saveas <name> to save the current session.', timestamp)
-        } else {
-          const sessionList = names.map(name => {
-            const info = index[name]
-            const date = new Date(info.savedAt).toLocaleString()
-            return `  ${name} (${info.entryCount} entries) - ${date}`
-          }).join('\n')
-
-          addSystemEntry(`SAVED SESSIONS:\n\n${sessionList}\n\n/load <name> opens (replaces current).`, timestamp)
-        }
-        break
-      }
-
-      case 'load': {
-        const sessionName = args.join(' ').trim()
-        if (!sessionName) {
-          addErrorEntry('Usage: /load <name>', timestamp)
-          break
-        }
-
-        // Use async API with callback
-        loadSessionAsync(sessionName).then(sessionEntries => {
-          const nowTs = Date.now()
-          if (sessionEntries) {
-            setEntries([
-              {
-                id: `system-${nowTs}`,
-                type: 'system',
-                content: `Loaded: ${sessionName} (${sessionEntries.length} entries)`,
-                timestamp: nowTs,
-              },
-              ...sessionEntries,
-            ])
-          } else {
-            addErrorEntry(`Session "${sessionName}" not found. Use /sessions to list.`, nowTs)
-          }
-        })
-        break
-      }
-
-      case 'delete': {
-        const sessionToDelete = args.join(' ').trim()
-        if (!sessionToDelete) {
-          addErrorEntry('Usage: /delete <name>', timestamp)
-          break
-        }
-
-        // Use async API with callback
-        deleteSessionAsync(sessionToDelete).then(success => {
-          const nowTs = Date.now()
-          if (success) {
-            addSystemEntry(`Session "${sessionToDelete}" deleted`, nowTs)
-          } else {
-            addErrorEntry(`Failed to delete session "${sessionToDelete}"`, nowTs)
-          }
-        })
-        break
-      }
-
-      case 'visit': {
-        const fullArg = args.join(' ').trim()
-        if (!fullArg) {
-          addErrorEntry('Usage: /visit <url>', timestamp)
-          break
-        }
-
-        // Smart extraction: Look for http/https URL first
-        let targetUrl = ''
-        const urlMatch = fullArg.match(/(https?:\/\/[^\s]+)/)
-
-        if (urlMatch) {
-          targetUrl = urlMatch[0]
-        } else {
-          // Fallback: assume first token is domain
-          targetUrl = args[0]
-          if (!targetUrl.startsWith('http')) {
-            targetUrl = `https://${targetUrl}`
-          }
-        }
-
-        const visitId = `visit-${timestamp}`
-        setEntries(prev => [...prev, {
-          id: visitId,
-          type: 'system',
-          content: `Visiting ${targetUrl} (headless)...`,
-          timestamp,
-          status: 'running'
-        }])
-
-        fetch(`${API_BASE}/api/web/visit`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: targetUrl }),
-        })
-          .then(res => res.json())
-          .then(data => {
-            // Mark loading entry as success
-            setEntries(prev => prev.map(e => e.id === visitId ? { ...e, status: 'success' } : e))
-            handleWebInteractionResponse(data, Date.now())
-          })
-          .catch(e => {
-            setEntries(prev => prev.map(e => e.id === visitId ? { ...e, status: 'error' } : e))
-            addErrorEntry(`Visit failed: ${e.message}`, Date.now())
-          })
-        break
-      }
-
-      case 'research': {
-        const query = args.join(' ').trim()
-        if (!query) {
-          addErrorEntry('Usage: /research <query>', timestamp)
-          break
-        }
-
-        const researchId = `research-${timestamp}`
-        setEntries(prev => [...prev, {
-          id: researchId,
-          type: 'system',
-          content: `🔍 Deep searching: "${query}"...`,
-          timestamp,
-          status: 'running'
-        }])
-
-        fetch(`${API_BASE}/api/web/research`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query, max_results: 3 }),
-        })
-          .then(res => res.json())
-          .then(data => {
-            setEntries(prev => prev.map(e => e.id === researchId ? { ...e, status: 'success' } : e))
-            const nowTs = Date.now()
-            if (data.status === 'success' && data.sources) {
-              const sourceContents = data.sources.map((s: any, i: number) =>
-                `[Source ${i + 1}: ${s.title}](${s.url})\n${(s.text_content || '').slice(0, 1500)}`
-              )
-
-              setEntries(prev => [...prev, {
-                id: `research-${nowTs}`,
-                type: 'system',
-                content: `RESEARCH COMPLETE: ${data.sources.length} sources found.\n\nSynthesizing answer...`,
-                timestamp: nowTs,
-              }])
-
-              // Trigger AI synthesis
-              const synthesisPrompt = `You have been given research from ${data.source_count} sources about "${query}". Please synthesize a comprehensive answer based on these sources:\n\n${sourceContents.join('\n\n---\n\n')}\n\nProvide a well-structured synthesis that answers the query, citing sources where appropriate.`
-
-              handleAIRequest(synthesisPrompt, nowTs + 1)
-            } else {
-              addErrorEntry(`Research failed: ${data.error || 'Unknown error'}`, nowTs)
-            }
-          })
-          .catch(e => {
-            setEntries(prev => prev.map(e => e.id === researchId ? { ...e, status: 'error' } : e))
-            addErrorEntry(`Research request failed: ${e.message}`, Date.now())
-          })
-        break
-      }
-
-      // --- Interactive Browsing Commands ---
-      case 'click': {
-        const query = args.join(' ').trim()
-        if (!query) {
-          addErrorEntry('Usage: /click <text or button name>', timestamp)
-          break
-        }
-
-        const clickId = `click-${timestamp}`
-        setEntries(prev => [...prev, {
-          id: clickId,
-          type: 'system',
-          content: `🖱️ Clicking "${query}"...`,
-          timestamp,
-          status: 'running'
-        }])
-
-        fetch(`${API_BASE}/api/web/click`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query }),
-        })
-          .then(res => res.json())
-          .then(data => {
-            setEntries(prev => prev.map(e => e.id === clickId ? { ...e, status: 'success' } : e))
-            handleWebInteractionResponse(data, timestamp)
-          })
-          .catch(e => {
-            setEntries(prev => prev.map(e => e.id === clickId ? { ...e, status: 'error' } : e))
-            addErrorEntry(`Click failed: ${e.message}`, Date.now())
-          })
-        break
-      }
-
-      case 'type': {
-        // Simple parsing: /type "selector" "text" or just /type text (if focused? logic needs query)
-        // Let's assume /type "search box" "hello world"
-        // Or simplistic: /type <query> <text>
-        // Getting quotes right in args split is hard with simple split(' ').
-        // Let's rely on simple split for now or improve arg parsing later.
-        // Assume: /type <query> <...text...>
-        if (args.length < 2) {
-          addErrorEntry('Usage: /type <element> <text>', timestamp)
-          break
-        }
-        const query = args[0]
-        const text = args.slice(1).join(' ')
-
-        addSystemEntry(`⌨️ Typing "${text}" into "${query}"...`, timestamp)
-        fetch(`${API_BASE}/api/web/type`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query, text }),
-        })
-          .then(res => res.json())
-          .then(data => handleWebInteractionResponse(data, timestamp))
-          .catch(e => addErrorEntry(`Type failed: ${e.message}`, Date.now()))
-        break
-      }
-
-      case 'scroll': {
-        const direction = args[0] === 'up' ? 'up' : 'down'
-        addSystemEntry(`📜 Scrolling ${direction}...`, timestamp)
-        fetch(`${API_BASE}/api/web/scroll`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ direction }),
-        })
-          .then(res => res.json())
-          .then(data => handleWebInteractionResponse(data, timestamp))
-          .catch(e => addErrorEntry(`Scroll failed: ${e.message}`, Date.now()))
-        break
-      }
-
-      case 'back': {
-        addSystemEntry(`🔙 Going back...`, timestamp)
-        fetch(`${API_BASE}/api/web/back`, { method: 'POST' })
-          .then(res => res.json())
-          .then(data => handleWebInteractionResponse(data, timestamp))
-          .catch(e => addErrorEntry(`Back failed: ${e.message}`, Date.now()))
-        break
-      }
-
-      case 'ai':
-        const prompt = args.join(' ')
-        if (prompt) {
-          handleAIRequest(prompt, timestamp)
-        } else {
-          addErrorEntry('Usage: /ai <your prompt>', timestamp)
-        }
-        break
-
-      case 'model':
-        const modelName = args.join(' ').trim()
-        if (!modelName) {
-          const modelInfo = [
-            `Current chat model: ${status.activeModel || 'not set'}`,
-            `Current vision model: ${status.visionModel || 'not set'}`,
-            `Current image gen model: ${status.imageGenModel || 'not set'}`,
-            '',
-            'Usage: /model <name> - Set chat model',
-            '       /vision <name> - Set vision model',
-            '       /gen <name> - Set image generation model',
-            'Example: /model llama3.1:8b',
-            'Example: /vision llava:7b',
-            'Example: /gen x/flux2-klein',
-          ].join('\n')
-          addSystemEntry(modelInfo, timestamp)
-        } else {
-          // Check if model exists
-          if (models.includes(modelName)) {
-            setActiveModel(modelName)
-            addSystemEntry(`Chat model switched to: ${modelName}`, timestamp)
-          } else {
-            // Try partial match
-            const match = models.find(m => m.toLowerCase().includes(modelName.toLowerCase()))
-            if (match) {
-              setActiveModel(match)
-              addSystemEntry(`Chat model switched to: ${match}`, timestamp)
-            } else {
-              // If no models loaded, try fetching them first
-              if (models.length === 0) {
-                addSystemEntry('No models loaded. Fetching from backend...', timestamp)
-                fetchModels().then((fetchedModels) => {
-                  if (fetchedModels.length > 0) {
-                    const match = fetchedModels.find((m: string) => m.toLowerCase().includes(modelName.toLowerCase()))
-                    if (match) {
-                      setActiveModel(match)
-                      addSystemEntry(`Chat model switched to: ${match}`, Date.now())
-                    } else {
-                      addErrorEntry(`Model "${modelName}" not found.\nAvailable: ${fetchedModels.slice(0, 10).join(', ')}${fetchedModels.length > 10 ? '...' : ''}`, Date.now())
-                    }
-                  } else {
-                    addErrorEntry(`Model "${modelName}" not found.\nNo models available. Is Ollama running?`, Date.now())
-                  }
-                })
-              } else {
-                addErrorEntry(`Model "${modelName}" not found.\nAvailable: ${models.slice(0, 10).join(', ')}${models.length > 10 ? '...' : ''}`, timestamp)
-              }
-            }
-          }
-        }
-        break
-
-      case 'model': {
-        const modelName = args.join(' ').trim()
-        if (!modelName) {
-          const modelInfo = [
-            `Current chat model: ${status.activeModel || 'not set'}`,
-            `Current vision model: ${status.visionModel || 'not set'}`,
-            `Current image gen model: ${status.imageGenModel || 'not set'}`,
-            '',
-            'Usage: /model <name> - Set chat model',
-            '       /vision <name> - Set vision model',
-            '       /gen <name> - Set image generation model',
-            'Example: /model llama3.1:8b',
-            'Example: /model auto',
-            'Example: /vision llava:7b',
-          ].join('\n')
-          addSystemEntry(modelInfo, timestamp)
-        } else {
-          // Handle 'auto' explicit selection
-          if (modelName.toLowerCase() === 'auto') {
-            setActiveModel('auto')
-            addSystemEntry('Chat model set to: Auto (Orchestrator)', timestamp)
-            break
-          }
-
-          // Check if model exists
-          if (models.includes(modelName)) {
-            setActiveModel(modelName)
-            addSystemEntry(`Chat model switched to: ${modelName}`, timestamp)
-          } else {
-            // Try partial match
-            const match = models.find(m => m.toLowerCase().includes(modelName.toLowerCase()))
-            if (match) {
-              setActiveModel(match)
-              addSystemEntry(`Chat model switched to: ${match}`, timestamp)
-            } else {
-              // If no models loaded, try fetching them first
-              if (models.length === 0) {
-                addSystemEntry('No models loaded. Fetching from backend...', timestamp)
-                fetchModels().then((fetchedModels) => {
-                  if (fetchedModels.length > 0) {
-                    const match = fetchedModels.find((m: string) => m.toLowerCase().includes(modelName.toLowerCase()))
-                    if (match) {
-                      setActiveModel(match)
-                      addSystemEntry(`Chat model switched to: ${match}`, Date.now())
-                    } else {
-                      addErrorEntry(`Model "${modelName}" not found.\nAvailable: ${fetchedModels.slice(0, 10).join(', ')}${fetchedModels.length > 10 ? '...' : ''}`, Date.now())
-                    }
-                  } else {
-                    addErrorEntry(`Model "${modelName}" not found.\nNo models available. Is Ollama running?`, Date.now())
-                  }
-                })
-              } else {
-                addErrorEntry(`Model "${modelName}" not found.\nAvailable: ${models.slice(0, 10).join(', ')}${models.length > 10 ? '...' : ''}`, timestamp)
-              }
-            }
-          }
-        }
-        break
-      }
-
-      case 'vision':
-        const visionModelName = args.join(' ').trim()
-        if (!visionModelName) {
-          addSystemEntry(`Current vision model: ${status.visionModel || 'not set'}\n\nUsage: /vision <name>\nExample: /vision llava:7b`, timestamp)
-        } else {
-          // Check if model exists
-          if (models.includes(visionModelName)) {
-            setVisionModel(visionModelName)
-            addSystemEntry(`Vision model switched to: ${visionModelName}`, timestamp)
-          } else {
-            // Try partial match
-            const match = models.find(m => m.toLowerCase().includes(visionModelName.toLowerCase()))
-            if (match) {
-              setVisionModel(match)
-              addSystemEntry(`Vision model switched to: ${match}`, timestamp)
-            } else {
-              // If no models loaded, try fetching them first
-              if (models.length === 0) {
-                addSystemEntry('No models loaded. Fetching from backend...', timestamp)
-                fetchModels().then((fetchedModels) => {
-                  if (fetchedModels.length > 0) {
-                    const match = fetchedModels.find((m: string) => m.toLowerCase().includes(visionModelName.toLowerCase()))
-                    if (match) {
-                      setVisionModel(match)
-                      addSystemEntry(`Vision model switched to: ${match}`, Date.now())
-                    } else {
-                      addErrorEntry(`Vision model "${visionModelName}" not found.\nAvailable: ${fetchedModels.slice(0, 10).join(', ')}${fetchedModels.length > 10 ? '...' : ''}`, Date.now())
-                    }
-                  } else {
-                    addErrorEntry('No models available. Is Ollama running?', Date.now())
-                  }
-                })
-              } else {
-                addErrorEntry(`Vision model "${visionModelName}" not found.\nAvailable: ${models.slice(0, 10).join(', ')}${models.length > 10 ? '...' : ''}`, timestamp)
-              }
-            }
-          }
-        }
-        break
-
-      case 'gen':
-      case 'image-gen':
-        const imageGenModelName = args.join(' ').trim()
-        if (!imageGenModelName) {
-          addSystemEntry(`Current image generation model: ${status.imageGenModel || 'not set'}\n\nUsage: /gen <name> or /image-gen <name>\nExample: /gen x/flux2-klein`, timestamp)
-        } else {
-          // Check if model exists
-          if (models.includes(imageGenModelName)) {
-            setImageGenModel(imageGenModelName)
-            addSystemEntry(`Image generation model switched to: ${imageGenModelName}`, timestamp)
-          } else {
-            // Try partial match
-            const match = models.find(m => m.toLowerCase().includes(imageGenModelName.toLowerCase()))
-            if (match) {
-              setImageGenModel(match)
-              addSystemEntry(`Image generation model switched to: ${match}`, timestamp)
-            } else {
-              // If no models loaded, try fetching them first
-              if (models.length === 0) {
-                addSystemEntry('No models loaded. Fetching from backend...', timestamp)
-                fetchModels().then((fetchedModels) => {
-                  if (fetchedModels.length > 0) {
-                    const match = fetchedModels.find((m: string) => m.toLowerCase().includes(imageGenModelName.toLowerCase()))
-                    if (match) {
-                      setImageGenModel(match)
-                      addSystemEntry(`Image generation model switched to: ${match}`, Date.now())
-                    } else {
-                      addErrorEntry(`Image generation model "${imageGenModelName}" not found.\nAvailable: ${fetchedModels.slice(0, 10).join(', ')}${fetchedModels.length > 10 ? '...' : ''}\n\nInstall with: /pull ${imageGenModelName}`, Date.now())
-                    }
-                  } else {
-                    addErrorEntry('No models available. Is Ollama running?', Date.now())
-                  }
-                })
-              } else {
-                addErrorEntry(`Image generation model "${imageGenModelName}" not found.\nAvailable: ${models.slice(0, 10).join(', ')}${models.length > 10 ? '...' : ''}\n\nInstall with: /pull ${imageGenModelName}`, timestamp)
-              }
-            }
-          }
-        }
-        break
-
-      case 'models':
-        addSystemEntry('Fetching models from Ollama...', timestamp)
-        fetchModels().then((modelList) => {
-          console.log('[LOOM] Fetched models list:', modelList)
-          if (modelList.length > 0) {
-            const activeModel = status.activeModel
-            const visionModel = status.visionModel
-            const imageGenModel = status.imageGenModel
-
-            // Categorize models
-            const visionKeywords = ['llava', 'bakllava', 'moondream', 'vision']
-            const imageGenKeywords = ['flux', 'flux2', 'stable-diffusion']
-
-            const currentMarker = (m: string): string => {
-              if (m === activeModel) return ' ← chat'
-              if (m === visionModel) return ' ← vision'
-              if (m === imageGenModel) return ' ← image-gen'
-              return ''
-            }
-
-            const typeMarker = (m: string): string => {
-              const lower = m.toLowerCase()
-              if (visionKeywords.some(k => lower.includes(k))) return ' [vision]'
-              if (imageGenKeywords.some(k => lower.includes(k))) return ' [image-gen]'
-              return ' [chat]'
-            }
-
-            addSystemEntry(`Available models (${modelList.length}):\n  ${modelList.map((m: string) => m + typeMarker(m) + currentMarker(m)).join('\n  ')}`, Date.now())
-          } else {
-            addSystemEntry('No models found. Is Ollama running? Try: ollama list', Date.now())
-          }
-        }).catch((error) => {
-          console.error('[LOOM] Error fetching models:', error)
-          addErrorEntry(`Failed to fetch models: ${error.message}`, Date.now())
-        })
-        break
-
-      case 'pull':
-        const modelToPull = args.join(' ').trim()
-        if (!modelToPull) {
-          // Fetch and show suggestions based on system specs
-          addSystemEntry('Analyzing your system and fetching model suggestions...', timestamp)
-          fetch(`${BACKEND_URL}/api/suggest-models`)
-            .then(res => res.json())
-            .then(data => {
-              if (data.error) {
-                addErrorEntry(`Failed to get suggestions: ${data.error}`, Date.now())
-                addSystemEntry('Usage: /pull <model-name>\nExample: /pull llama3.1:8b', Date.now())
-                return
-              }
-
-              const system = data.system || {}
-              const suggestions = data.suggestions || []
-
-              let message = 'MODEL SUGGESTIONS FOR YOUR SYSTEM:\n\n'
-              message += `System: ${system.platform || 'Unknown'} | ${system.ram_gb || '?'}GB RAM`
-              if (system.gpu_available) {
-                message += ` | ${system.gpu_type || 'GPU'}`
-              }
-              message += '\n\n'
-
-              if (suggestions.length > 0) {
-                message += 'Recommended models:\n'
-                suggestions.slice(0, 8).forEach((sug: any, idx: number) => {
-                  message += `  ${idx + 1}. ${sug.model}\n`
-                  message += `     ${sug.description}\n`
-                  message += `     → ${sug.reason}\n\n`
-                })
-                message += 'Usage: /pull <model-name>\nExample: /pull llama3.1:8b'
-              } else {
-                message += 'No suitable models found for your system specs.\n'
-                message += 'Popular models to try:\n'
-                message += '  llama3.1:8b\n  mistral\n  phi3:mini\n  tinyllama'
-              }
-
-              addSystemEntry(message, Date.now())
-            })
-            .catch(err => {
-              console.error('[LOOM] Error fetching suggestions:', err)
-              addSystemEntry('Usage: /pull <model-name>\nExample: /pull llama3.1:8b\n\nPopular models:\n  llama3.1:8b\n  llama3.1:70b\n  mistral\n  codellama\n  phi3', Date.now())
-            })
-        } else {
-          addSystemEntry(`Pulling model "${modelToPull}"...\nThis may take a while depending on model size.`, timestamp)
-
-          // Initialize download progress
-          setDownloadProgress({
-            model: modelToPull,
-            status: 'starting',
-            completed: 0,
-            total: 0,
-            message: 'Initializing download...',
-          })
-
-          // Track progress entry ID to update it
-          let progressEntryId: string | null = null
-
-          pullModel(modelToPull, (progress: any) => {
-            const progressTimestamp = Date.now()
-            const status = progress.status || 'unknown'
-            const message = progress.message || status
-            const percent = progress.percent
-            const completed = progress.completed || 0
-            const total = progress.total || 0
-
-            // Update download panel
-            setDownloadProgress({
-              model: modelToPull,
-              status: status,
-              completed: completed,
-              total: total,
-              percent: percent,
-              message: message,
-              error: progress.error,
-            })
-
-            if (status === 'success') {
-              addSystemEntry(`✓ Model "${modelToPull}" downloaded successfully!`, progressTimestamp)
-              // Refresh models list
-              fetchModels().then(() => {
-                // Check if this is a vision model and set it
-                const visionKeywords = ['llava', 'bakllava', 'moondream', 'vision']
-                const isVisionModel = visionKeywords.some(keyword =>
-                  modelToPull.toLowerCase().includes(keyword)
-                )
-                if (isVisionModel && !status.visionModel) {
-                  setVisionModel(modelToPull)
-                }
-
-                // Check if this is an image generation model and set it
-                const imageGenKeywords = ['flux', 'flux2', 'stable-diffusion']
-                const isImageGenModel = imageGenKeywords.some(keyword =>
-                  modelToPull.toLowerCase().includes(keyword)
-                )
-                if (isImageGenModel && !status.imageGenModel) {
-                  setImageGenModel(modelToPull)
-                }
-              })
-              // Auto-close panel after 5 seconds
-              setTimeout(() => {
-                setDownloadProgress(null)
-              }, 5000)
-            } else if (status === 'error') {
-              const errorMsg = progress.error || progress.message || 'Unknown error occurred'
-              let errorText = `✗ Failed to download model "${modelToPull}"\n\nError: ${errorMsg}`
-
-              // Add helpful suggestions based on common errors
-              if (errorMsg.includes('connection') || errorMsg.includes('refused')) {
-                errorText += '\n\nTip: Make sure Ollama is running. Try: ollama list'
-              } else if (errorMsg.includes('not found') || errorMsg.includes('404')) {
-                errorText += '\n\nTip: Check the model name. Try: /suggest to see available models'
-              } else if (errorMsg.includes('permission') || errorMsg.includes('denied')) {
-                errorText += '\n\nTip: Check file permissions for Ollama model storage'
-              }
-
-              addErrorEntry(errorText, progressTimestamp)
-              // Keep error visible, user can close manually
-            } else {
-              // Update progress in terminal (minimal, main info in panel)
-              let progressText = `${status}...`
-              if (percent !== null && percent !== undefined) {
-                progressText += ` ${percent}%`
-              } else if (total > 0) {
-                const mbCompleted = (completed / 1024 / 1024).toFixed(1)
-                const mbTotal = (total / 1024 / 1024).toFixed(1)
-                progressText += ` ${mbCompleted}MB / ${mbTotal}MB`
-              }
-
-              // Update or create progress entry
-              if (progressEntryId) {
-                setEntries(prev => prev.map(entry =>
-                  entry.id === progressEntryId
-                    ? { ...entry, content: `Downloading "${modelToPull}": ${progressText}` }
-                    : entry
-                ))
-              } else {
-                const newEntry: LogEntry = {
-                  id: `pull-${progressTimestamp}`,
-                  type: 'system',
-                  content: `Downloading "${modelToPull}": ${progressText}`,
-                  timestamp: progressTimestamp,
-                }
-                progressEntryId = newEntry.id
-                setEntries(prev => [...prev, newEntry])
-              }
-            }
-          })
-        }
-        break
-
-      case 'suggest':
-        addSystemEntry('Analyzing your system and fetching model suggestions...', timestamp)
-        fetch(`${BACKEND_URL}/api/suggest-models`)
-          .then(res => res.json())
-          .then(data => {
-            if (data.error) {
-              addErrorEntry(`Failed to get suggestions: ${data.error}`, Date.now())
-              return
-            }
-
-            const system = data.system || {}
-            const suggestions = data.suggestions || []
-
-            let message = '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
-            message += '  MODEL SUGGESTIONS FOR YOUR SYSTEM\n'
-            message += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n'
-
-            message += 'SYSTEM SPECS:\n'
-            message += `  Platform: ${system.platform || 'Unknown'} ${system.architecture || ''}\n`
-            message += `  RAM: ${system.ram_gb || '?'}GB total, ${system.ram_available_gb || '?'}GB available\n`
-            message += `  CPU: ${system.cpu_cores || '?'} cores (${system.cpu_count || '?'} threads)\n`
-            if (system.gpu_available) {
-              message += `  GPU: ${system.gpu_type || 'Available'}\n`
-              if (system.gpu_memory_gb) {
-                message += `  GPU Memory: ${system.gpu_memory_gb}GB\n`
-              }
-            } else {
-              message += `  GPU: Not available (CPU-only mode)\n`
-            }
-            message += '\n'
-
-            if (suggestions.length > 0) {
-              message += 'RECOMMENDED MODELS:\n\n'
-              suggestions.forEach((sug: any, idx: number) => {
-                message += `  ${idx + 1}. ${sug.model}\n`
-                message += `     ${sug.description}\n`
-                message += `     → ${sug.reason}\n\n`
-              })
-              message += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
-              message += 'To download a model, use: /pull <model-name>\n'
-              message += 'Example: /pull llama3.1:8b'
-            } else {
-              message += 'No suitable models found for your system specs.\n\n'
-              message += 'You may want to try lightweight models:\n'
-              message += '  /pull tinyllama\n'
-              message += '  /pull phi3:mini\n'
-              message += '  /pull gemma:2b'
-            }
-
-            addSystemEntry(message, Date.now())
-          })
-          .catch(err => {
-            console.error('[LOOM] Error fetching suggestions:', err)
-            addErrorEntry(`Failed to fetch suggestions: ${err.message}`, Date.now())
-          })
-        break
-
-      case 'image-models':
-        addSystemEntry('Fetching image generation models...', timestamp)
-        fetch(`${BACKEND_URL}/api/images/models`)
-          .then(res => res.json())
-          .then(data => {
-            const localModels = data.local || []
-            const hfModels = data.hf_models || data.huggingface || []
-            const device = data.device || 'unknown'
-            const current = data.current_model || 'none'
-
-            let message = `IMAGE GENERATION MODELS:\n\n`
-            message += `Device: ${device.toUpperCase()}\n`
-            message += `Current: ${current}\n\n`
-
-            if (localModels.length > 0) {
-              message += 'LOCAL MODELS:\n'
-              localModels.forEach((m: any) => {
-                const name = m.name || 'unknown'
-                const vram = m.vram || '?'
-                const repo = m.repo || ''
-                message += `  ${name} (${vram} VRAM)`
-                if (repo) message += `\n    → ${repo}`
-                message += '\n'
-              })
-              message += '\n'
-            }
-
-            if (hfModels.length > 0) {
-              message += 'HUGGINGFACE API MODELS:\n'
-              hfModels.forEach((name: string) => {
-                message += `  ${name}\n`
-              })
-              message += '\n'
-            }
-
-            message += 'To download a model:\n'
-            message += '  /pull-image <name>\n'
-            message += 'Examples:\n'
-            message += '  /pull-image flux-schnell  (fast, requires HF token)\n'
-            message += '  /pull-image sdxl          (good quality, no token needed)\n'
-            message += '  /pull-image sd-1.5        (small, fast, no token needed)\n\n'
-            message += 'Note: Flux models require HuggingFace token.\n'
-            message += 'Get token: https://huggingface.co/settings/tokens\n'
-            message += 'Set it: /set-hf-token <your-token>'
-
-            addSystemEntry(message, Date.now())
-          })
-          .catch(err => {
-            console.error('[LOOM] Error fetching image models:', err)
-            addErrorEntry(`Failed to fetch image models: ${err.message}`, Date.now())
-          })
-        break
-
-      case 'pull-image':
-        const imageModelToPull = args.join(' ').trim()
-        if (!imageModelToPull) {
-          addSystemEntry('Usage: /pull-image <model-name>\n\nAvailable models:\n  flux-schnell (fast, needs HF token)\n  flux-dev (best quality, needs HF token)\n  sdxl (good quality, no token)\n  sdxl-turbo (very fast, no token)\n  sd-1.5 (small, fast, no token)\n\nGet HF token: https://huggingface.co/settings/tokens', timestamp)
-        } else {
-          addSystemEntry(`Preparing image model "${imageModelToPull}"...\nThis will download the model on first use.`, timestamp)
-
-          // Use socket to pull image model
-          if (connected) {
-            const socket = (window as any).loomSocket
-            if (socket) {
-              socket.emit('pull_image_model', { model: imageModelToPull })
-
-              // Listen for status updates
-              const handler = (data: any) => {
-                if (data.model === imageModelToPull) {
-                  const status = data.status || 'unknown'
-                  const message = data.message || status
-
-                  if (status === 'success') {
-                    addSystemEntry(`✓ Image model "${imageModelToPull}" is ready!`, Date.now())
-                    socket.off('pull_image_status', handler)
-                  } else if (status === 'error') {
-                    const errorMsg = data.error || data.message || 'Unknown error'
-                    let errorText = `✗ Failed to prepare model "${imageModelToPull}"\n\nError: ${errorMsg}`
-
-                    if (errorMsg.includes('token') || errorMsg.includes('authentication')) {
-                      errorText += '\n\nThis model requires a HuggingFace token.\n'
-                      errorText += 'Get one at: https://huggingface.co/settings/tokens\n'
-                      errorText += 'Then set it with: /set-hf-token <your-token>'
-                    }
-
-                    addErrorEntry(errorText, Date.now())
-                    socket.off('pull_image_status', handler)
-                  } else {
-                    // Update status
-                    addSystemEntry(`[${status}] ${message}`, Date.now())
-                  }
-                }
-              }
-
-              socket.on('pull_image_status', handler)
-
-              // Cleanup after 5 minutes
-              setTimeout(() => {
-                socket.off('pull_image_status', handler)
-              }, 300000)
-            } else {
-              addErrorEntry('Not connected to backend. Please wait for connection.', timestamp)
-            }
-          } else {
-            addErrorEntry('Not connected to backend. Please wait for connection.', timestamp)
-          }
-        }
-        break
-
-      case 'set-hf-token':
-        const token = args.join(' ').trim()
-        if (!token) {
-          addSystemEntry('Usage: /set-hf-token <your-huggingface-token>\n\nGet a token from: https://huggingface.co/settings/tokens\n\nThis token is needed for Flux models and other gated models.', timestamp)
-        } else {
-          fetch(`${BACKEND_URL}/api/images/config/huggingface`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token }),
-          })
-            .then(res => res.json())
-            .then(data => {
-              if (data.status === 'ok') {
-                addSystemEntry('✓ HuggingFace token set! You can now use Flux models.\n\nTry: /pull-image flux-schnell', Date.now())
-              } else {
-                addErrorEntry(`Failed to set token: ${data.message || 'Unknown error'}`, Date.now())
-              }
-            })
-            .catch(err => {
-              addErrorEntry(`Failed to set token: ${err.message}`, Date.now())
-            })
-        }
-        break
-
-      case 'status':
-        const statusLines = [
-          'SYSTEM STATUS:',
-          `  Backend: ${connected ? 'CONNECTED' : 'DISCONNECTED'}`,
-          `  Ollama:  ${status.connected ? 'ONLINE' : 'STANDBY'}`,
-          `  Models:  ${models.length} available`,
-          `  Circuits: ${getCircuitNames().length} saved`,
-        ]
-        if (status.activeModel) {
-          statusLines.push(`  Chat Model: ${status.activeModel}`)
-        }
-        if (status.visionModel) {
-          statusLines.push(`  Vision Model: ${status.visionModel}`)
-        }
-        if (status.imageGenModel) {
-          statusLines.push(`  Image Gen Model: ${status.imageGenModel}`)
-        }
-        addSystemEntry(statusLines.join('\n'), timestamp)
-        break
-
-      case 'circuits': {
-        const circuitNames = getCircuitNames()
-        const circuits = loadSavedCircuits()
-
-        // Build saved circuits list
-        const savedList = circuitNames.length > 0
-          ? circuitNames.map(name => {
-            const circuit = circuits[name]
-            const inputCount = circuit.cells.filter(c => c.type === 'data_input').length
-            const cellCount = circuit.cells.length
-            return `  /${name} (${cellCount} cells${inputCount > 0 ? `, ${inputCount} inputs` : ''})`
-          }).join('\n')
-          : '  (none yet)'
-
-        // Group templates by category
-        const categories = ['thinking', 'writing', 'music', 'data', 'code', 'scripts'] as const
-        const categoryLabels: Record<string, string> = {
-          thinking: 'THINK',
-          writing: 'WRITE',
-          music: 'MUSIC',
-          data: 'DATA',
-          code: 'CODE',
-          scripts: 'SCRIPTS',
-        }
-
-        const templatesByCategory = categories.map(cat => {
-          const templates = NOTEBOOK_TEMPLATES.filter(t => t.category === cat)
-          if (templates.length === 0) return ''
-
-          const list = templates.map(t => {
-            const inputCount = t.cells.filter(c => c.type === 'data_input').length
-            return `    /${t.id} - ${t.name}${inputCount > 0 ? ` (${inputCount} inputs)` : ''}`
-          }).join('\n')
-
-          return `  ${categoryLabels[cat]}:\n${list}`
-        }).filter(Boolean).join('\n\n')
-
-        addSystemEntry(
-          `CIRCUITS:\n\n` +
-          `YOUR SAVED:\n${savedList}\n\n` +
-          `TEMPLATES:\n${templatesByCategory}\n\n` +
-          `Run with: /<name>`,
-          timestamp
-        )
-        break
-      }
-
-      case 'run': {
-        const circuitName = args.join('-').trim()
-        if (!circuitName) {
-          addErrorEntry('Usage: /run <circuit-name>', timestamp)
-          break
-        }
-
-        // Check saved circuits first, then templates
-        const circuitNames = getCircuitNames()
-        const template = NOTEBOOK_TEMPLATES.find(t => t.id === circuitName)
-
-        if (!circuitNames.includes(circuitName) && !template) {
-          addErrorEntry(`Circuit "${circuitName}" not found.\nUse /circuits to see available circuits.`, timestamp)
-          break
-        }
-
-        // If it's a template, save it as a circuit first
-        if (template && !circuitNames.includes(circuitName)) {
-          const savedCircuit: SavedCircuit = {
-            name: template.id,
-            cells: template.cells.map((cell, idx) => ({
-              ...cell,
-              id: `cell-${Date.now()}-${idx}`,
-            })),
-            modelSlots: { A: '', B: '', C: '', IMAGE: '' },
-            savedAt: Date.now(),
-          }
-          saveCircuit(savedCircuit)
-        }
-
-        // Check if circuit needs inputs
-        const requiredInputs = getRequiredInputs(circuitName)
-
-        if (requiredInputs.length > 0) {
-          // Start input collection
-          setCircuitInputState({
-            circuitName,
-            requiredInputs,
-            collectedInputs: {},
-            currentInputIndex: 0,
-          })
-
-          addSystemEntry(
-            `Running circuit: ${circuitName}\n\nPlease provide inputs:\n\n[${requiredInputs[0]}]:`,
-            timestamp
-          )
-        } else {
-          // Run immediately
-          addSystemEntry(`Running circuit: ${circuitName}...`, timestamp)
-
-          runCircuit(circuitName, {}).then(output => {
-            setEntries(prev => [...prev, {
-              id: `circuit-output-${Date.now()}`,
-              type: 'ai',
-              content: output,
-              timestamp: Date.now(),
+          const data = await res.json()
+          if (data.status === 'success' && data.audio_url) {
+            setMusicGeneration({
+              prompt,
+              lyrics: lyrics || undefined,
+              duration,
+              audioUrl: `${BACKEND_URL}${data.audio_url}`,
               status: 'success',
-            }])
-          }).catch(err => {
-            addErrorEntry(`Circuit failed: ${err.message}`, Date.now())
-          })
-        }
-        break
-      }
-
-      default: {
-        // Check if command matches a saved circuit or template
-        const circuitNames = getCircuitNames()
-        const template = NOTEBOOK_TEMPLATES.find(t => t.id === cmd)
-
-        if (circuitNames.includes(cmd) || template) {
-          // If it's a template, save it as a circuit first
-          if (template && !circuitNames.includes(cmd)) {
-            const savedCircuit: SavedCircuit = {
-              name: template.id,
-              cells: template.cells.map((cell, idx) => ({
-                ...cell,
-                id: `cell-${Date.now()}-${idx}`,
-              })),
-              modelSlots: { A: '', B: '', C: '', IMAGE: '' },
-              savedAt: Date.now(),
-            }
-            saveCircuit(savedCircuit)
-          }
-
-          // Now run it
-          const requiredInputs = getRequiredInputs(cmd)
-
-          if (requiredInputs.length > 0) {
-            setCircuitInputState({
-              circuitName: cmd,
-              requiredInputs,
-              collectedInputs: {},
-              currentInputIndex: 0,
+              seed: data.seed,
             })
+            return
+          }
+          throw new Error(data.message || 'Unknown error')
+        })
+        .catch(err => {
+          setMusicGeneration({
+            prompt,
+            lyrics: lyrics || undefined,
+            duration,
+            status: 'error',
+            error: err.message,
+          })
+        })
+    },
+    [],
+  )
 
-            addSystemEntry(
-              `Running circuit: ${cmd}\n\nProvide inputs:\n\n[${requiredInputs[0]}]:`,
-              timestamp
-            )
-          } else {
-            addSystemEntry(`Running circuit: ${cmd}...`, timestamp)
+  const pollQdcJob = useCallback((jobId: string) => {
+    if (!jobId || activeQdcPollersRef.current.has(jobId)) return
+    activeQdcPollersRef.current.add(jobId)
 
-            runCircuit(cmd, {}).then(output => {
+    let lastStatus = ''
+    const intervalId = window.setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/qdc/jobs/${encodeURIComponent(jobId)}`)
+        if (!res.ok) {
+          return
+        }
+        const data = await res.json()
+        const job = data?.job
+        const statusValue = typeof job?.status === 'string' ? job.status : ''
+        if (!statusValue) return
+
+        if (statusValue !== lastStatus) {
+          lastStatus = statusValue
+          addSystemEntry(`📡 QDC ${jobId}: ${statusValue}`, Date.now())
+        }
+
+        if (statusValue === 'succeeded' || statusValue === 'failed' || statusValue === 'canceled') {
+          window.clearInterval(intervalId)
+          activeQdcPollersRef.current.delete(jobId)
+          if (statusValue === 'succeeded') {
+            const resultRes = await fetch(`${API_BASE}/api/qdc/jobs/${encodeURIComponent(jobId)}/results`)
+            if (resultRes.ok) {
+              const resultData = await resultRes.json()
+              const summary = typeof resultData?.result?.summary === 'string'
+                ? resultData.result.summary
+                : 'QDC job completed.'
               setEntries(prev => [...prev, {
-                id: `circuit-output-${Date.now()}`,
-                type: 'ai',
-                content: output,
+                id: `qdc-result-${jobId}-${Date.now()}`,
+                type: 'system',
+                content: `📡 QDC RESULT (${jobId})\n${summary}`,
                 timestamp: Date.now(),
                 status: 'success',
               }])
-            }).catch(err => {
-              addErrorEntry(`Circuit failed: ${err.message}`, Date.now())
-            })
+            }
+          } else {
+            addErrorEntry(`QDC job ${jobId} ended with status: ${statusValue}`, Date.now())
           }
-        } else {
-          addErrorEntry(`Unknown command: /${cmd}`, timestamp)
         }
+      } catch {
+        // Keep polling; transient errors are expected occasionally.
+      }
+    }, 2400)
+  }, [addSystemEntry, addErrorEntry])
+
+  const startQdcJobFromPrompt = useCallback(async (prompt: string) => {
+    const cleaned = prompt.trim()
+    if (!cleaned) {
+      throw new Error('QDC prompt is empty')
+    }
+
+    const statusRes = await fetch(`${API_BASE}/api/qdc/status`)
+    if (statusRes.ok) {
+      const statusData = await statusRes.json()
+      if (!statusData?.provider_connected) {
+        setShowProviderSetup(true)
+        throw new Error('QDC is not connected yet. Open Provider Setup and connect Qualcomm QDC token first.')
       }
     }
-  }, [addSystemEntry, addErrorEntry, handleAIRequest, fetchModels, connected, status, models.length, getRequiredInputs, runCircuit])
+
+    const res = await fetch(`${API_BASE}/api/qdc/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: cleaned,
+        target: 'auto',
+        priority: 'normal',
+      }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || !data?.job?.id) {
+      const detail = typeof data?.detail === 'string' ? data.detail : 'Failed to start QDC job'
+      throw new Error(detail)
+    }
+
+    const jobId = String(data.job.id)
+    addSystemEntry(`📡 QDC job started: ${jobId}\nPrompt: ${cleaned}`, Date.now())
+    pollQdcJob(jobId)
+    return jobId
+  }, [addSystemEntry, pollQdcJob])
+
+  const handleSlashCommand = useCallback((command: string, timestamp: number) => {
+    const { cmd: normalizedCmd, args } = parseSlashCommand(command)
+    const commandText = args.length > 0 ? `/${normalizedCmd} ${args.join(' ')}` : `/${normalizedCmd}`
+    const commandStatusId = `cmd-status-${timestamp}`
+    let commandPending = false
+    let commandFinalized = false
+
+    setEntries(prev => [...prev, {
+      id: commandStatusId,
+      type: 'system',
+      content: buildCommandStatusContent(commandText, 'working'),
+      timestamp,
+      status: 'running',
+      metadata: {
+        kind: COMMAND_STATUS_METADATA_KIND,
+        command: commandText,
+        state: 'working',
+      },
+    }])
+
+    const setCommandStatus = (state: CommandLifecycleState, detail?: string) => {
+      const mappedStatus: NonNullable<LogEntry['status']> =
+        state === 'working' ? 'running' : state === 'done' ? 'success' : 'error'
+      if (state !== 'working') {
+        commandFinalized = true
+        emitCrtBurst(state === 'done' ? 'command-done' : 'command-failed', state === 'done' ? 0.85 : 1.25, state === 'done' ? 120 : 190)
+      }
+      setEntries(prev => {
+        let found = false
+        const next = prev.map(entry => {
+          if (entry.id !== commandStatusId) return entry
+          found = true
+          return {
+            ...entry,
+            status: mappedStatus,
+            content: buildCommandStatusContent(commandText, state, detail),
+            metadata: {
+              ...(entry.metadata || {}),
+              kind: COMMAND_STATUS_METADATA_KIND,
+              command: commandText,
+              state,
+              detail,
+            },
+          }
+        })
+        if (found) return next
+        return [
+          ...next,
+          {
+            id: commandStatusId,
+            type: 'system',
+            content: buildCommandStatusContent(commandText, state, detail),
+            timestamp: Date.now(),
+            status: mappedStatus,
+            metadata: {
+              kind: COMMAND_STATUS_METADATA_KIND,
+              command: commandText,
+              state,
+              detail,
+            },
+          },
+        ]
+      })
+    }
+
+    const markCommandPending = (detail?: string) => {
+      commandPending = true
+      setCommandStatus('working', detail)
+    }
+
+    const addSystemEntryForCommand = (content: string, ts: number) => {
+      addSystemEntry(content, ts)
+    }
+
+    const addErrorEntryForCommand = (content: string, ts: number) => {
+      const improved = withFixHint(content)
+      addErrorEntry(improved, ts)
+      emitCrtBurst('command-error', 1.35, 210)
+      const firstLine = improved.split('\n')[0] || 'command failed'
+      setCommandStatus('failed', firstLine)
+      showErrorToast(firstLine, 'Command Failed')
+    }
+
+    const finalizeCommandIfSynchronous = () => {
+      if (!commandPending && !commandFinalized) {
+        setCommandStatus('done')
+      }
+    }
+
+    if (normalizedCmd === 'crt') {
+      const mode = (args[0] || 'status').toLowerCase()
+      const validModes = ['on', 'off', 'subtle', 'medium', 'full', 'insane', 'toggle', 'status', 'burst']
+      if (!validModes.includes(mode)) {
+        addErrorEntryForCommand('Usage: /crt [on|off|subtle|medium|full|insane|toggle|status|burst]', timestamp)
+        return
+      }
+
+      try {
+        const current = loadSettings()
+        const currentEnabled = current.crtEnabled
+        const currentIntensity = current.crtIntensity
+
+        let nextEnabled = currentEnabled
+        let nextIntensity = currentIntensity
+
+        if (mode === 'on') nextEnabled = true
+        if (mode === 'off') nextEnabled = false
+        if (mode === 'toggle') nextEnabled = !currentEnabled
+        if (mode === 'subtle' || mode === 'medium' || mode === 'full' || mode === 'insane') {
+          nextEnabled = true
+          nextIntensity = mode
+        }
+        if (mode === 'burst') {
+          emitCrtBurst('manual', 1.6, 220)
+          addSystemEntryForCommand('CRT burst triggered.', timestamp)
+          setCommandStatus('done', 'crt burst')
+          return
+        }
+
+        const nextSettings = {
+          ...current,
+          crtEnabled: nextEnabled,
+          crtIntensity: nextIntensity,
+        }
+
+        saveSettings(nextSettings)
+
+        addSystemEntryForCommand(
+          `CRT ${nextEnabled ? 'ON' : 'OFF'}${nextEnabled ? ` (${String(nextIntensity).toUpperCase()})` : ''}`,
+          timestamp
+        )
+        setCommandStatus('done', `crt ${nextEnabled ? String(nextIntensity) : 'off'}`)
+      } catch (error) {
+        addErrorEntryForCommand('Failed to update CRT settings.', timestamp)
+      }
+      return
+    }
+
+    if (normalizedCmd === 'glitch') {
+      emitCrtBurst('manual-glitch', 1.8, 230)
+      addSystemEntryForCommand('CRT glitch burst triggered.', timestamp)
+      setCommandStatus('done', 'glitch burst')
+      return
+    }
+
+    if (normalizedCmd === 'quick' || normalizedCmd === 'fast') {
+      const prompt = args.join(' ').trim()
+      if (!prompt) {
+        addErrorEntryForCommand('Usage: /quick <question>\nRuns a low-priority question on a free/low-cost cloud model when available.', timestamp)
+        return
+      }
+      markCommandPending('selecting quick lane model...')
+      void fetchQuickModelSuggestion()
+        .then(selected => {
+          addSystemEntryForCommand(`⚡ Quick lane model: ${selected.model}\nReason: ${selected.reason}`, Date.now())
+          handleAIRequest(prompt, timestamp, 'input', selected.model)
+          setCommandStatus('done', `quick question via ${selected.model}`)
+        })
+        .catch(() => {
+          const fallback = pickQuickModel(cloudModels, models, status.activeModel)
+          addSystemEntryForCommand(`⚡ Quick lane fallback: ${fallback.model}\nReason: ${fallback.reason}`, Date.now())
+          handleAIRequest(prompt, timestamp, 'input', fallback.model)
+          setCommandStatus('done', `quick question via ${fallback.model}`)
+        })
+      return
+    }
+
+    if (normalizedCmd === 'qdc') {
+      const sub = (args[0] || 'status').toLowerCase()
+
+      if (sub === 'status') {
+        markCommandPending('checking qdc status...')
+        void fetch(`${API_BASE}/api/qdc/status`)
+          .then(async res => {
+            const data = await res.json().catch(() => ({}))
+            if (!res.ok) {
+              throw new Error(typeof data?.detail === 'string' ? data.detail : 'Failed to fetch QDC status')
+            }
+            addSystemEntryForCommand(
+              [
+                'QDC STATUS:',
+                `  Mode: ${data.mode || 'unknown'}`,
+                `  Connected: ${data.provider_connected ? 'YES' : 'NO'}`,
+                `  Jobs: ${data.jobs ?? 0}`,
+                `  Artifacts: ${data.artifacts ?? 0}`,
+                data.provider_connected ? '' : 'Connect token in Provider Setup before running jobs.',
+              ].filter(Boolean).join('\n'),
+              Date.now(),
+            )
+            setCommandStatus('done', 'qdc status')
+          })
+          .catch(err => {
+            addErrorEntryForCommand(err instanceof Error ? err.message : String(err), Date.now())
+          })
+        return
+      }
+
+      if (sub === 'jobs') {
+        markCommandPending('loading qdc jobs...')
+        void fetch(`${API_BASE}/api/qdc/jobs?limit=8`)
+          .then(async res => {
+            const data = await res.json().catch(() => ({}))
+            if (!res.ok) {
+              throw new Error(typeof data?.detail === 'string' ? data.detail : 'Failed to list QDC jobs')
+            }
+            const jobs = Array.isArray(data?.jobs) ? data.jobs : []
+            if (jobs.length === 0) {
+              addSystemEntryForCommand('No QDC jobs yet. Run: /qdc run <prompt>', Date.now())
+              setCommandStatus('done', 'qdc jobs: empty')
+              return
+            }
+            const lines = ['RECENT QDC JOBS:']
+            for (const job of jobs) {
+              const id = String(job?.id || 'unknown')
+              const status = String(job?.status || 'unknown')
+              const prompt = String(job?.prompt || '').slice(0, 64)
+              lines.push(`  - ${id} [${status}] ${prompt}`)
+            }
+            addSystemEntryForCommand(lines.join('\n'), Date.now())
+            setCommandStatus('done', `qdc jobs: ${jobs.length}`)
+          })
+          .catch(err => {
+            addErrorEntryForCommand(err instanceof Error ? err.message : String(err), Date.now())
+          })
+        return
+      }
+
+      if (sub === 'run') {
+        const prompt = args.slice(1).join(' ').trim()
+        if (!prompt) {
+          addErrorEntryForCommand('Usage: /qdc run <prompt>', timestamp)
+          return
+        }
+        markCommandPending('starting qdc job...')
+        void startQdcJobFromPrompt(prompt)
+          .then(jobId => {
+            setCommandStatus('done', `qdc job started: ${jobId}`)
+          })
+          .catch(err => {
+            addErrorEntryForCommand(err instanceof Error ? err.message : String(err), Date.now())
+          })
+        return
+      }
+
+      addErrorEntryForCommand('Usage: /qdc [status|jobs|run <prompt>]', timestamp)
+      return
+    }
+
+    if (handleSessionCommand({
+      cmd: normalizedCmd,
+      args,
+      timestamp,
+      entries,
+      apiBase: API_BASE,
+      storageKey: STORAGE_KEY,
+      setEntries,
+      clearCircuitInputState: () => setCircuitInputState(null),
+      addSystemEntry: addSystemEntryForCommand,
+      addErrorEntry: addErrorEntryForCommand,
+      setCommandStatus,
+      markCommandPending,
+    })) {
+      finalizeCommandIfSynchronous()
+      return
+    }
+
+    if (handleWebCommand({
+      cmd: normalizedCmd,
+      args,
+      timestamp,
+      apiBase: API_BASE,
+      setEntries,
+      addSystemEntry: addSystemEntryForCommand,
+      addErrorEntry: addErrorEntryForCommand,
+      handleAIRequest,
+      setCommandStatus,
+      markCommandPending,
+    })) {
+      finalizeCommandIfSynchronous()
+      return
+    }
+
+    if (handleModelCommand({
+      cmd: normalizedCmd,
+      args,
+      timestamp,
+      backendUrl: BACKEND_URL,
+      status,
+      models,
+      fetchModels,
+      setActiveModel,
+      setVisionModel,
+      setImageGenModel,
+      addSystemEntry: addSystemEntryForCommand,
+      addErrorEntry: addErrorEntryForCommand,
+      setCommandStatus,
+      markCommandPending,
+    })) {
+      finalizeCommandIfSynchronous()
+      return
+    }
+
+    if (handleImageModelCommand({
+      cmd: normalizedCmd,
+      args,
+      timestamp,
+      backendUrl: BACKEND_URL,
+      connected,
+      addSystemEntry: addSystemEntryForCommand,
+      addErrorEntry: addErrorEntryForCommand,
+      setCommandStatus,
+      markCommandPending,
+    })) {
+      finalizeCommandIfSynchronous()
+      return
+    }
+
+    if (handleModelBootstrapCommand({
+      cmd: normalizedCmd,
+      args,
+      timestamp,
+      backendUrl: BACKEND_URL,
+      connected,
+      activeModel: status.activeModel,
+      imageGenModel: status.imageGenModel,
+      pullModel,
+      fetchModels,
+      setActiveModel,
+      setImageGenModel,
+      addSystemEntry: addSystemEntryForCommand,
+      addErrorEntry: addErrorEntryForCommand,
+      setCommandStatus,
+      markCommandPending,
+    })) {
+      finalizeCommandIfSynchronous()
+      return
+    }
+
+    if (handlePullCommand({
+      cmd: normalizedCmd,
+      args,
+      timestamp,
+      backendUrl: BACKEND_URL,
+      systemStatus: status,
+      pullModel,
+      fetchModels,
+      setVisionModel,
+      setImageGenModel,
+      setDownloadProgress,
+      setEntries,
+      addSystemEntry: addSystemEntryForCommand,
+      addErrorEntry: addErrorEntryForCommand,
+      setCommandStatus,
+      markCommandPending,
+    })) {
+      finalizeCommandIfSynchronous()
+      return
+    }
+
+    if (handleImageCommand({
+      cmd: normalizedCmd,
+      args,
+      timestamp,
+      backendUrl: BACKEND_URL,
+      systemStatus: status,
+      setImageGenModel,
+      setImageGeneration,
+      addSystemEntry: addSystemEntryForCommand,
+      setCommandStatus,
+      markCommandPending,
+    })) {
+      finalizeCommandIfSynchronous()
+      return
+    }
+
+    if (handleCircuitCommand({
+      cmd: normalizedCmd,
+      args,
+      timestamp,
+      templates: NOTEBOOK_TEMPLATES,
+      getCircuitNames,
+      loadSavedCircuits,
+      saveCircuit,
+      getRequiredInputs,
+      runCircuit,
+      setCircuitInputState,
+      setEntries,
+      addSystemEntry: addSystemEntryForCommand,
+      addErrorEntry: addErrorEntryForCommand,
+      setCommandStatus,
+      markCommandPending,
+    })) {
+      finalizeCommandIfSynchronous()
+      return
+    }
+
+    if (handleSimpleCommand({
+      cmd: normalizedCmd,
+      args,
+      timestamp,
+      connected,
+      status,
+      modelsCount: models.length,
+      getCircuitCount: () => getCircuitNames().length,
+      setMusicSetupPanelOpen,
+      setMusicGeneration,
+      handleAIRequest,
+      addSystemEntry: addSystemEntryForCommand,
+      addErrorEntry: addErrorEntryForCommand,
+    })) {
+      finalizeCommandIfSynchronous()
+      return
+    }
+
+    addErrorEntryForCommand(`Unknown command: /${normalizedCmd}`, timestamp)
+    setCommandStatus('failed', `unknown command: /${normalizedCmd}`)
+  }, [addSystemEntry, addErrorEntry, handleAIRequest, fetchModels, connected, status, models, cloudModels, fetchQuickModelSuggestion, startQdcJobFromPrompt, getRequiredInputs, runCircuit, entries, setActiveModel, setVisionModel, setImageGenModel, pullModel, withFixHint])
 
   const handleCommand = useCallback((command: string, contextMode: 'input' | 'key' | 'full' = 'input') => {
     const timestamp = Date.now()
+    setAutoFollowFeed(true)
 
     const userEntry: LogEntry = {
       id: `user-${timestamp}`,
@@ -2497,14 +1988,120 @@ export function TerminalFeed() {
     if (command.startsWith('/')) {
       handleSlashCommand(command, timestamp)
     } else {
+      const trimmed = command.trim()
+      const normalized = trimmed.toLowerCase()
+
+      if (pendingAssistantAction) {
+        const editPrefix = ASSIST_CONFIRM_EDIT_PREFIXES.find(prefix => normalized.startsWith(prefix))
+        const isYes = ASSIST_CONFIRM_YES.has(normalized) || normalized.startsWith('yes ')
+        const isNo = ASSIST_CONFIRM_NO.has(normalized) || normalized.startsWith('no ')
+        if (isYes) {
+          const action = pendingAssistantAction
+          setPendingAssistantAction(null)
+
+          if (action.type === 'image') {
+            addSystemEntry(`🧩 Launching image node...\nPrompt: ${action.prompt}`, timestamp)
+            generateImageFromPrompt(action.prompt)
+            return
+          }
+          if (action.type === 'music') {
+            addSystemEntry(`🧩 Launching music node...\nPrompt: ${action.prompt}`, timestamp)
+            generateMusicFromPrompt(action.prompt)
+            return
+          }
+          if (action.type === 'speech') {
+            setAvatarPanelOpen(true)
+            setAutoGenerateAudio(true)
+            addSystemEntry('🗣 Speech mode is on. AI replies will be read aloud.', timestamp)
+            const speechMatch = action.prompt.match(/[:\-]\s*(.+)$/)
+            const speechText = speechMatch?.[1]?.trim()
+            if (speechText) {
+              speakTTSUnified(speechText)
+            }
+            return
+          }
+          if (action.type === 'quick_cloud') {
+            addSystemEntry('⚡ Running in quick cloud lane...', timestamp)
+            void fetchQuickModelSuggestion()
+              .then(selected => {
+                addSystemEntry(`⚡ Quick lane model: ${selected.model}\nReason: ${selected.reason}`, Date.now())
+                handleAIRequest(action.prompt, Date.now(), 'input', selected.model)
+              })
+              .catch(() => {
+                handleAIRequest(action.prompt, Date.now(), 'input')
+              })
+            return
+          }
+          if (action.type === 'qdc_job') {
+            addSystemEntry('📡 Launching QDC remote job...', timestamp)
+            void startQdcJobFromPrompt(action.prompt)
+              .catch(err => {
+                addErrorEntry(err instanceof Error ? err.message : String(err), Date.now())
+              })
+            return
+          }
+        }
+
+        if (isNo) {
+          setPendingAssistantAction(null)
+          addSystemEntry('Canceled. Continuing with normal chat.', timestamp)
+          return
+        }
+
+        if (editPrefix) {
+          const updatedPrompt = trimmed.slice(editPrefix.length).trim()
+          if (!updatedPrompt) {
+            addErrorEntry('Usage while pending action: edit: <new prompt>', timestamp)
+            return
+          }
+          const updatedAction: PendingAssistantAction = {
+            ...pendingAssistantAction,
+            prompt: updatedPrompt,
+          }
+          setPendingAssistantAction(updatedAction)
+          addSystemEntry(
+            `${updatedAction.note}\nUpdated prompt: ${updatedPrompt}\nReply "yes" to run, "no" to cancel.`,
+            timestamp,
+          )
+          return
+        }
+
+        addSystemEntry('Reply with "yes", "no", or "edit: <new prompt>".', timestamp)
+        return
+      }
+
+      const suggestedAction = detectAssistantAction(trimmed)
+      if (suggestedAction) {
+        setPendingAssistantAction(suggestedAction)
+        addSystemEntry(
+          `${suggestedAction.note}\nPrompt: ${suggestedAction.prompt || trimmed}\nReply "yes" to run, "edit: ..." to tweak, or "no" to keep chatting normally.`,
+          timestamp,
+        )
+        return
+      }
+
       handleAIRequest(command, timestamp, contextMode)
     }
-  }, [handleSlashCommand, handleAIRequest, circuitInputState, addSystemEntry, addErrorEntry, runCircuit])
+  }, [
+    handleSlashCommand,
+    handleAIRequest,
+    circuitInputState,
+    addSystemEntry,
+    addErrorEntry,
+    runCircuit,
+    pendingAssistantAction,
+    generateImageFromPrompt,
+    generateMusicFromPrompt,
+    setAutoGenerateAudio,
+    speakTTSUnified,
+    fetchQuickModelSuggestion,
+    startQdcJobFromPrompt,
+  ])
 
   // Session panel handlers
   const handleLoadSession = useCallback((name: string) => {
     // Use async API that checks backend first
-    loadSessionAsync(name).then(sessionEntries => {
+    loadSessionAsync(API_BASE, name).then(sessionEntries => {
       if (sessionEntries) {
         // Set current session to the loaded one
         setCurrentSessionName(name)
@@ -2522,6 +2119,7 @@ export function TerminalFeed() {
           },
           ...sessionEntries,
         ])
+        showSuccessToast(`Loaded session "${name}".`, 'Session')
       } else {
         const timestamp = Date.now()
         setEntries(prev => [...prev, {
@@ -2530,6 +2128,7 @@ export function TerminalFeed() {
           content: `Session "${name}" not found`,
           timestamp,
         }])
+        showErrorToast(`Session "${name}" was not found.`, 'Session')
       }
     })
   }, [])
@@ -2541,7 +2140,7 @@ export function TerminalFeed() {
     )
 
     // Use async API that saves to backend
-    saveSessionAsync(name, filtered).then(success => {
+    saveSessionAsync(API_BASE, name, filtered).then(success => {
       const timestamp = Date.now()
       if (success) {
         // Update current session name to the manually saved name
@@ -2556,6 +2155,7 @@ export function TerminalFeed() {
           content: `Session saved as "${name}" (${filtered.length} entries)`,
           timestamp,
         }])
+        showSuccessToast(`Saved "${name}".`, 'Session')
       } else {
         setEntries(prev => [...prev, {
           id: `error-${timestamp}`,
@@ -2563,11 +2163,12 @@ export function TerminalFeed() {
           content: `Failed to save session "${name}"`,
           timestamp,
         }])
+        showErrorToast(`Could not save "${name}".`, 'Session')
       }
     })
   }, [entries])
 
-  const handleNewSession = useCallback(() => {
+  const beginNewSession = useCallback(() => {
     // Clear current session - next autosave will create new auto-named session
     setCurrentSessionName(null)
     try {
@@ -2586,21 +2187,42 @@ export function TerminalFeed() {
       content: 'Type /help for available commands.',
       timestamp: timestamp + 1,
     }])
+    showInfoToast('Started a new session.', 'Session')
   }, [])
 
+  const handleNewSession = useCallback(() => {
+    const hasWork = entries.some(e => e.type === 'user' || e.type === 'ai' || e.type === 'image' || e.type === 'audio')
+    if (hasWork) {
+      setNewSessionConfirmOpen(true)
+      return
+    }
+    beginNewSession()
+  }, [entries, beginNewSession])
+
   const handleDeleteSession = useCallback((name: string) => {
-    deleteSessionAsync(name).then(success => {
+    setDeleteSessionTarget(name)
+  }, [])
+
+  const confirmDeleteSession = useCallback(() => {
+    if (!deleteSessionTarget) return
+    const target = deleteSessionTarget
+    setDeleteSessionTarget(null)
+
+    deleteSessionAsync(API_BASE, target).then(success => {
       const timestamp = Date.now()
       if (success) {
         setEntries(prev => [...prev, {
           id: `system-${timestamp}`,
           type: 'system',
-          content: `Session "${name}" deleted`,
+          content: `Session "${target}" deleted`,
           timestamp,
         }])
+        showSuccessToast(`Deleted "${target}".`, 'Session')
+      } else {
+        showErrorToast(`Failed to delete "${target}".`, 'Session')
       }
     })
-  }, [])
+  }, [deleteSessionTarget])
 
   // Handle image upload and analysis
   const handleImageUpload = useCallback(async (imageBase64: string) => {
@@ -2702,6 +2324,255 @@ export function TerminalFeed() {
     return date.toISOString().slice(0, 19).replace('T', ' ')
   }
 
+  const hasConversationHistory = useMemo(
+    () => entries.some(entry => entry.type === 'user' || entry.type === 'ai' || entry.type === 'image' || entry.type === 'audio'),
+    [entries],
+  )
+
+  const connectedCloudProviders = useMemo(() => {
+    const providers = new Set(cloudModels.map(model => model.provider).filter(Boolean))
+    return [...providers]
+  }, [cloudModels])
+
+  const chatModels = useMemo(() => models.filter(isLikelyChatModel), [models])
+
+  const availableHistoryModels = useMemo(() => {
+    const uniqueModels = new Set<string>()
+    for (const entry of entries) {
+      const modelName = typeof entry.metadata?.model === 'string' ? entry.metadata.model : ''
+      if (modelName) uniqueModels.add(modelName)
+    }
+    return [...uniqueModels].sort((a, b) => a.localeCompare(b))
+  }, [entries])
+
+  const onboardingChecklist = useMemo(() => {
+    const hasLocalChatModel = chatModels.length > 0
+    const hasProviderConnection = connectedCloudProviders.length > 0
+    const hasIndexedCodeContext = Boolean(codeContextActive && codeContextFolder && codeContextFilesIndexed > 0)
+
+    return [
+      {
+        id: 'models',
+        label: 'Chat model ready',
+        complete: hasLocalChatModel,
+        actionLabel: 'Setup stack',
+        action: () => handleCommand('/setup-models', 'input'),
+      },
+      {
+        id: 'providers',
+        label: 'Provider connected',
+        complete: hasProviderConnection,
+        actionLabel: 'Configure',
+        action: () => setShowProviderSetup(true),
+      },
+      {
+        id: 'code-context',
+        label: 'Code context indexed',
+        complete: hasIndexedCodeContext,
+        actionLabel: 'Index folder',
+        action: () => setCodeContextPanelOpen(true),
+      },
+    ] as const
+  }, [chatModels.length, connectedCloudProviders.length, codeContextActive, codeContextFolder, codeContextFilesIndexed, handleCommand])
+
+  const onboardingCompleteCount = useMemo(
+    () => onboardingChecklist.filter(item => item.complete).length,
+    [onboardingChecklist],
+  )
+  const showOnboardingChecklist = !hasConversationHistory || onboardingCompleteCount < onboardingChecklist.length
+
+  const idleTelemetryTokens = useMemo(() => {
+    const userCount = entries.reduce((count, entry) => count + (entry.type === 'user' ? 1 : 0), 0)
+    const aiCount = entries.reduce((count, entry) => count + (entry.type === 'ai' ? 1 : 0), 0)
+    const currentRate = Math.max(0, Math.round(aiRuntimeTelemetry.charsPerSec || 0))
+    const ramUsedPercent = typeof status.ramUsedPercent === 'number' ? Math.round(status.ramUsedPercent) : null
+    const freeRam = typeof status.ramAvailableGb === 'number' ? status.ramAvailableGb.toFixed(1) : null
+    const modelFootprint = typeof status.ramModelUsedGb === 'number' && status.ramModelUsedGb > 0
+      ? status.ramModelUsedGb.toFixed(1)
+      : null
+    const recentModels = entries
+      .slice()
+      .reverse()
+      .map(entry => (typeof entry.metadata?.model === 'string' ? entry.metadata.model : ''))
+      .filter(Boolean)
+      .filter((modelName, index, list) => list.indexOf(modelName) === index)
+      .slice(0, 4)
+
+    const baseTokens = [
+      `SOCKET:${connected ? 'UP' : 'DOWN'}`,
+      `OLLAMA:${status.connected ? 'READY' : 'STANDBY'}`,
+      `MODEL:${status.loadedModelName || status.activeModel || 'AUTO'}`,
+      `PHASE:${aiRuntimeTelemetry.phase || 'IDLE'}`,
+      `RATE:${currentRate}CPS`,
+      `RAM:${ramUsedPercent !== null ? `${ramUsedPercent}PCT` : 'UNK'}`,
+      `FREE:${freeRam !== null ? `${freeRam}GB` : 'UNK'}`,
+      `MODMEM:${modelFootprint !== null ? `${modelFootprint}GB` : 'NA'}`,
+      `CTX:${codeContextActive ? 'ON' : 'OFF'}`,
+      `IDX:${codeContextFilesIndexed}`,
+      `ENTRIES:${entries.length}`,
+      `USR:${userCount}`,
+      `AI:${aiCount}`,
+      `CRT:${loadSettings().crtIntensity.toUpperCase()}`,
+    ]
+    if (downloadProgress) {
+      const pullPct = typeof downloadProgress.percent === 'number'
+        ? Math.round(downloadProgress.percent)
+        : null
+      baseTokens.push(`PULL:${downloadProgress.model}`)
+      baseTokens.push(`PULLST:${String(downloadProgress.status || 'running').toUpperCase()}`)
+      if (pullPct !== null) {
+        baseTokens.push(`PULLPCT:${pullPct}`)
+      }
+    }
+    if (imageGeneration?.status === 'generating') {
+      baseTokens.push(`IMG:RUN`)
+    }
+    if (musicGeneration?.status === 'generating') {
+      baseTokens.push(`MUSIC:RUN`)
+    }
+    const modelTokens = recentModels.map(modelName => `RECENT:${modelName}`)
+
+    return [...new Set([...baseTokens, ...modelTokens])]
+      .map(sanitizeTelemetryToken)
+      .filter(Boolean)
+      .slice(0, 20)
+  }, [
+    entries,
+    connected,
+    status.loadedModelName,
+    status.activeModel,
+    aiRuntimeTelemetry.phase,
+    aiRuntimeTelemetry.charsPerSec,
+    status.connected,
+    status.ramUsedPercent,
+    status.ramAvailableGb,
+    status.ramModelUsedGb,
+    codeContextActive,
+    codeContextFilesIndexed,
+    downloadProgress,
+    imageGeneration?.status,
+    musicGeneration?.status,
+  ])
+
+  const commandRuntimeTelemetry = useMemo(() => ({
+    ...aiRuntimeTelemetry,
+    transportConnected: connected,
+    engineReady: status.connected,
+    modelName: status.loadedModelName || status.activeModel,
+    ramUsedPercent: status.ramUsedPercent,
+  }), [
+    aiRuntimeTelemetry,
+    connected,
+    status.connected,
+    status.loadedModelName,
+    status.activeModel,
+    status.ramUsedPercent,
+  ])
+
+  const matrixTelemetryMode = useMemo<'off' | 'idle' | 'active'>(() => {
+    const imageBusy = imageGeneration?.status === 'generating'
+    const musicBusy = musicGeneration?.status === 'generating'
+    const anyBusy = aiRuntimeTelemetry.active || codeContextIndexing || imageBusy || musicBusy || !!downloadProgress
+    if (!connected) return 'off'
+    return anyBusy ? 'active' : 'idle'
+  }, [
+    connected,
+    aiRuntimeTelemetry.active,
+    codeContextIndexing,
+    imageGeneration?.status,
+    musicGeneration?.status,
+    downloadProgress,
+  ])
+
+  const toggleHistoryType = useCallback((entryType: LogEntry['type']) => {
+    setHistoryTypeFilters(prev =>
+      prev.includes(entryType) ? prev.filter(type => type !== entryType) : [...prev, entryType],
+    )
+  }, [])
+
+  const toggleHistoryModel = useCallback((modelName: string) => {
+    setHistoryModelFilters(prev =>
+      prev.includes(modelName) ? prev.filter(name => name !== modelName) : [...prev, modelName],
+    )
+  }, [])
+
+  const filteredEntries = useMemo(() => {
+    const query = historyQuery.trim().toLowerCase()
+    const now = Date.now()
+    const selectedWindow = HISTORY_WINDOW_OPTIONS.find(option => option.value === historyWindow)
+    const cutoff = selectedWindow?.ms ? now - selectedWindow.ms : null
+    const typeFilterSet = new Set(historyTypeFilters)
+    const modelFilterSet = new Set(historyModelFilters)
+
+    return entries.filter(entry => {
+      if (cutoff && entry.timestamp < cutoff) return false
+      if (typeFilterSet.size > 0 && !typeFilterSet.has(entry.type)) return false
+      if (modelFilterSet.size > 0) {
+        const modelName = typeof entry.metadata?.model === 'string' ? entry.metadata.model : ''
+        if (!modelName || !modelFilterSet.has(modelName)) return false
+      }
+      if (!query) return true
+
+      const blob = `${entry.content}\n${entry.imageAnalysis || ''}`.toLowerCase()
+      return blob.includes(query)
+    })
+  }, [entries, historyModelFilters, historyQuery, historyTypeFilters, historyWindow])
+
+  const displayItems = useMemo<FeedDisplayItem[]>(
+    () => filteredEntries.map(entry => ({ key: entry.id, entry })),
+    [filteredEntries],
+  )
+
+  // Estimated-height virtualization introduced visible scroll jumps with mixed entry heights.
+  // Keep full rendering for stable, predictable scroll behavior.
+  const shouldVirtualize = false
+  const totalRows = displayItems.length
+  const visibleRows = Math.max(1, Math.ceil((feedViewportHeight || 1) / VIRTUAL_ROW_ESTIMATE_PX))
+  const virtualStart = shouldVirtualize
+    ? Math.max(0, Math.floor(feedScrollTop / VIRTUAL_ROW_ESTIMATE_PX) - VIRTUAL_OVERSCAN_ROWS)
+    : 0
+  const virtualEnd = shouldVirtualize
+    ? Math.min(totalRows, virtualStart + visibleRows + (VIRTUAL_OVERSCAN_ROWS * 2))
+    : totalRows
+  const topSpacerHeight = shouldVirtualize ? virtualStart * VIRTUAL_ROW_ESTIMATE_PX : 0
+  const bottomSpacerHeight = shouldVirtualize ? Math.max(0, (totalRows - virtualEnd) * VIRTUAL_ROW_ESTIMATE_PX) : 0
+  const visibleItems = shouldVirtualize ? displayItems.slice(virtualStart, virtualEnd) : displayItems
+
+  const handleRerunWithModel = useCallback((entry: LogEntry, modelName: string) => {
+    const metadata = entry.metadata && typeof entry.metadata === 'object'
+      ? entry.metadata as Record<string, unknown>
+      : null
+
+    let sourcePrompt = typeof metadata?.sourcePrompt === 'string'
+      ? metadata.sourcePrompt.trim()
+      : ''
+
+    if (!sourcePrompt) {
+      const index = entries.findIndex(candidate => candidate.id === entry.id)
+      for (let i = index - 1; i >= 0; i--) {
+        if (entries[i].type === 'user' && entries[i].content.trim()) {
+          sourcePrompt = entries[i].content.trim()
+          break
+        }
+      }
+    }
+
+    if (!sourcePrompt) {
+      showErrorToast('Could not find the original prompt for this response.', 'Re-run')
+      return
+    }
+
+    const rawMode = typeof metadata?.contextMode === 'string' ? metadata.contextMode : 'full'
+    const contextMode: 'input' | 'key' | 'full' =
+      rawMode === 'input' || rawMode === 'key' || rawMode === 'full'
+        ? rawMode
+        : 'full'
+
+    setAutoFollowFeed(true)
+    handleAIRequest(sourcePrompt, Date.now(), contextMode, modelName)
+    showInfoToast(`Re-running with ${modelName}.`, 'Compare Models', 1200)
+  }, [entries, handleAIRequest])
+
   return (
     <div className="h-full flex relative">
       {/* Floating Toolbar */}
@@ -2747,28 +2618,176 @@ export function TerminalFeed() {
       />
 
       {/* Main Terminal Area */}
-      <div className={`flex-1 flex flex-col transition-all duration-200 ${imageGeneration || musicGeneration || avatarPanelOpen ? 'mr-96' : ''}`}>
+      <div className={`relative flex-1 flex flex-col transition-all duration-200 ${(imageGeneration || musicGeneration || avatarPanelOpen) ? 'mr-0 xl:mr-96' : ''}`}>
+        <IdleTelemetryMatrix mode={matrixTelemetryMode} tokens={idleTelemetryTokens} />
+
         {/* Terminal Feed */}
         <div
           ref={feedRef}
-          className="flex-1 overflow-y-auto p-4"
+          onScroll={handleFeedScroll}
+          className="relative z-10 flex-1 overflow-y-auto p-4"
+          aria-live="polite"
         >
-          <div className="max-w-3xl mx-auto space-y-3">
-            {entries.map((entry) => (
+          <div className="relative z-10 max-w-3xl mx-auto space-y-3 pb-10">
+            <div className="sticky top-0 z-20 border border-terminal-border bg-void/90 backdrop-blur px-3 py-2 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-[10px] text-terminal-muted tracking-widest">
+                  Timeline: {filteredEntries.length} / {entries.length}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setHistoryFiltersOpen(prev => !prev)}
+                  className="text-[10px] px-2 py-1 border border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor"
+                >
+                  {historyFiltersOpen ? 'Hide Filters' : 'Filters'}
+                </button>
+              </div>
+              {historyFiltersOpen && (
+                <div className="space-y-2 border-t border-terminal-border/60 pt-2">
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      type="text"
+                      value={historyQuery}
+                      onChange={(event) => setHistoryQuery(event.target.value)}
+                      placeholder="Search terminal history..."
+                      className="flex-1 bg-void border border-terminal-border px-2 py-1.5 text-xs text-phosphor focus:outline-none focus:border-phosphor"
+                    />
+                    <select
+                      value={historyWindow}
+                      onChange={(event) => setHistoryWindow(event.target.value as HistoryWindow)}
+                      className="bg-void border border-terminal-border px-2 py-1.5 text-xs text-phosphor focus:outline-none focus:border-phosphor"
+                      aria-label="Filter by time window"
+                    >
+                      {HISTORY_WINDOW_OPTIONS.map(option => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {FILTERABLE_ENTRY_TYPES.map(type => {
+                      const active = historyTypeFilters.includes(type)
+                      return (
+                        <button
+                          key={type}
+                          type="button"
+                          onClick={() => toggleHistoryType(type)}
+                          className={`px-2 py-1 text-[10px] border transition-colors ${
+                            active
+                              ? 'border-phosphor bg-phosphor/15 text-phosphor'
+                              : 'border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor'
+                          }`}
+                        >
+                          {type.toUpperCase()}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {availableHistoryModels.length > 0 && (
+                    <div className="space-y-1">
+                      <div className="text-[10px] text-terminal-muted tracking-widest">Models</div>
+                      <div className="flex flex-wrap gap-1">
+                        {availableHistoryModels.map(modelName => {
+                          const active = historyModelFilters.includes(modelName)
+                          return (
+                            <button
+                              key={modelName}
+                              type="button"
+                              onClick={() => toggleHistoryModel(modelName)}
+                              className={`px-2 py-1 text-[10px] border transition-colors ${
+                                active
+                                  ? 'border-phosphor bg-phosphor/15 text-phosphor'
+                                  : 'border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor'
+                              }`}
+                              title={modelName}
+                            >
+                              {modelName.replace(':latest', '')}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  {historyTypeFilters.length > 0 || historyModelFilters.length > 0 || historyQuery || historyWindow !== 'all' ? (
+                    <div className="flex flex-wrap gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setHistoryQuery('')
+                          setHistoryWindow('all')
+                          setHistoryTypeFilters([])
+                          setHistoryModelFilters([])
+                        }}
+                        className="px-2 py-1 text-[10px] border border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              )}
+            </div>
+
+            {showOnboardingChecklist && (
+              <div className="border border-phosphor/40 bg-phosphor/5 p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[10px] tracking-widest text-phosphor">ONBOARDING CHECKLIST</div>
+                  <div className="text-[10px] text-terminal-muted">{onboardingCompleteCount}/{onboardingChecklist.length} complete</div>
+                </div>
+                <div className="space-y-1.5">
+                  {onboardingChecklist.map(item => (
+                    <div key={item.id} className="flex items-center justify-between gap-2 text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className={item.complete ? 'text-phosphor' : 'text-terminal-muted'}>
+                          {item.complete ? '●' : '○'}
+                        </span>
+                        <span className={item.complete ? 'text-phosphor' : 'text-terminal-muted'}>
+                          {item.label}
+                        </span>
+                      </div>
+                      {!item.complete && (
+                        <button
+                          type="button"
+                          onClick={item.action}
+                          className="text-[10px] px-2 py-1 border border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor"
+                        >
+                          {item.actionLabel}
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {topSpacerHeight > 0 && (
+              <div style={{ height: `${topSpacerHeight}px` }} aria-hidden />
+            )}
+            {visibleItems.map(item => (
               <LogEntryBlock
-                key={entry.id}
-                entry={entry}
+                key={item.key}
+                entry={item.entry}
                 formatTimestamp={formatTimestamp}
+                availableChatModels={chatModels}
+                onRerunWithModel={handleRerunWithModel}
                 onImageClick={(imageUrl, metadata, canEdit) => {
                   setSelectedImageModal({ imageUrl, metadata, canEdit })
                 }}
               />
             ))}
+            {bottomSpacerHeight > 0 && (
+              <div style={{ height: `${bottomSpacerHeight}px` }} aria-hidden />
+            )}
+            {filteredEntries.length === 0 && (
+              <div className="border border-terminal-border bg-void/30 p-4 text-center">
+                <div className="text-[10px] tracking-widest text-terminal-muted">NO RESULTS</div>
+                <div className="text-xs text-terminal-muted mt-1">Adjust filters or clear the search query.</div>
+              </div>
+            )}
           </div>
         </div>
 
         {/* Command Input */}
-        <div className="border-t border-terminal-border p-4">
+        <div className="relative z-10 border-t border-terminal-border px-4 pt-4 pb-[calc(env(safe-area-inset-bottom)+1rem)]">
           <div className="max-w-3xl mx-auto">
             <CommandInput
               onSubmit={handleCommand}
@@ -2781,6 +2800,7 @@ export function TerminalFeed() {
                 commandInputEditorRef.current = editor
               }}
               codeContextActive={codeContextActive}
+              runtimeTelemetry={commandRuntimeTelemetry}
             />
           </div>
         </div>
@@ -2941,7 +2961,7 @@ export function TerminalFeed() {
           }}
           onPullModel={(modelName) => {
             // Start download
-            pullModel(modelName, (progress: any) => {
+            pullModel(modelName, (progress: PullStatus) => {
               const status = progress.status || 'unknown'
               const completed = progress.completed || 0
               const total = progress.total || 0
@@ -3046,77 +3066,11 @@ export function TerminalFeed() {
             setImageGeneration(null)
           }}
           onRetryGeneration={(prompt, modelName) => {
-            // Retry generation with specific model
-            setImageGeneration({
-              prompt,
-              model: modelName,
-              status: 'generating',
-              progress: 0,
-            })
-
-            fetch(`${BACKEND_URL}/api/images/generate`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                prompt,
-                provider: 'ollama',
-                model: modelName,
-              }),
-            })
-              .then(async res => {
-                const data = await res.json()
-                if (res.ok && data.status === 'success' && data.image) {
-                  setImageGeneration({
-                    prompt,
-                    imageUrl: data.image,
-                    model: data.model || modelName,
-                    status: 'success',
-                  })
-                  // Update image gen model in status
-                  if (data.model) {
-                    setImageGenModel(data.model)
-                  }
-                } else {
-                  // Try fallback to local
-                  throw new Error(data.error || data.message || 'Generation failed')
-                }
-              })
-              .catch(async (err) => {
-                // Try local fallback
-                try {
-                  const res = await fetch(`${BACKEND_URL}/api/images/generate`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      prompt,
-                      provider: 'local',
-                      model: 'sdxl',
-                    }),
-                  })
-                  const data = await res.json()
-                  if (res.ok && data.status === 'success' && data.image) {
-                    setImageGeneration({
-                      prompt,
-                      imageUrl: data.image,
-                      model: 'local SDXL',
-                      status: 'success',
-                    })
-                  } else {
-                    throw new Error(data.error || data.message || 'Generation failed')
-                  }
-                } catch (fallbackErr) {
-                  setImageGeneration({
-                    prompt,
-                    model: modelName,
-                    status: 'error',
-                    error: fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr),
-                  })
-                }
-              })
+            generateImageFromPrompt(prompt, modelName)
           }}
           onPullModel={(modelName) => {
             // Start download
-            pullModel(modelName, (progress: any) => {
+            pullModel(modelName, (progress: PullStatus) => {
               const status = progress.status || 'unknown'
               const completed = progress.completed || 0
               const total = progress.total || 0
@@ -3177,6 +3131,7 @@ export function TerminalFeed() {
           }}
           downloadProgress={downloadProgress}
           allModels={models}
+          cloudModels={cloudModels}
         />
       )}
 
@@ -3185,6 +3140,31 @@ export function TerminalFeed() {
         isOpen={showSaveModal}
         onClose={() => setShowSaveModal(false)}
         onSave={handleSaveSession}
+      />
+
+      <DialogModal
+        isOpen={newSessionConfirmOpen}
+        title="Start New Session"
+        message="Start a new session? Current history will be cleared from view."
+        confirmLabel="Start New"
+        cancelLabel="Cancel"
+        danger
+        onConfirm={() => {
+          setNewSessionConfirmOpen(false)
+          beginNewSession()
+        }}
+        onCancel={() => setNewSessionConfirmOpen(false)}
+      />
+
+      <DialogModal
+        isOpen={!!deleteSessionTarget}
+        title="Delete Session"
+        message={`Delete session "${deleteSessionTarget || ''}" permanently?`}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        danger
+        onConfirm={confirmDeleteSession}
+        onCancel={() => setDeleteSessionTarget(null)}
       />
 
       {/* Code Context Panel */}
@@ -3213,59 +3193,7 @@ export function TerminalFeed() {
           generation={musicGeneration}
           onClose={() => setMusicGeneration(null)}
           onGenerate={(prompt, lyrics, duration, guidanceScale, steps, seed) => {
-            // Update state to generating
-            setMusicGeneration({
-              prompt,
-              lyrics,
-              duration,
-              status: 'generating',
-              progress: 0,
-              message: 'Initializing model...',
-              seed,
-            })
-
-            // Call backend to generate
-            fetch(`${BACKEND_URL}/api/music/generate`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                prompt,
-                lyrics: lyrics || undefined,
-                use_lyrics: !!lyrics, // Important: backend requires this flag to use lyrics
-                duration,
-                guidance_scale: guidanceScale,
-                steps: steps,
-                seed,
-              }),
-            })
-              .then(async res => {
-                if (!res.ok) {
-                  const errData = await res.json().catch(() => ({}))
-                  throw new Error(errData.detail || 'Generation failed')
-                }
-                const data = await res.json()
-                if (data.status === 'success' && data.audio_url) {
-                  setMusicGeneration({
-                    prompt,
-                    lyrics,
-                    duration,
-                    audioUrl: `${BACKEND_URL}${data.audio_url}`,
-                    status: 'success',
-                    seed: data.seed,
-                  })
-                } else {
-                  throw new Error(data.message || 'Unknown error')
-                }
-              })
-              .catch(err => {
-                setMusicGeneration({
-                  prompt,
-                  lyrics,
-                  duration,
-                  status: 'error',
-                  error: err.message,
-                })
-              })
+            generateMusicFromPrompt(prompt, lyrics, duration, guidanceScale, steps, seed)
           }}
           onApproveToChat={(audioUrl, prompt, duration) => {
             // Add audio message to chat
@@ -3283,6 +3211,11 @@ export function TerminalFeed() {
           }}
         />
       )}
+
+      <ProviderSetup
+        isOpen={showProviderSetup}
+        onClose={() => setShowProviderSetup(false)}
+      />
 
       {/* Image Modal for viewing/editing images in feed */}
       {selectedImageModal && (
@@ -3342,13 +3275,86 @@ export function TerminalFeed() {
   )
 }
 
+interface IdleTelemetryLine {
+  id: string
+  text: string
+  isToken: boolean
+}
+
+function IdleTelemetryMatrix({ mode, tokens }: { mode: 'off' | 'idle' | 'active'; tokens: string[] }) {
+  const [lines, setLines] = useState<IdleTelemetryLine[]>([])
+
+  useEffect(() => {
+    if (mode === 'off') {
+      setLines([])
+      return
+    }
+
+    const seed = Array.from({ length: TELEMETRY_RAIL_MAX_LINES }, (_, index) => {
+      const next = buildTelemetryRailLine(tokens, mode)
+      return {
+        id: `telemetry-seed-${index}-${Date.now()}`,
+        text: next.text,
+        isToken: next.isToken,
+      }
+    })
+    setLines(seed)
+
+    const tick = () => {
+      const next = buildTelemetryRailLine(tokens, mode)
+      setLines(prev => {
+        const appended = [
+          ...prev,
+          {
+            id: `telemetry-${Date.now()}-${Math.random()}`,
+            text: next.text,
+            isToken: next.isToken,
+          },
+        ]
+        return appended.slice(-TELEMETRY_RAIL_MAX_LINES)
+      })
+    }
+
+    const intervalMs = mode === 'active' ? 170 : 280
+    const interval = window.setInterval(tick, intervalMs)
+    return () => window.clearInterval(interval)
+  }, [mode, tokens])
+
+  if (mode === 'off' || lines.length === 0) return null
+
+  return (
+    <div className="idle-telemetry-matrix" data-mode={mode} aria-hidden>
+      <div className="idle-telemetry-rail">
+        {lines.map((line, index) => (
+          <div
+            key={line.id}
+            className={`idle-telemetry-line ${line.isToken ? 'is-token' : ''}`}
+            style={{ opacity: Math.max(0.16, (index + 1) / lines.length) }}
+          >
+            {line.text}
+          </div>
+        ))}
+      </div>
+      <div className="idle-telemetry-matrix-mask" />
+    </div>
+  )
+}
+
 interface LogEntryBlockProps {
   entry: LogEntry
   formatTimestamp: (ts: number) => string
+  availableChatModels?: string[]
+  onRerunWithModel?: (entry: LogEntry, modelName: string) => void
   onImageClick?: (imageUrl: string, metadata: { prompt?: string; model?: string; timestamp?: number; provider?: string; analysis?: string }, canEdit: boolean) => void
 }
 
-function LogEntryBlock({ entry, formatTimestamp, onImageClick }: LogEntryBlockProps) {
+function LogEntryBlock({
+  entry,
+  formatTimestamp,
+  availableChatModels = [],
+  onRerunWithModel,
+  onImageClick,
+}: LogEntryBlockProps) {
   const typeStyles = {
     user: 'border-phosphor',
     system: 'border-terminal-muted',
@@ -3376,13 +3382,55 @@ function LogEntryBlock({ entry, formatTimestamp, onImageClick }: LogEntryBlockPr
     audio: 'text-purple-400',
   }
 
+  const metadataRecord = entry.metadata && typeof entry.metadata === 'object'
+    ? entry.metadata as Record<string, unknown>
+    : null
+  const modelName = typeof metadataRecord?.model === 'string' ? metadataRecord.model : ''
+  const streamSignalRaw = typeof metadataRecord?.streamSignal === 'number'
+    ? Number(metadataRecord.streamSignal)
+    : 0
+  const streamSignal = Number.isFinite(streamSignalRaw) ? Math.max(0, Math.min(1, streamSignalRaw)) : 0
+  const isAiStreaming = entry.type === 'ai' && entry.status === 'running'
+  const isCommandStatus = metadataRecord?.kind === COMMAND_STATUS_METADATA_KIND
+  const entryLabel = isCommandStatus ? 'COMMAND' : typeLabels[entry.type]
+  const entryTextColor = isCommandStatus ? 'text-amber-400' : textColors[entry.type]
+  const contentClassName = isCommandStatus
+    ? 'text-amber-300 whitespace-pre-wrap font-mono text-xs leading-relaxed'
+    : `${entryTextColor} whitespace-pre-wrap font-mono text-sm ${isAiStreaming ? 'ai-streaming-text' : ''}`
+  const contentStyle: CSSProperties | undefined = isAiStreaming
+    ? ({ '--stream-strength': String(Math.max(0.15, streamSignal || 0.18)) } as CSSProperties)
+    : undefined
+
+  const rerunModelOptions = useMemo(() => {
+    const deduped = [...new Set(availableChatModels)]
+    if (modelName && !deduped.includes(modelName) && isLikelyChatModel(modelName)) {
+      return [modelName, ...deduped]
+    }
+    return deduped
+  }, [availableChatModels, modelName])
+
+  const [rerunModel, setRerunModel] = useState<string>(() => modelName || rerunModelOptions[0] || '')
+  useEffect(() => {
+    setRerunModel(prev => {
+      if (prev && rerunModelOptions.includes(prev)) return prev
+      return modelName || rerunModelOptions[0] || ''
+    })
+  }, [entry.id, modelName, rerunModelOptions])
+
+  const showRerunControls =
+    entry.type === 'ai'
+    && entry.status !== 'running'
+    && !isCommandStatus
+    && !!onRerunWithModel
+    && rerunModelOptions.length > 0
+
   return (
     <div className={`border-l-2 ${typeStyles[entry.type]} pl-4 py-2`}>
       {/* Header */}
       <div className="flex items-center gap-3 text-xs text-terminal-muted mb-1">
         <span className="text-terminal-gray">[{formatTimestamp(entry.timestamp)}]</span>
-        <span className={`font-bold ${textColors[entry.type]}`}>
-          {typeLabels[entry.type]}
+        <span className={`font-bold ${entryTextColor}`}>
+          {entryLabel}
         </span>
         {entry.status === 'running' && (
           <span className="flex items-center gap-1">
@@ -3398,19 +3446,19 @@ function LogEntryBlock({ entry, formatTimestamp, onImageClick }: LogEntryBlockPr
         )}
 
         {/* Model Badge */}
-        {entry.metadata?.model && typeof entry.metadata.model === 'string' && (
+        {modelName && (
           <span
             className="ml-auto text-[10px] font-mono opacity-50 flex items-center gap-1 bg-phosphor/10 px-1 rounded hover:opacity-100 transition-opacity"
-            title={`Generated by ${entry.metadata.model}`}
+            title={`Generated by ${modelName}`}
           >
             <span>⚡</span>
-            {entry.metadata.model.replace(':latest', '')}
+            {modelName.replace(':latest', '')}
           </span>
         )}
       </div>
 
       {/* Content */}
-      <div className={`${textColors[entry.type]} whitespace-pre-wrap font-mono text-sm`}>
+      <div className={contentClassName} style={contentStyle}>
         {entry.type === 'audio' && entry.audioUrl ? (
           <MusicPlayerCard
             audioUrl={entry.audioUrl}
@@ -3463,6 +3511,30 @@ function LogEntryBlock({ entry, formatTimestamp, onImageClick }: LogEntryBlockPr
           entry.content || (entry.status === 'running' ? '...' : '')
         )}
       </div>
+      {showRerunControls && (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <span className="text-[10px] text-terminal-muted uppercase tracking-widest">Re-run with</span>
+          <select
+            value={rerunModel}
+            onChange={(event) => setRerunModel(event.target.value)}
+            className="bg-void border border-terminal-border px-2 py-1 text-[10px] text-phosphor focus:outline-none focus:border-phosphor"
+            aria-label="Select model to compare this response"
+          >
+            {rerunModelOptions.map(option => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => rerunModel && onRerunWithModel?.(entry, rerunModel)}
+            className="text-[10px] px-2 py-1 border border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor"
+          >
+            Re-run
+          </button>
+        </div>
+      )}
     </div>
   )
 }

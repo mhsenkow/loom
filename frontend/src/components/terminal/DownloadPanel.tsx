@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
+import { API_BASE_URL } from '../../config/api'
 
 interface DownloadProgress {
   model: string
@@ -81,7 +82,7 @@ export function DownloadPanel({ progress, onClose }: DownloadPanelProps) {
         setModelInfo(localInfo)
       } else {
         // Fetch from backend
-        fetch(`http://localhost:8000/api/model-info/${encodeURIComponent(progress.model)}`)
+        fetch(`${API_BASE_URL}/api/model-info/${encodeURIComponent(progress.model)}`)
           .then(res => res.json())
           .then(data => {
             if (data.error) return
@@ -117,7 +118,7 @@ export function DownloadPanel({ progress, onClose }: DownloadPanelProps) {
 
   return (
     <div 
-      className="w-64 h-full border-l border-terminal-border bg-void/50 flex flex-col overflow-hidden cursor-pointer hover:bg-void/60 transition-colors"
+      className="w-full sm:w-64 h-full border-l border-terminal-border bg-void/50 flex flex-col overflow-hidden cursor-pointer hover:bg-void/60 transition-colors"
       onClick={onClose}
       title="Click to close"
     >

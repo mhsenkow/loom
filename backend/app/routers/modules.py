@@ -6,6 +6,7 @@ Uses persistent storage (SQLite) and supports module execution.
 from fastapi import APIRouter, HTTPException
 from typing import Optional
 import uuid
+import logging
 
 from app.models.module import (
     Module,
@@ -23,6 +24,7 @@ from app.services.vector_store import VectorStore
 
 # Get vector store instance (will be set from main.py)
 _vector_store: Optional[VectorStore] = None
+logger = logging.getLogger("loom.router.modules")
 
 def set_vector_store(store: VectorStore):
     """Set the vector store instance"""
@@ -95,9 +97,7 @@ async def create_module(module_data: ModuleCreate) -> Module:
     except HTTPException:
         raise
     except Exception as e:
-        import traceback
-        print(f"[LOOM] Error creating module: {e}")
-        print(traceback.format_exc())
+        logger.exception("create_module_failed module_id=%s", module_data.id)
         raise HTTPException(status_code=500, detail=f"Failed to create module: {str(e)}")
 
 

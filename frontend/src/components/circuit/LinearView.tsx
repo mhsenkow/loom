@@ -14,6 +14,7 @@ interface LinearViewProps {
   onDeleteCell: (id: string) => void
   onMoveCell: (id: string, direction: 'up' | 'down') => void
   onRunCell: (id: string) => void
+  getValidationError?: (cell: CellData, index: number) => string | null
   activeCellId: string | null
   onActiveCellChange: (id: string | null) => void
 }
@@ -205,6 +206,7 @@ export function LinearView({
   onDeleteCell,
   onMoveCell,
   onRunCell,
+  getValidationError,
   activeCellId,
   onActiveCellChange,
 }: LinearViewProps) {
@@ -296,7 +298,7 @@ export function LinearView({
                   }`}
                 title="Save circuit for terminal use"
               >
-                {isSaved ? '✓ saved' : '▣ save'}
+                {isSaved ? 'Saved' : 'Save'}
               </button>
             )}
           </div>
@@ -358,6 +360,7 @@ export function LinearView({
               totalCells={cells.length}
               models={models}
               modelSlots={modelSlots}
+              validationError={getValidationError?.(cell, index) ?? null}
               onUpdate={(updates) => onUpdateCell(cell.id, updates)}
               onDelete={() => onDeleteCell(cell.id)}
               onMoveUp={() => onMoveCell(cell.id, 'up')}

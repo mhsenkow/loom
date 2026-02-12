@@ -1,5 +1,12 @@
 import { useState, useEffect } from 'react'
 import { OrchestratorSettings } from '../settings/OrchestratorSettings'
+import { API_BASE_URL } from '../../config/api'
+import {
+  fetchImageModels as fetchImageModelsApi,
+  invalidateImageModelsCache,
+  notifyImageModelsUpdated,
+} from '../../utils/imageModelsApi'
+import { getSocketInstance, type PullStatus } from '../../hooks/useSocket'
 
 interface SettingsModalProps {
   isOpen: boolean
@@ -7,13 +14,17 @@ interface SettingsModalProps {
 }
 
 export type ThemeId = 'phosphor' | 'ruby' | 'sapphire' | 'diamond' | 'ebony'
+export type CrtIntensityPreset = 'subtle' | 'medium' | 'full' | 'insane'
 
-interface Settings {
+export interface Settings {
   huggingfaceToken: string
   comfyuiUrl: string
   comfyuiEnabled: boolean
   dataFolderPath: string
   theme: ThemeId
+  crtEnabled: boolean
+  crtIntensity: CrtIntensityPreset
+  crtBurstsEnabled: boolean
 }
 
 const SETTINGS_KEY = 'loom-settings'
@@ -24,6 +35,13 @@ const THEMES: { id: ThemeId; name: string; subtitle: string; swatch: string }[] 
   { id: 'sapphire', name: 'Sapphire', subtitle: 'IBM 3270, Fujitsu, NEC', swatch: '#3d8cff' },
   { id: 'diamond', name: 'Diamond', subtitle: 'Medical, SGI, precision', swatch: '#b8ccf0' },
   { id: 'ebony', name: 'Ebony', subtitle: 'Apple II, NeXT, ivory', swatch: '#d8d4c8' },
+]
+
+const CRT_INTENSITY_PRESETS: { id: CrtIntensityPreset; label: string; subtitle: string }[] = [
+  { id: 'subtle', label: 'SUBTLE', subtitle: 'Low scanlines, easy on eyes' },
+  { id: 'medium', label: 'MEDIUM', subtitle: 'Balanced retro look' },
+  { id: 'full', label: 'FULL', subtitle: 'Strong tube + glitch feel' },
+  { id: 'insane', label: 'INSANE', subtitle: 'Arcade chaos mode' },
 ]
 
 // Apply theme to document (call on load and when user changes)
@@ -37,10 +55,17 @@ export function loadSettings(): Settings {
     const stored = localStorage.getItem(SETTINGS_KEY)
     if (stored) {
       const parsed = JSON.parse(stored)
-      if (parsed.theme && THEMES.some(t => t.id === parsed.theme)) {
-        return { ...defaultSettings(), ...parsed }
+      const merged = { ...defaultSettings(), ...parsed }
+      if (!THEMES.some(t => t.id === merged.theme)) {
+        merged.theme = 'phosphor'
       }
-      return { ...defaultSettings(), ...parsed, theme: 'phosphor' }
+      if (!CRT_INTENSITY_PRESETS.some(preset => preset.id === merged.crtIntensity)) {
+        merged.crtIntensity = 'medium'
+      }
+      if (typeof merged.crtBurstsEnabled !== 'boolean') {
+        merged.crtBurstsEnabled = true
+      }
+      return merged
     }
   } catch (e) {
     console.warn('[LOOM] Failed to load settings:', e)
@@ -55,18 +80,24 @@ function defaultSettings(): Settings {
     comfyuiEnabled: false,
     dataFolderPath: '',
     theme: 'phosphor',
+    crtEnabled: true,
+    crtIntensity: 'medium',
+    crtBurstsEnabled: true,
   }
 }
 
 // Save settings to localStorage
-function saveSettings(settings: Settings) {
+export function saveSettings(settings: Settings) {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings))
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('loom:settings-updated', { detail: settings }))
+  }
 }
 
 // Configure data folder on backend
 async function configureDataFolder(path: string): Promise<boolean> {
   try {
-    const response = await fetch('http://localhost:8000/api/files/folder', {
+    const response = await fetch(`${API_BASE_URL}/api/files/folder`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path }),
@@ -85,6 +116,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [imageModels, setImageModels] = useState<Array<{ name: string; type: string; vram?: string }>>([])
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null)
   const [downloadProgress, setDownloadProgress] = useState<{ model: string; status: string; message?: string } | null>(null)
+  const [openFolderStatus, setOpenFolderStatus] = useState<string | null>(null)
 
   useEffect(() => {
     if (isOpen) {
@@ -97,16 +129,12 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
   const fetchImageModels = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/images/models')
-      if (response.ok) {
-        const data = await response.json()
-        const availableModels = data.local || []
-        setImageModels(availableModels.map((m: any) => ({
-          name: typeof m === 'string' ? m : (m.name || m),
-          type: m.type || 'unknown',
-          vram: m.vram,
-        })))
-      }
+      const data = await fetchImageModelsApi(API_BASE_URL)
+      setImageModels(data.local.map(m => ({
+        name: m.name,
+        type: m.type || 'unknown',
+        vram: m.vram,
+      })))
     } catch (error) {
       console.error('[LOOM] Failed to fetch image models:', error)
     }
@@ -119,34 +147,36 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     try {
       // Check if it's an Ollama model
       if (modelName.includes('flux') || modelName.includes('flux2') || modelName.startsWith('x/')) {
-        // Use socket to pull via Ollama
-        const { io } = await import('socket.io-client')
-        const socket = io('http://localhost:8000')
+        // Use shared app socket to pull via backend.
+        const socket = getSocketInstance()
+        const handler = (data: PullStatus) => {
+          if (data.model !== modelName) return
 
-        socket.on('pull_image_status', (data: any) => {
-          if (data.model === modelName) {
-            setDownloadProgress({
-              model: modelName,
-              status: data.status,
-              message: data.message,
-            })
+          setDownloadProgress({
+            model: modelName,
+            status: data.status,
+            message: data.message,
+          })
 
-            if (data.status === 'success' || data.status === 'error') {
-              setDownloadingModel(null)
-              setTimeout(() => {
-                setDownloadProgress(null)
-                fetchImageModels() // Refresh list
-                socket.disconnect()
-              }, 2000)
-            }
+          if (data.status === 'success' || data.status === 'error') {
+            socket.off('pull_image_status', handler)
+            setDownloadingModel(null)
+            setTimeout(() => {
+              setDownloadProgress(null)
+              invalidateImageModelsCache()
+              fetchImageModels() // Refresh list
+              notifyImageModelsUpdated()
+            }, 2000)
           }
-        })
+        }
+
+        socket.on('pull_image_status', handler)
 
         socket.emit('pull_image_model', { model: modelName })
       } else {
         // Local diffusers model - trigger download by loading
         setDownloadProgress({ model: modelName, status: 'downloading', message: 'Downloading model files...' })
-        const response = await fetch(`http://localhost:8000/api/images/models/load?model=${encodeURIComponent(modelName)}`, {
+        const response = await fetch(`${API_BASE_URL}/api/images/models/load?model=${encodeURIComponent(modelName)}`, {
           method: 'POST',
         })
 
@@ -155,7 +185,9 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           setTimeout(() => {
             setDownloadingModel(null)
             setDownloadProgress(null)
+            invalidateImageModelsCache()
             fetchImageModels()
+            notifyImageModelsUpdated()
           }, 2000)
         } else {
           throw new Error('Failed to download model')
@@ -190,8 +222,34 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     setTimeout(() => setSaved(false), 2000)
   }
 
+  const openModelFolder = async (target: 'ollama' | 'diffusion' | 'music') => {
+    try {
+      setOpenFolderStatus(`Opening ${target} folder...`)
+      const response = await fetch(`${API_BASE_URL}/api/sessions/open-model-folder?target=${encodeURIComponent(target)}`, {
+        method: 'POST',
+      })
+      if (!response.ok) {
+        const text = await response.text()
+        throw new Error(text || `Request failed (${response.status})`)
+      }
+      const payload = await response.json() as { path?: string }
+      const openedPath = payload.path || target
+      setOpenFolderStatus(`Opened: ${openedPath}`)
+      setTimeout(() => setOpenFolderStatus(null), 4000)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setOpenFolderStatus(`Failed to open folder: ${message}`)
+    }
+  }
+
   const updateSetting = <K extends keyof Settings>(key: K, value: Settings[K]) => {
-    setSettings((prev) => ({ ...prev, [key]: value }))
+    setSettings((prev) => {
+      const next = { ...prev, [key]: value }
+      if (key === 'crtEnabled' || key === 'crtIntensity' || key === 'crtBurstsEnabled') {
+        window.dispatchEvent(new CustomEvent('loom:settings-updated', { detail: next }))
+      }
+      return next
+    })
     if (key === 'dataFolderPath') {
       setDataFolderStatus('idle')
     }
@@ -233,6 +291,59 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             <p className="text-terminal-muted text-xs mb-3">
               Retro phosphor vibes. Scanlines and vignette vary by theme.
             </p>
+            <div className="space-y-3 mb-4">
+              <div className="flex items-center justify-between gap-3 p-2 border border-terminal-border bg-void">
+                <div>
+                  <div className="text-[10px] text-phosphor font-bold tracking-wider">EFFECT</div>
+                  <div className="text-[10px] text-terminal-muted">Global CRT overlay across terminal + circuit</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => updateSetting('crtEnabled', !settings.crtEnabled)}
+                  className={`px-3 py-1 text-[10px] border font-bold tracking-wider ${
+                    settings.crtEnabled
+                      ? 'border-phosphor bg-phosphor text-void'
+                      : 'border-terminal-border text-terminal-muted hover:border-phosphor hover:text-phosphor'
+                  }`}
+                >
+                  {settings.crtEnabled ? 'ON' : 'OFF'}
+                </button>
+              </div>
+              <div className="flex items-center justify-between gap-3 p-2 border border-terminal-border bg-void">
+                <div>
+                  <div className="text-[10px] text-phosphor font-bold tracking-wider">GLITCH BURSTS</div>
+                  <div className="text-[10px] text-terminal-muted">Pulse on model switches, AI responses, and failures</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => updateSetting('crtBurstsEnabled', !settings.crtBurstsEnabled)}
+                  className={`px-3 py-1 text-[10px] border font-bold tracking-wider ${
+                    settings.crtBurstsEnabled
+                      ? 'border-phosphor bg-phosphor text-void'
+                      : 'border-terminal-border text-terminal-muted hover:border-phosphor hover:text-phosphor'
+                  }`}
+                >
+                  {settings.crtBurstsEnabled ? 'ON' : 'OFF'}
+                </button>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                {CRT_INTENSITY_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => updateSetting('crtIntensity', preset.id)}
+                    className={`p-2 border text-left ${
+                      settings.crtIntensity === preset.id
+                        ? 'border-phosphor bg-void'
+                        : 'border-terminal-border hover:border-phosphor/50'
+                    }`}
+                  >
+                    <div className="text-[10px] text-phosphor font-bold tracking-wider">{preset.label}</div>
+                    <div className="text-[9px] text-terminal-muted mt-1 leading-tight">{preset.subtitle}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="grid grid-cols-5 gap-2">
               {THEMES.map((t) => (
                 <button
@@ -384,8 +495,10 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 </div>
               ) : (
                 <div className="bg-void p-3 border border-terminal-border">
-                  <div className="text-terminal-muted text-center py-2">
-                    No models downloaded. Use download buttons below or download via Ollama.
+                  <div className="text-terminal-muted text-center py-2 space-y-1">
+                    <div className="text-phosphor text-[11px]">No models downloaded yet</div>
+                    <div className="text-[10px]">First run: start Ollama, then download one model below.</div>
+                    <div className="text-[10px]">You can also run: <code className="text-phosphor">/pull x/flux2-klein</code></div>
                   </div>
                 </div>
               )}
@@ -437,6 +550,32 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               <div className="text-terminal-muted text-[10px]">
                 <p>Ollama models stored in: <code className="text-phosphor">~/.ollama/models/</code></p>
                 <p className="mt-1">Download via: <code className="text-phosphor">ollama pull x/flux2-klein:9b</code></p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    onClick={() => { void openModelFolder('ollama') }}
+                    className="px-2 py-1 text-[10px] border border-terminal-border hover:border-phosphor hover:text-phosphor"
+                    title="Open Ollama models folder"
+                  >
+                    Open Ollama Folder
+                  </button>
+                  <button
+                    onClick={() => { void openModelFolder('diffusion') }}
+                    className="px-2 py-1 text-[10px] border border-terminal-border hover:border-phosphor hover:text-phosphor"
+                    title="Open local diffusion models folder"
+                  >
+                    Open Diffusion Folder
+                  </button>
+                  <button
+                    onClick={() => { void openModelFolder('music') }}
+                    className="px-2 py-1 text-[10px] border border-terminal-border hover:border-phosphor hover:text-phosphor"
+                    title="Open music model cache folder"
+                  >
+                    Open Music Cache
+                  </button>
+                </div>
+                {openFolderStatus && (
+                  <p className="mt-2 text-[10px] text-phosphor">{openFolderStatus}</p>
+                )}
               </div>
             </div>
           </section>

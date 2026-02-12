@@ -8,6 +8,10 @@ export interface CloudModelInfo {
     provider: string
     provider_type: 'local' | 'cloud'
     context_window?: number
+    is_free?: boolean
+    cost_tier?: string
+    supports_quick?: boolean
+    provider_free_tier_available?: boolean
 }
 
 interface SystemState {
@@ -27,7 +31,7 @@ export const useSystemStore = create<SystemState>((set) => ({
         connected: false,
         memoryUsage: 0,
         tokenSpeed: 0,
-        activeModel: undefined,
+        activeModel: 'auto',
         visionModel: undefined,
     },
     models: [],

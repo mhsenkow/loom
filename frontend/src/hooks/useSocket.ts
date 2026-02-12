@@ -1,7 +1,12 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { io, Socket } from 'socket.io-client'
+import { API_BASE_URL } from '../config/api'
+import { useSystemStore } from '../store/systemStore'
 
-const BACKEND_URL = 'http://localhost:8000'
+const BACKEND_URL = API_BASE_URL
+const MODELS_UPDATED_EVENT = 'loom:models_updated'
+const ORCHESTRATOR_EVENT = 'orchestrator_event'
+const QDC_JOB_EVENT = 'qdc_job_event'
 
 interface SocketState {
   connected: boolean
@@ -24,9 +29,39 @@ interface ModuleStatus {
   output?: Record<string, unknown>
 }
 
+export interface PullStatus {
+  status: string
+  model?: string
+  message?: string
+  completed?: number
+  total?: number
+  percent?: number
+  error?: string
+}
+
 type AIChunkHandler = (chunk: AIChunk) => void
 type AIStatusHandler = (status: AIStatus) => void
 type ModuleStatusHandler = (status: ModuleStatus) => void
+type PullStatusHandler = (status: PullStatus) => void
+
+interface SendChatOptions {
+  rawPrompt?: string
+  contextMode?: 'input' | 'key' | 'full'
+}
+
+interface OrchestratorModelEvent {
+  type?: string
+  model?: string
+  switched?: boolean
+  previous_model?: string
+  reason?: string
+}
+
+declare global {
+  interface Window {
+    loomSocket?: Socket
+  }
+}
 
 // Singleton socket instance - shared across all components
 let globalSocket: Socket | null = null
@@ -38,6 +73,28 @@ const stateListeners = new Set<(state: SocketState) => void>()
 const activeChunkHandlers = new Map<symbol, AIChunkHandler>()
 const activeStatusHandlers = new Map<symbol, AIStatusHandler>()
 const moduleStatusHandlers = new Set<ModuleStatusHandler>()
+
+function setSocketState(next: SocketState) {
+  socketState = next
+  stateListeners.forEach(listener => listener(socketState))
+}
+
+function updateLoadedModel(modelName?: string) {
+  if (!modelName || modelName === 'unknown') return
+  useSystemStore.setState((state) => ({
+    ...state,
+    status: {
+      ...state.status,
+      loadedModelName: modelName,
+    },
+  }))
+}
+
+function normalizePullModelName(modelName: string): string {
+  const normalized = modelName.trim().toLowerCase()
+  if (!normalized) return normalized
+  return normalized.includes(':') ? normalized : `${normalized}:latest`
+}
 
 function getOrCreateSocket(): Socket {
   if (!globalSocket) {
@@ -51,26 +108,15 @@ function getOrCreateSocket(): Socket {
 
     // Connection handlers
     globalSocket.on('connect', () => {
-      console.log('[LOOM] Connected to backend')
-      socketState = { connected: true, error: null }
-      stateListeners.forEach(listener => listener(socketState))
+      setSocketState({ connected: true, error: null })
     })
 
-    globalSocket.on('disconnect', (reason) => {
-      console.log('[LOOM] Disconnected from backend:', reason)
-      socketState = { connected: false, error: null }
-      stateListeners.forEach(listener => listener(socketState))
+    globalSocket.on('disconnect', () => {
+      setSocketState({ connected: false, error: null })
     })
 
     globalSocket.on('connect_error', (error) => {
-      console.error('[LOOM] Connection error:', error)
-      socketState = { connected: false, error: error.message }
-      stateListeners.forEach(listener => listener(socketState))
-    })
-
-    // System messages
-    globalSocket.on('system', (data) => {
-      console.log('[LOOM] System message:', data)
+      setSocketState({ connected: false, error: error.message })
     })
 
     // AI response handlers - broadcast to all active handlers
@@ -79,6 +125,9 @@ function getOrCreateSocket(): Socket {
     })
 
     globalSocket.on('ai_status', (data: AIStatus) => {
+      if (data.model) {
+        updateLoadedModel(data.model)
+      }
       // Collect request IDs to remove after iteration (avoid modifying during iteration)
       const completedRequests: symbol[] = []
 
@@ -102,21 +151,32 @@ function getOrCreateSocket(): Socket {
       moduleStatusHandlers.forEach(handler => handler(data))
     })
 
-    // Model pull status handlers
-    globalSocket.on('pull_status', (data: any) => {
-      // This will be handled by components that register pull handlers
-      console.log('[LOOM] Pull status:', data)
+    // Models updated event
+    globalSocket.on('models_updated', (data: unknown) => {
+      window.dispatchEvent(new CustomEvent(MODELS_UPDATED_EVENT, { detail: data }))
     })
 
-    // Models updated event
-    globalSocket.on('models_updated', (data: any) => {
-      console.log('[LOOM] Models updated:', data)
-      // Trigger a custom event that components can listen to
-      window.dispatchEvent(new CustomEvent('loom:models_updated', { detail: data }))
+    globalSocket.on(ORCHESTRATOR_EVENT, (data: unknown) => {
+      const eventData = data as OrchestratorModelEvent
+      if ((eventData?.type === 'model_selected' || eventData?.type === 'model_switched') && eventData.model) {
+        updateLoadedModel(eventData.model)
+      }
+      window.dispatchEvent(new CustomEvent(ORCHESTRATOR_EVENT, { detail: data }))
     })
+
+    globalSocket.on(QDC_JOB_EVENT, (data: unknown) => {
+      window.dispatchEvent(new CustomEvent(QDC_JOB_EVENT, { detail: data }))
+    })
+
+    // Backward-compatible global access for older command handlers.
+    window.loomSocket = globalSocket
   }
 
   return globalSocket
+}
+
+export function getSocketInstance(): Socket {
+  return getOrCreateSocket()
 }
 
 export function useSocket() {
@@ -167,6 +227,7 @@ export function useSocket() {
     onChunk?: AIChunkHandler,
     onStatus?: AIStatusHandler,
     useCodeContext: boolean = false,
+    options?: SendChatOptions,
   ) => {
     const socket = getOrCreateSocket()
 
@@ -195,6 +256,8 @@ export function useSocket() {
 
     socket.emit('chat', {
       prompt,
+      raw_prompt: options?.rawPrompt || prompt,
+      context_mode: options?.contextMode,
       model,
       use_code_context: useCodeContext,
       code_context_collection: 'loom_code_context',
@@ -216,10 +279,13 @@ export function useSocket() {
       return false
     }
 
-    moduleStatusHandlerRef.current = onStatus || null
+    if (moduleStatusHandlerRef.current && moduleStatusHandlerRef.current !== onStatus) {
+      moduleStatusHandlers.delete(moduleStatusHandlerRef.current)
+    }
+    moduleStatusHandlerRef.current = onStatus ?? null
 
-    if (onStatus) {
-      moduleStatusHandlers.add(onStatus)
+    if (moduleStatusHandlerRef.current) {
+      moduleStatusHandlers.add(moduleStatusHandlerRef.current)
     }
 
     socket.emit('execute_module', {
@@ -233,7 +299,7 @@ export function useSocket() {
   // Pull/download an Ollama model
   const pullModel = useCallback((
     modelName: string,
-    onStatus?: (status: any) => void,
+    onStatus?: PullStatusHandler,
   ) => {
     const socket = getOrCreateSocket()
 
@@ -244,11 +310,22 @@ export function useSocket() {
 
     // Register handler for pull status updates
     if (onStatus) {
-      const handler = (data: any) => onStatus(data)
+      const requested = normalizePullModelName(modelName)
+      const handler = (data: PullStatus) => {
+        if (data.model) {
+          const incoming = normalizePullModelName(data.model)
+          if (incoming !== requested) return
+        }
+        onStatus(data)
+      }
       socket.on('pull_status', handler)
 
       // Clean up handler when pull completes
-      const cleanup = (data: any) => {
+      const cleanup = (data: PullStatus) => {
+        if (data.model) {
+          const incoming = normalizePullModelName(data.model)
+          if (incoming !== requested) return
+        }
         if (data.status === 'success' || data.status === 'error') {
           socket.off('pull_status', handler)
           socket.off('pull_status', cleanup)

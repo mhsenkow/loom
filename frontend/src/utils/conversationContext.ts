@@ -7,15 +7,18 @@ import type { LogEntry } from '../types/module'
 
 export type ConversationContextMode = 'input' | 'key' | 'full'
 
-const DEFAULT_MAX_TURNS = 16
+const DEFAULT_MAX_TURNS = 20
+const FULL_MODE_DEFAULT_MAX_TURNS = 80
 const KEY_MODE_TRUNCATE_CHARS = 120
+const KEY_MODE_MAX_CHARS = 7000
+const FULL_MODE_MAX_CHARS = 24000
 
 export interface BuildConversationContextOptions {
   /** 'input' = no history; 'key' = truncated assistant replies; 'full' = full text */
   contextMode: ConversationContextMode
-  /** Max number of turns (user/ai/image/system) to include. Default 16 */
+  /** Max number of turns (user/ai/image/system) to include. Defaults vary by mode */
   maxTurns?: number
-  /** Entry types to include. Default: user, ai, image, system */
+  /** Entry types to include. Default: user, ai, image */
   includeTypes?: Array<'user' | 'ai' | 'image' | 'system'>
 }
 
@@ -27,13 +30,17 @@ export function buildConversationContext(
   entries: LogEntry[],
   options: BuildConversationContextOptions
 ): string | null {
-  const { contextMode, maxTurns = DEFAULT_MAX_TURNS, includeTypes = ['user', 'ai', 'image', 'system'] } = options
+  const {
+    contextMode,
+    maxTurns = contextMode === 'full' ? FULL_MODE_DEFAULT_MAX_TURNS : DEFAULT_MAX_TURNS,
+    includeTypes = ['user', 'ai', 'image'],
+  } = options
   if (contextMode === 'input') return null
 
   const relevant = entries.filter((e) => includeTypes.includes(e.type as 'user' | 'ai' | 'image' | 'system')).slice(-maxTurns)
   if (relevant.length === 0) return null
 
-  const historyBlock = relevant
+  const segments = relevant
     .map((e) => {
       if (e.type === 'user') return `User: ${e.content}`
       if (e.type === 'image') return `[Image Context]\n${e.imageAnalysis ?? 'Image added to conversation'}`
@@ -42,7 +49,29 @@ export function buildConversationContext(
       if (contextMode === 'key') return `Assistant: ${text.slice(0, KEY_MODE_TRUNCATE_CHARS)}${text.length > KEY_MODE_TRUNCATE_CHARS ? '...' : ''}`
       return `Assistant: ${text}`
     })
-    .join('\n\n')
+    .filter(Boolean)
+
+  if (segments.length === 0) return null
+
+  const maxChars = contextMode === 'full' ? FULL_MODE_MAX_CHARS : KEY_MODE_MAX_CHARS
+  const selected: string[] = []
+  let totalChars = 0
+
+  for (let idx = segments.length - 1; idx >= 0; idx -= 1) {
+    const segment = segments[idx]
+    const separatorChars = selected.length > 0 ? 2 : 0
+    const nextLength = totalChars + segment.length + separatorChars
+    if (nextLength > maxChars) {
+      if (selected.length === 0) {
+        selected.unshift(segment.slice(Math.max(0, segment.length - maxChars)))
+      }
+      break
+    }
+    selected.unshift(segment)
+    totalChars = nextLength
+  }
+
+  const historyBlock = selected.join('\n\n')
 
   return historyBlock
 }

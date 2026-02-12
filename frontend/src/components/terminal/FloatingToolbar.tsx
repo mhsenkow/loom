@@ -1,5 +1,3 @@
-import { useState } from 'react'
-
 interface FloatingToolbarProps {
   onImageGenClick: () => void
   onFolderContextClick: () => void
@@ -17,16 +15,12 @@ export function FloatingToolbar({
   folderContextActive = false,
   avatarActive = false,
 }: FloatingToolbarProps) {
-  const [hovered, setHovered] = useState<string | null>(null)
-
   return (
-    <div className="fixed top-1/2 -translate-y-1/2 right-6 z-30 flex flex-col gap-2">
+    <div className="fixed top-1/2 -translate-y-1/2 right-2 sm:right-6 z-30 flex flex-col gap-2">
       {/* Avatar / Voice – 8-bit sparkle */}
       {onAvatarClick && (
         <button
           onClick={onAvatarClick}
-          onMouseEnter={() => setHovered('avatar')}
-          onMouseLeave={() => setHovered(null)}
           className={`
             w-12 h-12 flex items-center justify-center
             bg-slate/90 backdrop-blur-sm
@@ -54,8 +48,6 @@ export function FloatingToolbar({
       {/* Image Generation Icon */}
       <button
         onClick={onImageGenClick}
-        onMouseEnter={() => setHovered('image')}
-        onMouseLeave={() => setHovered(null)}
         className={`
           w-12 h-12 flex items-center justify-center
           bg-slate/90 backdrop-blur-sm
@@ -80,8 +72,6 @@ export function FloatingToolbar({
       {/* Folder Context Icon */}
       <button
         onClick={onFolderContextClick}
-        onMouseEnter={() => setHovered('folder')}
-        onMouseLeave={() => setHovered(null)}
         className={`
           w-12 h-12 flex items-center justify-center
           bg-slate/90 backdrop-blur-sm

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { API_BASE_URL } from '../../config/api'
 
 export type ReadMode = 'raw' | 'preview' | 'structure' | 'summarize' | 'stats' | 'extract'
 
@@ -91,7 +92,7 @@ export function FilePicker({ isOpen, onClose, onSelect }: FilePickerProps) {
   // Check if data folder is configured
   const checkDataFolder = useCallback(async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/files/folder')
+      const response = await fetch(`${API_BASE_URL}/api/files/folder`)
       const data = await response.json()
       setDataFolder(data.path)
       return data.path
@@ -106,7 +107,7 @@ export function FilePicker({ isOpen, onClose, onSelect }: FilePickerProps) {
     setLoading(true)
     setError(null)
     try {
-      const response = await fetch(`http://localhost:8000/api/files/list?subfolder=${encodeURIComponent(subfolder)}`)
+      const response = await fetch(`${API_BASE_URL}/api/files/list?subfolder=${encodeURIComponent(subfolder)}`)
       if (!response.ok) {
         const err = await response.json()
         throw new Error(err.detail || 'Failed to load files')
@@ -128,7 +129,7 @@ export function FilePicker({ isOpen, onClose, onSelect }: FilePickerProps) {
     const defaultPath = '~/Documents/loom-data'
     try {
       // First try to create by setting the path (backend will validate/create)
-      const response = await fetch('http://localhost:8000/api/files/folder', {
+      const response = await fetch(`${API_BASE_URL}/api/files/folder`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: defaultPath, create: true }),

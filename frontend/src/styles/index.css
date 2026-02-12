@@ -140,6 +140,32 @@
 
 /* CRT: scanlines, vignette, tube feel */
 @layer components {
+  .crt-glitch {
+    pointer-events: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 9997;
+    opacity: 0;
+    mix-blend-mode: screen;
+    background:
+      repeating-linear-gradient(
+        90deg,
+        rgba(255 0 50 / 0.12) 0px,
+        rgba(255 0 50 / 0.12) 1px,
+        transparent 1px,
+        transparent 4px
+      ),
+      linear-gradient(
+        0deg,
+        transparent 0%,
+        rgba(0 255 120 / 0.08) 45%,
+        transparent 100%
+      );
+  }
+
   .crt-overlay {
     pointer-events: none;
     position: fixed;
@@ -150,8 +176,8 @@
     z-index: 9998;
     background: repeating-linear-gradient(
       0deg,
-      rgba(0 0 0 / var(--theme-scanline, 0.15)) 0px,
-      rgba(0 0 0 / var(--theme-scanline, 0.15)) 1px,
+      rgba(0 0 0 / calc(var(--theme-scanline, 0.15) * var(--crt-intensity, 1))) 0px,
+      rgba(0 0 0 / calc(var(--theme-scanline, 0.15) * var(--crt-intensity, 1))) 1px,
       transparent 1px,
       transparent 2px
     );
@@ -191,7 +217,7 @@
       ellipse 80% 80% at 50% 50%,
       transparent 20%,
       rgba(0 0 0 / 0.15) 60%,
-      rgba(0 0 0 / var(--theme-vignette, 0.4)) 100%
+      rgba(0 0 0 / calc(var(--theme-vignette, 0.4) * var(--crt-vignette-intensity, 1))) 100%
     );
   }
 
@@ -199,12 +225,65 @@
     animation: crtFlicker 0.1s ease-in-out;
   }
 
+  .crt-burst .crt-glitch {
+    opacity: calc(0.38 * var(--crt-burst-strength, 1));
+    animation: crtGlitchBurst 0.14s steps(2, end);
+  }
+
+  .crt-burst .crt-overlay {
+    animation: crtBurstJitter 0.14s steps(2, end);
+  }
+
+  .crt-burst .crt-vignette {
+    animation: crtBurstFlash 0.14s ease-out;
+  }
+
   @keyframes crtFlicker {
-    0% { opacity: 0.97; }
+    0% { opacity: calc(1 - var(--crt-flicker-strength, 0.03)); }
     25% { opacity: 1; }
-    50% { opacity: 0.98; }
+    50% { opacity: calc(1 - (var(--crt-flicker-strength, 0.03) * 0.6)); }
     75% { opacity: 1; }
-    100% { opacity: 0.99; }
+    100% { opacity: calc(1 - (var(--crt-flicker-strength, 0.03) * 0.3)); }
+  }
+
+  @keyframes crtGlitchBurst {
+    0% {
+      transform: translateX(0);
+      filter: hue-rotate(0deg);
+    }
+    35% {
+      transform: translateX(calc(2px * var(--crt-burst-strength, 1)));
+      filter: hue-rotate(20deg);
+    }
+    70% {
+      transform: translateX(calc(-3px * var(--crt-burst-strength, 1)));
+      filter: hue-rotate(-20deg);
+    }
+    100% {
+      transform: translateX(0);
+      filter: hue-rotate(0deg);
+    }
+  }
+
+  @keyframes crtBurstJitter {
+    0% {
+      transform: translateX(0);
+      opacity: 1;
+    }
+    50% {
+      transform: translateX(calc(1px * var(--crt-burst-strength, 1)));
+      opacity: 0.9;
+    }
+    100% {
+      transform: translateX(0);
+      opacity: 1;
+    }
+  }
+
+  @keyframes crtBurstFlash {
+    0% { opacity: 1; }
+    45% { opacity: calc(1 - (0.08 * var(--crt-burst-strength, 1))); }
+    100% { opacity: 1; }
   }
 
   @keyframes scanline-pulse {
@@ -220,17 +299,169 @@
     50% { opacity: 0.92; }
   }
 
+  @media (prefers-reduced-motion: reduce) {
+    .crt-glitch,
+    .crt-overlay,
+    .crt-vignette,
+    .crt-flicker,
+    .ai-streaming-text,
+    .idle-telemetry-column,
+    .crt-burst .crt-glitch,
+    .crt-burst .crt-overlay,
+    .crt-burst .crt-vignette {
+      animation: none !important;
+      transform: none !important;
+    }
+  }
+
+  .command-input-shell {
+    background:
+      linear-gradient(180deg, rgba(14, 20, 26, 0.92) 0%, rgba(8, 12, 17, 0.94) 100%);
+    box-shadow:
+      inset 1px 1px 0 rgba(190, 220, 255, 0.06),
+      inset -1px -1px 0 rgba(0, 0, 0, 0.7),
+      0 0 0 1px rgba(0, 0, 0, 0.42),
+      0 10px 20px rgba(0, 0, 0, 0.3);
+    transition: border-color 120ms linear, box-shadow 120ms linear;
+  }
+
+  .command-input-shell:focus-within {
+    border-color: rgba(51, 255, 0, 0.52);
+    box-shadow:
+      inset 1px 1px 0 rgba(190, 220, 255, 0.08),
+      inset -1px -1px 0 rgba(0, 0, 0, 0.7),
+      0 0 0 1px rgba(0, 0, 0, 0.4),
+      0 0 14px rgba(51, 255, 0, 0.16);
+  }
+
+  .command-input-editor-pane {
+    padding: 3px 4px;
+    border: 1px solid rgba(42, 42, 42, 0.95);
+    background: linear-gradient(180deg, rgba(8, 11, 15, 0.9), rgba(5, 8, 11, 0.9));
+    box-shadow:
+      inset 1px 1px 0 rgba(150, 180, 205, 0.05),
+      inset -1px -1px 0 rgba(0, 0, 0, 0.75);
+  }
+
+  .command-input-tool,
+  .command-input-runtime,
+  .command-input-context-dot,
+  .command-input-controls {
+    background: linear-gradient(180deg, rgba(13, 18, 24, 0.9), rgba(8, 11, 15, 0.9));
+    box-shadow:
+      inset 1px 1px 0 rgba(140, 170, 196, 0.06),
+      inset -1px -1px 0 rgba(0, 0, 0, 0.72);
+  }
+
+  .command-input-run {
+    min-width: 74px;
+  }
+
+  .command-input-runtime {
+    min-width: 34px;
+    padding-left: 0;
+    padding-right: 0;
+  }
+
   .terminal-cursor {
     display: inline-block;
     width: 10px;
     height: 1.2em;
     background-color: var(--theme-phosphor);
+    transition: opacity 120ms linear, box-shadow 120ms linear;
+  }
+
+  .terminal-cursor.is-active {
+    opacity: 1;
+    box-shadow: 0 0 8px var(--theme-phosphor-glow);
     animation: blink 1s step-end infinite;
+  }
+
+  .terminal-cursor.is-idle {
+    opacity: 0.22;
+    animation: none;
   }
 
   @keyframes blink {
     0%, 100% { opacity: 1; }
     50% { opacity: 0; }
+  }
+
+  .ai-streaming-text {
+    text-shadow:
+      0 0 calc(2px + (8px * var(--stream-strength, 0.2))) var(--theme-phosphor-glow),
+      0 0 calc(1px + (3px * var(--stream-strength, 0.2))) var(--theme-phosphor);
+    animation: ai-stream-persist 0.22s ease-in-out infinite alternate;
+    transition: text-shadow 120ms linear;
+  }
+
+  @keyframes ai-stream-persist {
+    from { filter: brightness(1); }
+    to { filter: brightness(calc(1 + (0.16 * var(--stream-strength, 0.2)))); }
+  }
+
+  .idle-telemetry-matrix {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: visible;
+    z-index: 0;
+    opacity: 0.15;
+  }
+
+  .idle-telemetry-matrix[data-mode="idle"] {
+    opacity: 0.18;
+  }
+
+  .idle-telemetry-matrix[data-mode="active"] {
+    opacity: 0.24;
+  }
+
+  .idle-telemetry-rail {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    bottom: 6px;
+    width: clamp(130px, 11vw, 190px);
+    overflow: hidden;
+    border-left: 1px solid rgba(51, 255, 0, 0.14);
+    padding-left: 8px;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 1px;
+    font-family: "VT323", "Share Tech Mono", "JetBrains Mono", monospace;
+    transform: scaleX(0.92);
+    transform-origin: right center;
+  }
+
+  .idle-telemetry-line {
+    white-space: nowrap;
+    font-size: 9px;
+    line-height: 1.1;
+    letter-spacing: 0.08em;
+    color: rgba(51, 255, 0, 0.56);
+    text-shadow: 0 0 5px rgba(51, 255, 0, 0.24);
+    filter: blur(0.22px);
+  }
+
+  .idle-telemetry-line.is-token {
+    color: rgba(51, 255, 0, 0.7);
+  }
+
+  .idle-telemetry-matrix[data-mode="active"] .idle-telemetry-line {
+    color: rgba(51, 255, 0, 0.75);
+    text-shadow: 0 0 8px rgba(51, 255, 0, 0.35);
+    filter: blur(0.16px);
+  }
+
+  .idle-telemetry-matrix-mask {
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(to left, rgba(0, 0, 0, 0.2), transparent 14%),
+      radial-gradient(circle at center, transparent 0%, transparent 61%, rgba(0, 0, 0, 0.2) 100%),
+      linear-gradient(to bottom, rgba(0, 0, 0, 0.62), transparent 20%, transparent 84%, rgba(0, 0, 0, 0.72));
   }
 
   .led {

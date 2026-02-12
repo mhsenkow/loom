@@ -3,6 +3,8 @@ import { CellData, ModelSlot, ModelSlotConfig, InputMode } from './CircuitBoard'
 import { FilePicker, ReadMode } from './FilePicker'
 import { MusicPlayerCard } from '../terminal/MusicPlayerCard'
 import type { ModuleType } from '../../types/module'
+import { API_BASE_URL } from '../../config/api'
+import { fetchImageModels, IMAGE_MODELS_UPDATED_EVENT } from '../../utils/imageModelsApi'
 
 const INPUT_MODE_INDICATORS: Record<InputMode, { icon: string; color: string }> = {
   previous: { icon: '●', color: '#33ff00' },
@@ -37,6 +39,7 @@ interface NotebookCellProps {
   totalCells: number
   models: string[]
   modelSlots: ModelSlotConfig
+  validationError?: string | null
   onUpdate: (updates: Partial<CellData>) => void
   onDelete: () => void
   onMoveUp: () => void
@@ -55,6 +58,7 @@ export function NotebookCell({
   totalCells,
   models: _models,
   modelSlots,
+  validationError = null,
   onUpdate,
   onDelete,
   onMoveUp,
@@ -65,63 +69,57 @@ export function NotebookCell({
   onCollapse,
 }: NotebookCellProps) {
   void _models // Keep prop for future use
+  const onUpdateRef = useRef(onUpdate)
   const [isEditing, setIsEditing] = useState(false)
   const [editContent, setEditContent] = useState(cell.content)
   const [showFilePicker, setShowFilePicker] = useState(false)
   const [hasOverflow, setHasOverflow] = useState(false)
   const [availableImageModels, setAvailableImageModels] = useState<Array<{ name: string; vram?: string; type?: string }>>([])
+
+  useEffect(() => {
+    onUpdateRef.current = onUpdate
+  }, [onUpdate])
+
   // Fetch available image models when this is an image_gen cell
   useEffect(() => {
     if (cell.type === 'image_gen') {
-      const fetchImageModels = async () => {
+      let cancelled = false
+
+      const refreshImageModels = async (force = false) => {
         try {
-          const response = await fetch('http://localhost:8000/api/images/models')
-          if (response.ok) {
-            const data = await response.json()
-            const localModels = data.local || []
+          const data = await fetchImageModels(API_BASE_URL, { force })
+          if (cancelled) return
 
-            // Handle both dict format (from MODELS) and any other formats
-            const models = localModels
-              .map((m: any) => {
-                if (typeof m === 'string') {
-                  return { name: m, vram: 'unknown', type: 'unknown' }
-                }
-                return {
-                  name: m.name || m,
-                  vram: m.vram || 'unknown',
-                  type: m.type || 'unknown',
-                }
-              })
-              .filter((m: any) => m.name) // Filter out any invalid entries
+          setAvailableImageModels(data.local.map(model => ({
+            name: model.name,
+            vram: model.vram || 'unknown',
+            type: model.type || 'unknown',
+          })))
 
-            setAvailableImageModels(models)
-
-            // If cell doesn't have a model set, use the current loaded model or first available
-            if (!cell.model && models.length > 0) {
-              const modelToUse = data.current_model || models[0].name
-              onUpdate({ model: modelToUse })
-            }
-          } else {
-            console.warn('[LOOM] Failed to fetch image models:', response.status)
+          // If cell doesn't have a model set, use the current loaded model or first available.
+          if (!cell.model && data.local.length > 0) {
+            const modelToUse = data.current_model || data.local[0].name
+            onUpdateRef.current({ model: modelToUse })
           }
         } catch (error) {
           console.error('[LOOM] Failed to fetch image models:', error)
           // Don't set fallback - let user see empty state or keep existing selection
         }
       }
-      fetchImageModels()
+      void refreshImageModels()
 
       // Also listen for model updates
       const handleModelUpdate = () => {
-        fetchImageModels()
+        void refreshImageModels()
       }
-      window.addEventListener('loom:image_models_updated', handleModelUpdate)
+      window.addEventListener(IMAGE_MODELS_UPDATED_EVENT, handleModelUpdate)
 
       return () => {
-        window.removeEventListener('loom:image_models_updated', handleModelUpdate)
+        cancelled = true
+        window.removeEventListener(IMAGE_MODELS_UPDATED_EVENT, handleModelUpdate)
       }
     }
-  }, [cell.type, cell.model, onUpdate])
+  }, [cell.type, cell.model])
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -141,85 +139,127 @@ export function NotebookCell({
     icon: string
     color: string
     bgColor: string
+    bodyTintClass: string
     description: string
   }> = {
     data_input: {
       icon: '▶',
       color: 'text-phosphor',
       bgColor: 'bg-phosphor',
+      bodyTintClass: 'bg-[#07110a]',
       description: 'Provides input text to the next cell',
     },
     ai_processor: {
       icon: '◆',
       color: 'text-amber-500',
       bgColor: 'bg-amber-500',
+      bodyTintClass: 'bg-[#120f08]',
       description: 'Sends input to AI model, outputs response',
     },
     script_execution: {
       icon: '⚙',
       color: 'text-cyan-500',
       bgColor: 'bg-cyan-500',
+      bodyTintClass: 'bg-[#071015]',
       description: 'Transforms input. Use {{input}} for interpolation',
     },
     log_entry: {
       icon: '◀',
       color: 'text-phosphor-dim',
       bgColor: 'bg-phosphor-dim',
+      bodyTintClass: 'bg-[#0b0f0a]',
       description: 'Displays output and sends to Terminal',
     },
     image_gen: {
       icon: '🎨',
       color: 'text-pink-400',
       bgColor: 'bg-pink-500',
+      bodyTintClass: 'bg-[#150a12]',
       description: 'Generates image from input prompt',
     },
     markdown: {
       icon: '📝',
       color: 'text-gray-400',
       bgColor: 'bg-gray-600',
+      bodyTintClass: 'bg-[#0f0f10]',
       description: 'Documentation / notes (not executed)',
     },
     data_loader: {
       icon: '📁',
       color: 'text-cyan-400',
       bgColor: 'bg-cyan-600',
+      bodyTintClass: 'bg-[#071015]',
       description: 'Loads file from data folder. Enter file path.',
     },
     conditional: {
       icon: '⚡',
       color: 'text-purple-400',
       bgColor: 'bg-purple-600',
+      bodyTintClass: 'bg-[#110a15]',
       description: 'Passes input only if condition is met. Otherwise outputs onFail value.',
     },
     web_fetch: {
       icon: '🌐',
       color: 'text-blue-400',
       bgColor: 'bg-blue-600',
+      bodyTintClass: 'bg-[#081018]',
       description: 'Fetches content from a URL. Supports GET/POST with headers and body.',
     },
     vector_index: {
       icon: '📚',
       color: 'text-green-400',
       bgColor: 'bg-green-600',
+      bodyTintClass: 'bg-[#081008]',
       description: 'Index a file into the vector store for semantic search. Enter file path.',
     },
     vector_search: {
       icon: '🔍',
       color: 'text-yellow-400',
       bgColor: 'bg-yellow-600',
+      bodyTintClass: 'bg-[#151206]',
       description: 'Search your indexed documents semantically. Enter search query.',
     },
     terminal_history: {
       icon: '📜',
       color: 'text-orange-400',
       bgColor: 'bg-orange-600',
+      bodyTintClass: 'bg-[#151008]',
       description: 'Query terminal conversation history. Enter search text or JSON query.',
     },
     music_gen: {
       icon: '🎵',
       color: 'text-violet-400',
       bgColor: 'bg-violet-600',
+      bodyTintClass: 'bg-[#100a16]',
       description: 'Generates music tracks using ACE-Step. Supports lyrics and style control.',
+    },
+    qdc_upload: {
+      icon: '📡',
+      color: 'text-teal-300',
+      bgColor: 'bg-teal-600',
+      bodyTintClass: 'bg-[#071312]',
+      description: 'Uploads an artifact path to the QDC remote lane.',
+    },
+    qdc_run: {
+      icon: '🚀',
+      color: 'text-emerald-300',
+      bgColor: 'bg-emerald-600',
+      bodyTintClass: 'bg-[#071208]',
+      description: 'Starts an asynchronous QDC remote job.',
+    },
+    qdc_status: {
+      icon: '🛰️',
+      color: 'text-sky-300',
+      bgColor: 'bg-sky-700',
+      bodyTintClass: 'bg-[#08111a]',
+      description: 'Looks up status for a QDC job id.',
+    },
+    qdc_results: {
+      icon: '📥',
+      color: 'text-indigo-300',
+      bgColor: 'bg-indigo-700',
+      bodyTintClass: 'bg-[#0a0d1a]',
+      description: 'Fetches final result for a QDC job id.',
     },
   }
 
@@ -275,6 +315,13 @@ export function NotebookCell({
         return 'JSON query: {"search": "keyword", "types": ["user", "ai"], "limit": 10}\n\nOr just text to search all terminal history'
       case 'music_gen':
         return 'Describe the music style (e.g., "Upbeat techno with synth leads", "Acoustic guitar ballad")...'
+      case 'qdc_upload':
+        return 'Artifact path to upload (e.g., /Users/me/model.onnx or ./artifacts/package.zip)'
+      case 'qdc_run':
+        return 'Remote job instructions (e.g., "Benchmark this model and summarize latency/accuracy")'
+      case 'qdc_status':
+      case 'qdc_results':
+        return 'QDC job id (e.g., qdc-job-1234abcd)'
       default:
         return 'Enter content...'
     }
@@ -358,7 +405,7 @@ export function NotebookCell({
       </div>
 
       {/* Body */}
-      <div className="p-4 bg-slate">
+      <div className={`p-4 border-l-2 ${config.bodyTintClass}`} style={{ borderLeftColor: 'rgba(51,255,0,0.2)' }}>
         {/* Type Description + Controls */}
         <div className="text-[10px] text-terminal-muted uppercase tracking-widest mb-3 flex items-center justify-between">
           <span>{config.description}</span>
@@ -440,6 +487,13 @@ export function NotebookCell({
           className={`relative ${isExpanded ? '' : 'overflow-y-auto'}`}
           style={isExpanded ? undefined : { maxHeight: CELL_BODY_MAX_HEIGHT }}
         >
+          {validationError && (
+            <div className="mb-3 border border-amber-500/60 bg-amber-900/15 p-2">
+              <div className="text-[9px] uppercase tracking-widest text-amber-400">Validation</div>
+              <div className="text-[10px] text-amber-300 mt-1">{validationError}</div>
+            </div>
+          )}
+
           {hasOverflow && !isExpanded && onExpand && (
             <button
               type="button"
@@ -806,7 +860,7 @@ export function NotebookCell({
                       <label className="text-[10px] text-terminal-muted uppercase tracking-wider">Generation Task</label>
                       <select
                         value={cell.musicTask || 'text2music'}
-                        onChange={(e) => onUpdate({ musicTask: e.target.value as any })}
+                        onChange={(e) => onUpdate({ musicTask: e.target.value as NonNullable<CellData['musicTask']> })}
                         className="bg-black/40 border border-violet-500/50 text-violet-300 text-[10px] rounded px-2 py-0.5 focus:outline-none"
                       >
                         <option value="text2music">Text to Music</option>
@@ -1159,10 +1213,11 @@ export function NotebookCell({
 
           <button
             onClick={onRun}
-            disabled={cell.status === 'running'}
+            disabled={cell.status === 'running' || !!validationError}
             className="btn-terminal text-xs disabled:opacity-50"
+            title={validationError || 'Run this cell'}
           >
-            {cell.status === 'running' ? 'RUNNING...' : '▶ RUN'}
+            {cell.status === 'running' ? 'Running...' : validationError ? 'Fix to Run' : 'Run'}
           </button>
         </div>
       </div >

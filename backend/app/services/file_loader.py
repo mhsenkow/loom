@@ -6,6 +6,7 @@ Supports multiple file formats with appropriate parsing
 import os
 import json
 import csv
+import logging
 from pathlib import Path
 from typing import Optional, Literal
 import base64
@@ -20,6 +21,7 @@ except ImportError:
 
 
 FileReadMode = Literal['raw', 'lines', 'json', 'csv', 'pdf', 'base64', 'auto']
+logger = logging.getLogger("loom.file_loader")
 
 
 class FileLoaderService:
@@ -37,9 +39,9 @@ class FileLoaderService:
         if create and not folder.exists():
             try:
                 folder.mkdir(parents=True, exist_ok=True)
-                print(f"[LOOM] Created data folder: {folder}")
+                logger.info("data_folder_created path=%s", folder)
             except Exception as e:
-                print(f"[LOOM] Failed to create data folder: {e}")
+                logger.exception("data_folder_create_failed path=%s", folder)
                 return False
         
         if folder.exists() and folder.is_dir():

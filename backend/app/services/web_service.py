@@ -3,8 +3,12 @@ from playwright.async_api import async_playwright
 from pathlib import Path
 import time
 import httpx
+import os
 from bs4 import BeautifulSoup
 import base64
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Stealth mode to avoid bot detection
 try:
@@ -12,7 +16,7 @@ try:
     HAS_STEALTH = True
 except ImportError:
     HAS_STEALTH = False
-    print("[LOOM] playwright-stealth not installed, using default browser")
+    logger.warning("playwright-stealth not installed, using default browser")
 
 # Readability for clean article extraction
 try:
@@ -20,7 +24,7 @@ try:
     HAS_READABILITY = True
 except ImportError:
     HAS_READABILITY = False
-    print("[LOOM] readability-lxml not installed, using fallback extraction")
+    logger.warning("readability-lxml not installed, using fallback extraction")
 
 # PyMuPDF for PDF extraction
 try:
@@ -28,7 +32,7 @@ try:
     HAS_PYMUPDF = True
 except ImportError:
     HAS_PYMUPDF = False
-    print("[LOOM] pymupdf not installed, PDF support disabled")
+    logger.warning("pymupdf not installed, PDF support disabled")
 
 # DuckDuckGo for search (new package name)
 try:
@@ -40,7 +44,7 @@ except ImportError:
         HAS_DDGS = True
     except ImportError:
         HAS_DDGS = False
-        print("[LOOM] ddgs not installed, /research disabled")
+        logger.warning("ddgs not installed, /research disabled")
 
 
 class WebService:
@@ -67,7 +71,7 @@ class WebService:
                 if len(text) > 200:
                     return text
             except Exception as e:
-                print(f"[LOOM] Readability failed, using fallback: {e}")
+                logger.debug("Readability failed, using fallback: %s", e)
         
         soup = BeautifulSoup(html, 'html.parser')
         for tag in soup(["script", "style", "nav", "footer", "iframe", "header", "aside"]):
@@ -114,7 +118,7 @@ class WebService:
                     
             return result
         except Exception as e:
-            print(f"[LOOM] Capture state error: {e}")
+            logger.exception("capture_page_state_error")
             return {"status": "error", "error": str(e), "url": url}
 
     async def visit(self, url: str, analyze_vision: bool = True, stateful: bool = True) -> dict:
@@ -140,7 +144,7 @@ class WebService:
             await stealth_async(page)
         
         try:
-            print(f"[LOOM] Visiting {url}...")
+            logger.info("visiting_url url=%s", url)
 
             # Handle PDF URLs directly
             if url.lower().endswith('.pdf') or url.lower().endswith('.pdf/'):
@@ -163,7 +167,7 @@ class WebService:
             
         except Exception as e:
             await context.close()
-            print(f"[LOOM] Web visit error: {e}")
+            logger.exception("web_visit_error url=%s", url)
             return {
                 "status": "error",
                 "error": str(e),
@@ -176,7 +180,7 @@ class WebService:
             return {"status": "error", "error": "PDF processing not available (install pymupdf)", "url": url}
         
         try:
-            print(f"[LOOM] Processing PDF: {url}")
+            logger.info("processing_pdf url=%s", url)
             
             # Use headers to mimic browser (avoid 403 blocks)
             headers = {
@@ -225,7 +229,7 @@ class WebService:
             }
             
         except Exception as e:
-            print(f"[LOOM] PDF Error: {e}")
+            logger.exception("pdf_processing_error url=%s", url)
             return {"status": "error", "error": f"PDF Error: {str(e)}", "url": url}
 
     async def interact_click(self, query: str) -> dict:
@@ -238,7 +242,7 @@ class WebService:
             # This is a simple heuristic. A better way uses LLM to find selector.
             # providing text=query is powerful in Playwright
             
-            print(f"[LOOM] Clicking '{query}'...")
+            logger.info("clicking_query query=%s", query)
             
             # Simple heuristic: try to find by text
             # Playwright's get_by_text is case-insensitive usually? No.
@@ -267,7 +271,7 @@ class WebService:
             return {"status": "error", "error": "No active web session."}
         
         try:
-            print(f"[LOOM] Typing '{text}' into '{query}'...")
+            logger.info("typing_into_query query=%s", query)
             await self.current_page.fill(f"text={query}", text) # Naive
             # Real impl needs better locator logic or AI locator resolution.
             # Fallback to get_by_placeholder?
@@ -316,9 +320,10 @@ class WebService:
             with open(filepath, "rb") as f:
                 image_b64 = base64.b64encode(f.read()).decode()
             
+            api_base_url = os.getenv("LOOM_INTERNAL_API_BASE_URL", "http://localhost:8000").rstrip("/")
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(
-                    "http://localhost:8000/api/images/analyze",
+                    f"{api_base_url}/api/images/analyze",
                     json={
                         "image_base64": image_b64,
                         "prompt": "Describe what you see on this webpage screenshot. Focus on visual elements like charts, images, layout, and any important visual information that wouldn't be captured in text."
@@ -329,7 +334,7 @@ class WebService:
                     if data.get("success"):
                         return data.get("analysis", "")
         except Exception as e:
-            print(f"[LOOM] Vision analysis failed: {e}")
+            logger.exception("vision_analysis_failed")
         return None
 
     async def research(self, query: str, max_results: int = 3) -> dict:
@@ -338,7 +343,7 @@ class WebService:
             return {"status": "error", "error": "DuckDuckGo search not installed"}
         
         await self._ensure_browser()
-        print(f"[LOOM] Researching: {query}")
+        logger.info("researching_query query=%s", query)
         
         try:
             import concurrent.futures
@@ -359,7 +364,7 @@ class WebService:
                 title = result.get("title", "Untitled")
                 if not url: continue
                 
-                print(f"[LOOM] Visiting result {i+1}/{len(results)}: {title[:50]}...")
+                logger.debug("visiting_search_result index=%s total=%s title=%s", i + 1, len(results), title[:50])
                 try:
                     # stateful=False for research to keep it isolated
                     page_result = await self.visit(url, analyze_vision=False, stateful=False)
@@ -371,7 +376,7 @@ class WebService:
                             "screenshot_url": page_result.get("screenshot_url")
                         })
                 except Exception as e:
-                    print(f"[LOOM] Failed to visit {url}: {e}")
+                    logger.warning("failed_to_visit_search_result url=%s error=%s", url, e)
                     continue
             
             if not sources:
@@ -384,7 +389,7 @@ class WebService:
                 "source_count": len(sources)
             }
         except Exception as e:
-            print(f"[LOOM] Research error: {e}")
+            logger.exception("research_error")
             return {"status": "error", "error": str(e)}
 
     async def cleanup(self):

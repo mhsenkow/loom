@@ -1,8 +1,10 @@
 """
 Backend executor for circuit board modules.
-Runs: data_input, log_entry, ai_processor, script_execution, data_loader, image_gen, vector_index, vector_search.
+Runs: data_input, log_entry, ai_processor, script_execution, data_loader, image_gen, vector_index, vector_search,
+qdc_upload, qdc_run, qdc_status, qdc_results.
 """
 
+import logging
 from typing import Any, Optional
 
 from app.services.ollama_client import OllamaClient
@@ -10,6 +12,9 @@ from app.services.file_loader import file_loader, FileReadMode
 from app.services.local_image_gen import local_image_gen
 from app.services.document_indexer import DocumentIndexer
 from app.services.vector_store import VectorStore
+from app.services.qdc_service import qdc_service
+
+logger = logging.getLogger("loom.module_executor")
 
 
 def _input_str(inputs: dict[str, Any]) -> str:
@@ -142,7 +147,12 @@ async def run_module(
             # Use the FILES collection by default for file-based searches
             collection = inputs.get("collection") or VectorStore.COLLECTION_FILES
             
-            print(f"[LOOM] Vector search: query='{query[:50]}...', n_results={n_results}, collection={collection}")
+            logger.debug(
+                "vector_search_started query_preview=%s n_results=%s collection=%s",
+                query[:80],
+                n_results,
+                collection,
+            )
             
             results = await vector_store.query(
                 query_text=query,
@@ -150,7 +160,7 @@ async def run_module(
                 collection_name=collection,
             )
             
-            print(f"[LOOM] Vector search returned {len(results)} results")
+            logger.debug("vector_search_completed result_count=%s", len(results))
             
             if not results:
                 return f"🔍 No results found for: '{query}'\n\nMake sure you have indexed some documents first using the INDEX cell."
@@ -176,9 +186,96 @@ async def run_module(
             
             return "\n".join(output_lines) + "\n\n---\n\n" + full_context
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            logger.exception("vector_search_failed query_preview=%s", query[:80])
             raise RuntimeError(f"Vector search failed: {e}")
+
+    if module_type == "qdc_upload":
+        artifact_path = (inp or content or "").strip()
+        if not artifact_path:
+            raise ValueError("No artifact path specified for QDC upload")
+        artifact = await qdc_service.upload_artifact(artifact_path)
+        return (
+            f"📡 QDC artifact uploaded\n"
+            f"ID: {artifact['id']}\n"
+            f"Path: {artifact['path']}\n"
+            f"Size: {artifact['size_bytes']} bytes"
+        )
+
+    if module_type == "qdc_run":
+        if content and "{{input}}" in content:
+            prompt = content.replace("{{input}}", inp)
+        elif content.strip():
+            prompt = f"{content}\n\n---\n\n{inp}" if inp else content
+        else:
+            prompt = inp
+        if not prompt.strip():
+            raise ValueError("No prompt specified for QDC run")
+
+        artifact_id = str(inputs.get("artifact_id") or "").strip() or None
+        artifact_path = str(inputs.get("artifact_path") or "").strip() or None
+        target = str(inputs.get("target") or "auto").strip() or "auto"
+        priority = str(inputs.get("priority") or "normal").strip() or "normal"
+        sid = str(inputs.get("sid") or "").strip() or None
+
+        job = await qdc_service.create_job(
+            prompt=prompt,
+            artifact_id=artifact_id,
+            artifact_path=artifact_path,
+            target=target,
+            priority=priority,
+            sid=sid,
+        )
+
+        wait_for_completion = bool(inputs.get("wait_for_completion", False))
+        if wait_for_completion:
+            timeout_s_raw = inputs.get("timeout_s", 240)
+            try:
+                timeout_s = float(timeout_s_raw)
+            except (TypeError, ValueError):
+                timeout_s = 240.0
+            final = await qdc_service.wait_for_job(job["id"], timeout_s=max(1.0, timeout_s))
+            return (
+                f"📡 QDC job completed\n"
+                f"ID: {final['id']}\n"
+                f"Status: {final['status']}\n"
+                f"Result: {final.get('result', {}).get('summary', 'n/a')}"
+            )
+
+        return (
+            f"📡 QDC job started\n"
+            f"ID: {job['id']}\n"
+            f"Status: {job['status']}\n"
+            f"Track with qdc_status/qdc_results."
+        )
+
+    if module_type == "qdc_status":
+        job_id = (inp or content or "").strip()
+        if not job_id:
+            raise ValueError("No QDC job id specified")
+        job = qdc_service.get_job(job_id)
+        if not job:
+            raise ValueError(f"QDC job not found: {job_id}")
+        return (
+            f"📡 QDC job status\n"
+            f"ID: {job['id']}\n"
+            f"Status: {job['status']}\n"
+            f"Target: {job['target']}\n"
+            f"Updated: {job['updated_at']}"
+        )
+
+    if module_type == "qdc_results":
+        job_id = (inp or content or "").strip()
+        if not job_id:
+            raise ValueError("No QDC job id specified")
+        result = qdc_service.get_job_result(job_id)
+        if not result:
+            return f"📡 QDC job {job_id} has no results yet."
+        summary = str(result.get("summary") or "")
+        return (
+            f"📡 QDC job result\n"
+            f"ID: {job_id}\n"
+            f"{summary}"
+        )
 
     # markdown, conditional, web_fetch, etc. – pass-through
     return inp

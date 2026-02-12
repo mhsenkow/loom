@@ -21,10 +21,13 @@ os.chdir(backend_dir)
 import uvicorn
 
 if __name__ == "__main__":
+    log_level = os.getenv("LOOM_LOG_LEVEL", "INFO").lower()
+    access_log = os.getenv("LOOM_ACCESS_LOG", "false").lower() in {"1", "true", "yes"}
     uvicorn.run(
         "app.main:socket_app",
         host="0.0.0.0",
         port=8000,
         reload=True,
-        log_level="info",
+        log_level=log_level,
+        access_log=access_log,
     )

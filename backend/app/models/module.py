@@ -19,6 +19,10 @@ class ModuleType(str, Enum):
     WEB_FETCH = "web_fetch"
     VECTOR_INDEX = "vector_index"
     VECTOR_SEARCH = "vector_search"
+    QDC_UPLOAD = "qdc_upload"
+    QDC_RUN = "qdc_run"
+    QDC_STATUS = "qdc_status"
+    QDC_RESULTS = "qdc_results"
 
 
 class ModuleStatus(str, Enum):

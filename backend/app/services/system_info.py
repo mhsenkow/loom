@@ -4,7 +4,10 @@ System information and hardware detection for model recommendations
 import platform
 import psutil
 import os
+import logging
 from typing import Dict, List, Tuple
+
+logger = logging.getLogger("loom.system_info")
 
 def get_system_info() -> Dict:
     """Get system hardware information"""
@@ -34,7 +37,7 @@ def get_system_info() -> Dict:
     except ImportError:
         pass
     except Exception as e:
-        print(f"[LOOM] Error detecting GPU: {e}")
+        logger.warning("gpu_detection_failed error=%s", e)
     
     return info
 

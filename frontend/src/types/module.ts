@@ -12,6 +12,10 @@ export type ModuleType =
   | 'vector_search'
   | 'terminal_history'
   | 'music_gen'
+  | 'qdc_upload'
+  | 'qdc_run'
+  | 'qdc_status'
+  | 'qdc_results'
 
 export type ModuleStatus = 'idle' | 'running' | 'success' | 'error'
 
@@ -45,7 +49,7 @@ export interface LogEntry {
   imageAnalysis?: string
   metadata?: {
     model?: string
-    [key: string]: any
+    [key: string]: unknown
   }
 }
 
@@ -56,11 +60,16 @@ export interface SystemStatus {
   activeModel?: string  // Chat model (preferred/selected)
   visionModel?: string  // Vision/image analysis model (preferred/selected)
   imageGenModel?: string  // Image generation model (preferred/selected)
+  ollamaModelsAvailable?: number
   ramTotalGb?: number
   ramAvailableGb?: number
   ramSystemUsedGb?: number
   ramModelUsedGb?: number
+  ramModelUsedSource?: string
   ramAvailableForModelsGb?: number
   ramUsedPercent?: number
+  ollamaProcessRssGb?: number
   loadedModelName?: string  // Currently loaded model in memory
+  defaultModelName?: string
+  modelStatus?: string
 }

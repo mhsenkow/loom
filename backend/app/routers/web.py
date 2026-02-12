@@ -1,5 +1,6 @@
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+import os
+from fastapi import APIRouter, Depends, Header, HTTPException
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 from typing import Optional, List
 from app.services.web_service import web_service
 
@@ -9,7 +10,7 @@ router = APIRouter(
 )
 
 class WebVisitRequest(BaseModel):
-    url: str
+    url: HttpUrl
     analyze_vision: bool = True  # Whether to run vision analysis on screenshot
 
 class WebVisitResponse(BaseModel):
@@ -22,8 +23,8 @@ class WebVisitResponse(BaseModel):
     error: Optional[str] = None
 
 class ResearchRequest(BaseModel):
-    query: str
-    max_results: int = 3
+    query: str = Field(min_length=2, max_length=500)
+    max_results: int = Field(default=3, ge=1, le=10)
 
 class SourceInfo(BaseModel):
     title: str
@@ -39,26 +40,46 @@ class ResearchResponse(BaseModel):
     error: Optional[str] = None
 
 class InteractionRequest(BaseModel):
-    query: Optional[str] = None # For click/type
-    text: Optional[str] = None  # For type
-    direction: Optional[str] = "down" # For scroll
+    query: Optional[str] = Field(default=None, max_length=300)  # For click/type
+    text: Optional[str] = Field(default=None, max_length=5000)  # For type
+    direction: Optional[str] = "down"  # For scroll
+
+    @field_validator("direction")
+    @classmethod
+    def validate_direction(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        normalized = value.lower()
+        if normalized not in {"up", "down"}:
+            raise ValueError("direction must be 'up' or 'down'")
+        return normalized
+
+
+def require_web_api_key(x_loom_api_key: Optional[str] = Header(default=None)) -> None:
+    configured_key = os.getenv("LOOM_WEB_API_KEY", "").strip()
+    if not configured_key:
+        return
+    if x_loom_api_key != configured_key:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 @router.post("/visit", response_model=WebVisitResponse)
-async def visit_website(request: WebVisitRequest):
+async def visit_website(request: WebVisitRequest, _: None = Depends(require_web_api_key)):
     """
     Visit a website using headless browser.
     Returns: title, cleaned article text (via Readability), screenshot, and optional vision analysis.
     """
     try:
         # Default to stateful=True for manual visits
-        result = await web_service.visit(request.url, analyze_vision=request.analyze_vision, stateful=True)
+        result = await web_service.visit(str(request.url), analyze_vision=request.analyze_vision, stateful=True)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/click", response_model=WebVisitResponse)
-async def click_element(request: InteractionRequest):
+async def click_element(request: InteractionRequest, _: None = Depends(require_web_api_key)):
     """Click an element on the current page."""
+    if not request.query:
+        raise HTTPException(status_code=400, detail="Missing click query")
     try:
         result = await web_service.interact_click(request.query)
         return result
@@ -66,8 +87,12 @@ async def click_element(request: InteractionRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/type", response_model=WebVisitResponse)
-async def type_text(request: InteractionRequest):
+async def type_text(request: InteractionRequest, _: None = Depends(require_web_api_key)):
     """Type text into an element."""
+    if not request.query:
+        raise HTTPException(status_code=400, detail="Missing target query")
+    if not request.text:
+        raise HTTPException(status_code=400, detail="Missing text to type")
     try:
         result = await web_service.interact_type(request.query, request.text)
         return result
@@ -75,7 +100,7 @@ async def type_text(request: InteractionRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/scroll", response_model=WebVisitResponse)
-async def scroll_page(request: InteractionRequest):
+async def scroll_page(request: InteractionRequest, _: None = Depends(require_web_api_key)):
     """Scroll the current page."""
     try:
         result = await web_service.interact_scroll(request.direction)
@@ -84,7 +109,7 @@ async def scroll_page(request: InteractionRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/back", response_model=WebVisitResponse)
-async def go_back():
+async def go_back(_: None = Depends(require_web_api_key)):
     """Go back in browser history."""
     try:
         result = await web_service.go_back()
@@ -93,7 +118,7 @@ async def go_back():
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/research", response_model=ResearchResponse)
-async def deep_research(request: ResearchRequest):
+async def deep_research(request: ResearchRequest, _: None = Depends(require_web_api_key)):
     """
     Deep Search: Searches DuckDuckGo, visits top results, extracts content.
     Returns combined research context from multiple sources.
@@ -104,6 +129,4 @@ async def deep_research(request: ResearchRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.on_event("shutdown")
-async def shutdown_event():
-    await web_service.cleanup()
+# Web service cleanup is handled by app lifespan in app/main.py.

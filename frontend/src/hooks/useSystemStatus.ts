@@ -1,10 +1,110 @@
 import { useEffect, useCallback } from 'react'
 import { useSystemStore, CloudModelInfo } from '../store/systemStore'
+import { API_BASE_URL } from '../config/api'
+import { requestJson } from '../utils/apiClient'
 
-const BACKEND_URL = 'http://localhost:8000'
+const BACKEND_URL = API_BASE_URL
+const HEALTH_POLL_INTERVAL_MS = 5000
+const MAX_INIT_RETRIES = 30
+const CHAT_MODEL_EXCLUDE_KEYWORDS = ['embed', 'llava', 'bakllava', 'moondream', 'vision', 'flux', 'stable-diffusion', 'sd3']
+const VISION_MODEL_KEYWORDS = ['llava', 'bakllava', 'moondream', 'vision']
+const IMAGE_GEN_MODEL_KEYWORDS = ['flux', 'flux2', 'stable-diffusion']
+
+let statusConsumerCount = 0
+let healthPollInterval: ReturnType<typeof setInterval> | null = null
+let providerUpdateHandler: (() => void) | null = null
+let visibilityChangeHandler: (() => void) | null = null
+let initInProgress = false
+let currentCheckHealth: (() => Promise<unknown>) | null = null
+let currentFetchModels: (() => Promise<string[]>) | null = null
+let currentFetchCloudModels: (() => Promise<void>) | null = null
 
 // Re-export type for compatibility
 export type { CloudModelInfo }
+
+interface HealthResponse {
+  ollama?: {
+    connected?: boolean
+    models_available?: number
+  }
+  memory?: {
+    ram_total_gb?: number
+    ram_available_gb?: number
+    ram_system_used_gb?: number
+    ram_model_used_gb?: number
+    ram_model_used_source?: string
+    ram_available_for_models_gb?: number
+    ram_used_percent?: number
+    loaded_model_name?: string | null
+    default_model?: string
+    model_status?: string
+    ollama_process_rss_gb?: number | null
+  }
+}
+
+interface ModelRecord {
+  name?: string
+}
+
+interface ModelsResponse {
+  models?: unknown[] | Record<string, unknown>
+}
+
+function isOllamaReady(health: unknown): boolean {
+  if (!health || typeof health !== 'object') return false
+  const ollama = (health as HealthResponse).ollama
+  return Boolean(ollama?.connected)
+}
+
+function normalizeModelName(entry: unknown): string | null {
+  if (typeof entry === 'string') {
+    return entry
+  }
+  if (entry && typeof entry === 'object' && 'name' in entry) {
+    const modelName = (entry as ModelRecord).name
+    return typeof modelName === 'string' ? modelName : null
+  }
+  return null
+}
+
+function extractModelNames(payload: unknown): string[] {
+  const raw = payload as ModelsResponse | unknown[]
+  let modelsList: unknown[] = []
+
+  if (Array.isArray(raw)) {
+    modelsList = raw
+  } else if (raw && typeof raw === 'object' && 'models' in raw) {
+    const models = (raw as ModelsResponse).models
+    if (Array.isArray(models)) {
+      modelsList = models
+    } else if (models && typeof models === 'object') {
+      modelsList = Object.values(models)
+    }
+  }
+
+  return modelsList
+    .map(normalizeModelName)
+    .filter((name): name is string => Boolean(name && name !== 'unknown'))
+}
+
+function pickChatModel(modelNames: string[]): string | undefined {
+  return modelNames.find(modelName => {
+    const lowerName = modelName.toLowerCase()
+    return !CHAT_MODEL_EXCLUDE_KEYWORDS.some(keyword => lowerName.includes(keyword))
+  })
+}
+
+function pickVisionModel(modelNames: string[]): string | undefined {
+  return modelNames.find(modelName =>
+    VISION_MODEL_KEYWORDS.some(keyword => modelName.toLowerCase().includes(keyword)),
+  )
+}
+
+function pickImageGenModel(modelNames: string[]): string | undefined {
+  return modelNames.find(modelName =>
+    IMAGE_GEN_MODEL_KEYWORDS.some(keyword => modelName.toLowerCase().includes(keyword)),
+  )
+}
 
 export function useSystemStatus() {
   const {
@@ -22,147 +122,72 @@ export function useSystemStatus() {
   // Check backend health
   const checkHealth = useCallback(async () => {
     try {
-      const response = await fetch(`${BACKEND_URL}/health`, {
+      const data = await requestJson<HealthResponse>(`${BACKEND_URL}/health`, {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        // Add timeout
-        signal: AbortSignal.timeout(5000),
+        timeoutMs: 5000,
       })
-      if (response.ok) {
-        const data = await response.json()
-        setStatus((prev) => ({
-          ...prev,
-          connected: true,
-          ramTotalGb: data.memory?.ram_total_gb,
-          ramAvailableGb: data.memory?.ram_available_gb,
-          ramSystemUsedGb: data.memory?.ram_system_used_gb,
-          ramModelUsedGb: data.memory?.ram_model_used_gb,
-          ramAvailableForModelsGb: data.memory?.ram_available_for_models_gb,
-          ramUsedPercent: data.memory?.ram_used_percent,
-          loadedModelName: data.memory?.loaded_model_name,
-        }))
-        return data
-      } else {
-        setStatus((prev) => ({
-          ...prev,
-          connected: false,
-        }))
-      }
-    } catch (error) {
-      // Only log if it's not a timeout or abort
-      if (error instanceof Error && error.name !== 'AbortError' && error.name !== 'TimeoutError') {
-        console.debug('[LOOM] Health check failed:', error.message)
-      }
       setStatus((prev) => ({
         ...prev,
-        connected: false,
+        connected: Boolean(data.ollama?.connected),
+        ollamaModelsAvailable: data.ollama?.models_available,
+        ramTotalGb: data.memory?.ram_total_gb,
+        ramAvailableGb: data.memory?.ram_available_gb,
+        ramSystemUsedGb: data.memory?.ram_system_used_gb,
+        ramModelUsedGb: data.memory?.ram_model_used_gb,
+        ramModelUsedSource: data.memory?.ram_model_used_source,
+        ramAvailableForModelsGb: data.memory?.ram_available_for_models_gb,
+        ramUsedPercent: data.memory?.ram_used_percent,
+        ollamaProcessRssGb: data.memory?.ollama_process_rss_gb ?? undefined,
+        loadedModelName: data.memory?.loaded_model_name ?? undefined,
+        defaultModelName: data.memory?.default_model ?? undefined,
+        modelStatus: data.memory?.model_status ?? undefined,
       }))
+      return data
+    } catch {
+      setStatus(prev => ({ ...prev, connected: false }))
     }
     return null
   }, [setStatus])
 
   // Fetch available models
   const fetchModels = useCallback(async () => {
-    // First check if backend is reachable
-    // Skip health check here to avoid infinite loop or double check, relying on checkHealth in effects
-    // But for direct calls, we might want it.
-
     try {
-      const response = await fetch(`${BACKEND_URL}/api/models`, {
+      const payload = await requestJson<ModelsResponse | unknown[]>(`${BACKEND_URL}/api/models`, {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        // Add timeout
-        signal: AbortSignal.timeout(10000),
+        timeoutMs: 10000,
       })
-
-      if (!response.ok) {
-        console.error('[LOOM] Failed to fetch models:', {
-          status: response.status,
-          statusText: response.statusText,
-        })
-        return []
-      }
-
-      const data = await response.json()
-      console.log('[LOOM] Models API response:', data)
-
-      // Handle different response formats
-      let modelsList = []
-      if (Array.isArray(data.models)) {
-        modelsList = data.models
-      } else if (Array.isArray(data)) {
-        modelsList = data
-      } else if (data.models && typeof data.models === 'object') {
-        modelsList = Object.values(data.models)
-      }
-
-      const modelNames = modelsList
-        .map((m: any) => {
-          // Handle both object and string formats
-          if (typeof m === 'string') return m
-          if (typeof m === 'object' && m.name) return m.name
-          return null
-        })
-        .filter((name: string | null): name is string => name !== null && name !== 'unknown')
-
-      console.log('[LOOM] Parsed model names:', modelNames)
+      const modelNames = extractModelNames(payload)
       setModels(modelNames)
 
       // Set first non-embedding model as active if not set
       if (modelNames.length > 0) {
-        // Only set defaults if explicitly undefined, to respect user choice (even if 'auto' or empty string)
         useSystemStore.setState(state => {
-          let updates: any = {}
+          const updates: Partial<typeof state.status> = {}
 
           if (!state.status.activeModel) {
-            // Find chat model (non-embedding, non-vision)
-            const chatModel = modelNames.find((n: string) =>
-              !n.includes('embed') &&
-              !n.toLowerCase().includes('llava') &&
-              !n.toLowerCase().includes('bakllava') &&
-              !n.toLowerCase().includes('moondream') &&
-              !n.toLowerCase().includes('vision') &&
-              !n.toLowerCase().includes('flux') &&
-              !n.toLowerCase().includes('stable-diffusion') &&
-              !n.toLowerCase().includes('sd3')
-            )
+            const chatModel = pickChatModel(modelNames)
             if (chatModel) updates.activeModel = chatModel
           }
 
           if (!state.status.visionModel) {
-            const visionKeywords = ['llava', 'bakllava', 'moondream', 'vision']
-            const visionModel = modelNames.find((n: string) =>
-              visionKeywords.some(keyword => n.toLowerCase().includes(keyword))
-            )
+            const visionModel = pickVisionModel(modelNames)
             if (visionModel) updates.visionModel = visionModel
           }
 
           if (!state.status.imageGenModel) {
-            const imageGenKeywords = ['flux', 'flux2', 'stable-diffusion']
-            const imageGenModel = modelNames.find((n: string) =>
-              imageGenKeywords.some(keyword => n.toLowerCase().includes(keyword))
-            )
+            const imageGenModel = pickImageGenModel(modelNames)
             if (imageGenModel) updates.imageGenModel = imageGenModel
           }
 
           if (Object.keys(updates).length > 0) {
             setStatus(prev => ({ ...prev, ...updates }))
           }
-          return state // Return is ignored by setState here actually, but sticking to pattern
+          return state
         })
       }
 
       return modelNames
-    } catch (error) {
-      if (error instanceof TypeError && error.message === 'Failed to fetch') {
-        console.debug('[LOOM] Backend not available yet (this is normal during startup)')
-      } else if (error instanceof Error && error.name !== 'AbortError' && error.name !== 'TimeoutError') {
-        console.error('[LOOM] Failed to fetch models:', error)
-      }
+    } catch {
       return []
     }
   }, [setModels, setStatus])
@@ -170,69 +195,111 @@ export function useSystemStatus() {
   // Fetch unified cloud model list
   const fetchCloudModels = useCallback(async () => {
     try {
-      const response = await fetch(`${BACKEND_URL}/api/providers/models/all`, {
-        signal: AbortSignal.timeout(10000),
+      const data = await requestJson<{ models?: CloudModelInfo[] }>(`${BACKEND_URL}/api/providers/models/all`, {
+        timeoutMs: 10000,
       })
-      if (response.ok) {
-        const data = await response.json()
-        setCloudModels(data.models || [])
-      }
-    } catch (e) {
+      setCloudModels(data.models || [])
+    } catch {
       // Silently fail — cloud models are optional
     }
   }, [setCloudModels])
 
-  // Poll health on mount and fetch models when backend is ready
+  // Keep background polling singleton-safe even if multiple components call this hook.
   useEffect(() => {
-    let retryCount = 0
-    const maxRetries = 30 // Try for 30 seconds (30 * 1s)
+    currentCheckHealth = checkHealth
+    currentFetchModels = fetchModels
+    currentFetchCloudModels = fetchCloudModels
+    statusConsumerCount += 1
 
-    const init = async () => {
-      // Try to connect with exponential backoff
-      while (retryCount < maxRetries) {
-        const health = await checkHealth()
-        if (health) {
-          // Backend is ready, fetch models
-          const modelList = await fetchModels()
-          if (modelList.length > 0) {
-            console.log(`[LOOM] Successfully loaded ${modelList.length} models`)
-            break
+    const runInitialBootstrap = async () => {
+      if (initInProgress) return
+      initInProgress = true
+      let retryCount = 0
+
+      try {
+        while (retryCount < MAX_INIT_RETRIES) {
+          const check = currentCheckHealth
+          const fetchModelList = currentFetchModels
+          if (!check || !fetchModelList) break
+
+          const health = await check()
+          if (isOllamaReady(health)) {
+            const modelList = await fetchModelList()
+            if (modelList.length > 0) {
+              return
+            }
+          }
+
+          retryCount += 1
+          if (retryCount < MAX_INIT_RETRIES) {
+            const delay = Math.min(1000 * Math.pow(1.2, retryCount - 1), 2000)
+            await new Promise(resolve => setTimeout(resolve, delay))
           }
         }
 
-        retryCount++
-        if (retryCount < maxRetries) {
-          // Wait before retrying (exponential backoff, max 2s)
-          const delay = Math.min(1000 * Math.pow(1.2, retryCount - 1), 2000)
-          await new Promise(resolve => setTimeout(resolve, delay))
+        if (retryCount >= MAX_INIT_RETRIES) {
+          console.warn('[LOOM] Backend connection timeout - make sure backend is running')
         }
-      }
-
-      if (retryCount >= maxRetries) {
-        console.warn('[LOOM] Backend connection timeout - make sure backend is running')
+      } finally {
+        initInProgress = false
       }
     }
 
-    init()
+    void runInitialBootstrap()
 
-    // Continue polling every 10s for health and models
-    const interval = setInterval(async () => {
-      const health = await checkHealth()
-      if (health && models.length === 0) {
-        // Retry fetching models if we don't have any yet
-        await fetchModels()
+    if (healthPollInterval === null) {
+      healthPollInterval = setInterval(async () => {
+        if (document.visibilityState !== 'visible') {
+          return
+        }
+        const check = currentCheckHealth
+        if (!check) return
+
+        const health = await check()
+        if (isOllamaReady(health) && useSystemStore.getState().models.length === 0) {
+          await currentFetchModels?.()
+        }
+      }, HEALTH_POLL_INTERVAL_MS)
+    }
+
+    if (providerUpdateHandler === null) {
+      providerUpdateHandler = () => {
+        void currentFetchCloudModels?.()
       }
-    }, 5000) // Check every 5s for memory updates
-    return () => clearInterval(interval)
-  }, [checkHealth, fetchModels, models.length])
+      window.addEventListener('loom:providers_updated', providerUpdateHandler)
+    }
+    if (visibilityChangeHandler === null) {
+      visibilityChangeHandler = () => {
+        if (document.visibilityState !== 'visible') return
+        void currentCheckHealth?.().then(health => {
+          if (isOllamaReady(health) && useSystemStore.getState().models.length === 0) {
+            void currentFetchModels?.()
+          }
+        })
+      }
+      window.addEventListener('visibilitychange', visibilityChangeHandler)
+    }
+    void currentFetchCloudModels?.()
 
-  // Fetch cloud models on mount and when providers change
-  useEffect(() => {
-    fetchCloudModels()
-    const handler = () => fetchCloudModels()
-    window.addEventListener('loom:providers_updated', handler)
-    return () => window.removeEventListener('loom:providers_updated', handler)
-  }, [fetchCloudModels])
+    return () => {
+      statusConsumerCount = Math.max(0, statusConsumerCount - 1)
+
+      if (statusConsumerCount === 0) {
+        if (healthPollInterval !== null) {
+          clearInterval(healthPollInterval)
+          healthPollInterval = null
+        }
+        if (providerUpdateHandler) {
+          window.removeEventListener('loom:providers_updated', providerUpdateHandler)
+          providerUpdateHandler = null
+        }
+        if (visibilityChangeHandler) {
+          window.removeEventListener('visibilitychange', visibilityChangeHandler)
+          visibilityChangeHandler = null
+        }
+      }
+    }
+  }, [checkHealth, fetchModels, fetchCloudModels])
 
   return {
     status,

@@ -1,5 +1,6 @@
 
 import { useState, useEffect } from 'react'
+import { API_BASE_URL } from '../../config/api'
 
 interface OrchestratorSettingsProps {
     className?: string
@@ -23,6 +24,11 @@ interface ScoredModel {
     }
 }
 
+interface ModelCandidate {
+    name: string
+    details: ScoredModel['details']
+}
+
 export function OrchestratorSettings({ className = '' }: OrchestratorSettingsProps) {
     const [config, setConfig] = useState<OrchestratorConfig>({
         weight_speed: 0.5,
@@ -35,7 +41,7 @@ export function OrchestratorSettings({ className = '' }: OrchestratorSettingsPro
 
     // Fetch settings on mount
     useEffect(() => {
-        fetch('http://localhost:8000/api/orchestrator/settings')
+        fetch(`${API_BASE_URL}/api/orchestrator/settings`)
             .then(res => res.json())
             .then(data => setConfig(data))
             .catch(err => console.error("Failed to load orchestrator settings", err))
@@ -44,7 +50,7 @@ export function OrchestratorSettings({ className = '' }: OrchestratorSettingsPro
     // Simulate scoring logic locally for immediate visual feedback
     // (In a real app, we might debounce and ask backend to score, but this is faster UI)
     useEffect(() => {
-        const calculateScore = (m: any) => {
+        const calculateScore = (m: ModelCandidate) => {
             return (
                 (m.details.speed * config.weight_speed) +
                 (m.details.cost * config.weight_cost) +
@@ -53,7 +59,7 @@ export function OrchestratorSettings({ className = '' }: OrchestratorSettingsPro
         }
 
         // Mock data representing typical models
-        const models = [
+        const models: ModelCandidate[] = [
             { name: "llama3.1:8b (Local)", details: { speed: 0.9, cost: 1.0, quality: 0.7 } },
             { name: "mistral:7b (Local)", details: { speed: 0.85, cost: 1.0, quality: 0.65 } },
             { name: "gpt-4o (Cloud)", details: { speed: 0.95, cost: 0.0, quality: 0.95 } },
@@ -72,7 +78,7 @@ export function OrchestratorSettings({ className = '' }: OrchestratorSettingsPro
     const saveSettings = async (newConfig: OrchestratorConfig) => {
         setConfig(newConfig)
         try {
-            await fetch('http://localhost:8000/api/orchestrator/settings', {
+            await fetch(`${API_BASE_URL}/api/orchestrator/settings`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(newConfig)

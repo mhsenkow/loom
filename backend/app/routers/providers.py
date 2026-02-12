@@ -85,3 +85,13 @@ async def all_models():
     """Return a unified list of models from local (Ollama) + all connected cloud providers."""
     models = await provider_manager.list_all_models()
     return {"models": models}
+
+
+@router.get("/quick-model")
+async def quick_model(active_model: str | None = None):
+    """
+    Suggest a fast, low-cost model for non-critical prompts.
+    Prefers free/cheap cloud models, then tiny local fallbacks.
+    """
+    suggestion = await provider_manager.suggest_quick_model(active_model=active_model)
+    return suggestion

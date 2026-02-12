@@ -550,7 +550,6 @@ export function AvatarCanvas({
     geometry.setAttribute('layer', new THREE.BufferAttribute(layers, 1))
     geometry.setAttribute('color', new THREE.BufferAttribute(colorAttrib, 3))
 
-    const sens = config.audioSensitivity * (audioSensitivityOverride ?? 1)
     const material = new THREE.ShaderMaterial({
       vertexShader: VERTEX_SHADER,
       fragmentShader: FRAGMENT_SHADER,

@@ -1,10 +1,13 @@
 import { ModelSelector } from '../terminal/ModelSelector'
+import type { CrtIntensityPreset } from './SettingsModal'
 
 interface TitleBarProps {
   viewMode: 'terminal' | 'circuit'
   onViewModeChange: (mode: 'terminal' | 'circuit') => void
   crtEnabled: boolean
+  crtIntensity: CrtIntensityPreset
   onCrtToggle: () => void
+  onShortcutsClick: () => void
   onSettingsClick: () => void
 }
 
@@ -12,7 +15,9 @@ export function TitleBar({
   viewMode,
   onViewModeChange,
   crtEnabled,
+  crtIntensity,
   onCrtToggle,
+  onShortcutsClick,
   onSettingsClick,
 }: TitleBarProps) {
   const handleMinimize = () => window.electronAPI?.minimize()
@@ -67,7 +72,18 @@ export function TitleBar({
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           title="Toggle CRT Effect"
         >
-          CRT: {crtEnabled ? 'ON' : 'OFF'}
+          CRT: {crtEnabled ? `${crtIntensity.toUpperCase()}` : 'OFF'}
+        </button>
+
+        {/* Shortcuts */}
+        <button
+          onClick={onShortcutsClick}
+          className="text-xs px-2 py-1 border border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor transition-none"
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          title="Keyboard Shortcuts (Ctrl/Cmd+/)"
+          aria-label="Open keyboard shortcuts"
+        >
+          ⌨ SHORTCUTS
         </button>
 
         {/* Settings */}

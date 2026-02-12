@@ -1,7 +1,6 @@
 import { useCallback, useState, useEffect, useRef } from 'react'
 import ReactFlow, {
   Node,
-  Edge,
   Controls,
   Background,
   BackgroundVariant,
@@ -17,13 +16,25 @@ import { LinearView } from './LinearView'
 import { FloatingToolbar } from './FloatingToolbar'
 import { TemplatesSidebar, NotebookTemplate } from './TemplatesSidebar'
 import { LoopBackEdge } from './LoopBackEdge'
-import type { ModuleType, ModuleStatus } from '../../types/module'
+import type { LogEntry, ModuleType, ModuleStatus } from '../../types/module'
 import { useSocket } from '../../hooks/useSocket'
 import { useSystemStatus } from '../../hooks/useSystemStatus'
 import { useSendToTerminal } from '../../hooks/useTerminalOutput'
 import { saveCircuit, saveModelSlots, loadModelSlots, SavedCircuit } from '../../hooks/useCircuitRunner'
 import { loadModulesFromBackend, saveModuleToBackend, deleteModuleFromBackend } from '../../hooks/useModules'
 import { ProviderSetup } from '../terminal/ProviderSetup'
+import { DialogModal } from '../shell/DialogModal'
+import { API_BASE_URL } from '../../config/api'
+import { cellsToNodes, defaultEdgeOptions, generateEdges, getNodePosition } from './circuitLayout'
+import { fetchImageModels, IMAGE_MODELS_UPDATED_EVENT } from '../../utils/imageModelsApi'
+import { showErrorToast, showInfoToast, showSuccessToast } from '../../utils/uiNotifications'
+import {
+  buildTerminalHistoryQuery,
+  formatNoTerminalHistoryResults,
+  formatTerminalHistoryEntries,
+  formatVectorSearchResults,
+  type VectorSearchResult,
+} from '../../utils/circuitExecutionUtils'
 
 type ViewMode = 'linear' | 'canvas'
 
@@ -43,6 +54,8 @@ const SLOT_LABELS: Record<ModelSlot, { label: string; desc: string; color: strin
   C: { label: 'C', desc: 'Fast', color: '#ff9500' },
 }
 
+const IMAGE_SLOT_DEFAULT = 'openai:dall-e-3'
+
 // Register custom node types
 const nodeTypes = {
   module: ModuleNode,
@@ -51,13 +64,6 @@ const nodeTypes = {
 // Register custom edge types
 const edgeTypes = {
   loopback: LoopBackEdge,
-}
-
-// Custom edge options for orthogonal routing
-const defaultEdgeOptions = {
-  type: 'smoothstep',
-  animated: false,
-  style: { stroke: '#33ff00', strokeWidth: 2 },
 }
 
 // How a cell receives input from previous cells
@@ -102,6 +108,13 @@ export interface CellData {
   musicRepaintEnd?: number
   musicTargetPrompt?: string
   musicTargetLyrics?: string
+  // Terminal history query overrides
+  terminalHistorySearch?: string
+  terminalHistoryTypes?: LogEntry['type'][]
+  terminalHistoryLimit?: number
+  terminalHistorySince?: number
+  terminalHistoryBefore?: number
+  terminalHistorySession?: string
 }
 
 // Initial demo cells with better defaults
@@ -133,74 +146,69 @@ const initialCells: CellData[] = [
   },
 ]
 
-// Canvas layout: zigzag down the canvas with more spacing; conditionals add a branch offset
-const LAYOUT = { BASE_X: 180, BASE_Y: 60, STEP_X: 420, STEP_Y: 280, BRANCH_OFFSET: 100 }
+const CHAT_MODEL_EXCLUDE = ['llava', 'bakllava', 'vision', 'moondream', 'flux', 'stable-diffusion', 'sdxl']
+const FAST_MODEL_HINTS = ['tiny', 'mini', '1.5b', '2b', '3b', 'q4', 'q3']
+const CRITICAL_MODEL_HINTS = ['70b', '32b', '27b', '14b', 'mixtral', 'qwen2.5']
 
-function getNodePosition(index: number, cells: CellData[]): { x: number; y: number } {
-  const prevIsConditional = index > 0 && cells[index - 1].type === 'conditional'
-  const col = index % 2
-  const x = LAYOUT.BASE_X + col * LAYOUT.STEP_X + (prevIsConditional ? LAYOUT.BRANCH_OFFSET : 0)
-  const y = LAYOUT.BASE_Y + index * LAYOUT.STEP_Y
-  return { x, y }
+function isLikelyChatModel(model: string): boolean {
+  const lower = model.toLowerCase()
+  return !CHAT_MODEL_EXCLUDE.some(keyword => lower.includes(keyword))
 }
 
-// Convert cells to React Flow nodes
-function cellsToNodes(cells: CellData[]): Node[] {
-  return cells.map((cell, index) => ({
-    id: cell.id,
-    type: 'module',
-    position: getNodePosition(index, cells),
-    data: {
-      label: cell.label,
-      moduleType: cell.type,
-      status: cell.status,
-      content: cell.content,
-    },
-  }))
+function pickModelByHints(models: string[], hints: string[]): string | null {
+  const match = models.find(model => hints.some(hint => model.toLowerCase().includes(hint)))
+  return match ?? null
 }
 
-// Generate edges between sequential nodes + loop-back edges
-function generateEdges(cells: CellData[]): Edge[] {
-  const edges: Edge[] = []
+function validateCell(cell: CellData, index: number): string | null {
+  const content = (cell.content || '').trim()
+  const inputMode = cell.inputMode || 'previous'
+  const expectsInlineContent = index === 0 || inputMode === 'none'
 
-  // Forward edges (sequential flow)
-  for (let i = 0; i < cells.length - 1; i++) {
-    edges.push({
-      id: `e-${cells[i].id}-${cells[i + 1].id}`,
-      source: cells[i].id,
-      target: cells[i + 1].id,
-      ...defaultEdgeOptions,
-    })
+  switch (cell.type) {
+    case 'data_input':
+      return content ? null : 'Input cell is empty. Add a prompt or data first.'
+    case 'ai_processor':
+      if (!expectsInlineContent) return null
+      return content ? null : 'AI cell has no prompt. Add instructions or switch Input mode.'
+    case 'script_execution':
+      return content ? null : 'Script cell is empty. Add a transform template.'
+    case 'data_loader':
+      return content ? null : 'Data cell needs a file path. Use Browse Files or type one.'
+    case 'web_fetch':
+      return content ? null : 'Fetch cell needs a URL. Example: https://example.com'
+    case 'vector_index':
+      if (!expectsInlineContent) return null
+      return content ? null : 'Index cell needs a file path to index.'
+    case 'vector_search':
+      if (!expectsInlineContent) return null
+      return content ? null : 'Search cell needs a query.'
+    case 'conditional':
+      return (cell.conditionValue || '').trim()
+        ? null
+        : 'Conditional cell needs a condition value.'
+    case 'music_gen':
+      if (!expectsInlineContent) return null
+      return (cell.musicStyle || content).trim()
+        ? null
+        : 'Music cell needs a style/prompt.'
+    case 'qdc_upload':
+      if (!expectsInlineContent) return null
+      return content ? null : 'QDC Upload needs a file/folder path.'
+    case 'qdc_run':
+      if (!expectsInlineContent) return null
+      return content ? null : 'QDC Run needs job instructions.'
+    case 'qdc_status':
+    case 'qdc_results':
+      if (!expectsInlineContent) return null
+      return content ? null : 'Provide a QDC job id.'
+    default:
+      return null
   }
-
-  // Loop-back edges (from conditional cells with loopBackTo)
-  for (let i = 0; i < cells.length; i++) {
-    const cell = cells[i]
-    if (cell.type === 'conditional' && cell.loopBackTo && cell.loopBackTo > 0 && cell.loopBackTo <= i + 1) {
-      // loopBackTo is 1-based, convert to 0-based index
-      const targetIndex = cell.loopBackTo - 1
-      const targetCell = cells[targetIndex]
-      if (targetCell) {
-        edges.push({
-          id: `loopback-${cell.id}-${targetCell.id}`,
-          source: cell.id,
-          target: targetCell.id,
-          type: 'loopback',
-          animated: true,
-          updatable: true, // Allow dragging to change target
-          style: { stroke: '#a855f7', strokeWidth: 2, strokeDasharray: '8,4' },
-          // Store metadata for updating
-          data: { cellId: cell.id, loopBackTo: cell.loopBackTo },
-        })
-      }
-    }
-  }
-
-  return edges
 }
-
 
 export function CircuitBoard() {
+  const rootRef = useRef<HTMLDivElement | null>(null)
   const [viewMode, setViewMode] = useState<ViewMode>('linear')
   const [cells, setCells] = useState<CellData[]>(initialCells)
   const [isRunning, setIsRunning] = useState(false)
@@ -208,6 +216,9 @@ export function CircuitBoard() {
   const [showModelConfig, setShowModelConfig] = useState(false)
   const [circuitName, setCircuitName] = useState<string>('')
   const [showSaveSuccess, setShowSaveSuccess] = useState(false)
+  const [infoDialog, setInfoDialog] = useState<{ title: string; message: string } | null>(null)
+  const [deleteCellDialog, setDeleteCellDialog] = useState<{ id: string; label: string } | null>(null)
+  const [clearBoardDialogOpen, setClearBoardDialogOpen] = useState(false)
 
   const { sendChat } = useSocket()
   const { status, models, cloudModels } = useSystemStatus()
@@ -225,48 +236,63 @@ export function CircuitBoard() {
   const [currentImageModel, setCurrentImageModel] = useState<string | null>(null)
 
   useEffect(() => {
-    const fetchImageModels = async () => {
+    const chatModels = models.filter(isLikelyChatModel)
+    if (chatModels.length === 0) return
+
+    setModelSlots(prev => {
+      const next: ModelSlotConfig = { ...prev }
+      const fast = pickModelByHints(chatModels, FAST_MODEL_HINTS) || chatModels[0]
+      const critical = pickModelByHints(chatModels, CRITICAL_MODEL_HINTS) || chatModels[Math.min(1, chatModels.length - 1)] || chatModels[0]
+      const creative = chatModels[0]
+      const fallbackImage = currentImageModel || imageModels[0]?.name || IMAGE_SLOT_DEFAULT
+
+      if (!next.A) next.A = creative
+      if (!next.B) next.B = critical
+      if (!next.C) next.C = fast
+      if (!next.IMAGE) next.IMAGE = fallbackImage
+      return next
+    })
+  }, [models, currentImageModel, imageModels])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const refreshImageModels = async (force = false) => {
       try {
-        const response = await fetch('http://localhost:8000/api/images/models')
-        if (response.ok) {
-          const data = await response.json()
-          // Use the combined 'local' array which contains only actually available models
-          const availableModels = data.local || []
-          const models = availableModels
-            .map((m: any) => ({
-              name: typeof m === 'string' ? m : (m.name || m),
-              vram: m.vram || 'unknown',
-              type: m.type || 'unknown',
-            }))
-            .filter((m: any) => m.name) // Filter out any invalid entries
+        const data = await fetchImageModels(API_BASE_URL, { force })
+        if (cancelled) return
 
-          setImageModels(models)
-          setCurrentImageModel(data.current_model || null)
+        setImageModels(data.local.map(model => ({
+          name: model.name,
+          vram: model.vram || 'unknown',
+          type: model.type || 'unknown',
+        })))
+        setCurrentImageModel(data.current_model || null)
 
-          // If IMAGE slot is not set, use current model or first available
-          if (!modelSlots.IMAGE && models.length > 0) {
-            setModelSlots(prev => ({
-              ...prev,
-              IMAGE: data.current_model || models[0].name,
-            }))
+        setModelSlots(prev => {
+          if (prev.IMAGE || data.local.length === 0) return prev
+          return {
+            ...prev,
+            IMAGE: data.current_model || data.local[0].name,
           }
-        }
+        })
       } catch (error) {
         console.error('[LOOM] Failed to fetch image models:', error)
       }
     }
-    fetchImageModels()
+    void refreshImageModels()
 
     // Listen for model updates
     const handleModelUpdate = () => {
-      fetchImageModels()
+      void refreshImageModels()
     }
-    window.addEventListener('loom:image_models_updated', handleModelUpdate)
+    window.addEventListener(IMAGE_MODELS_UPDATED_EVENT, handleModelUpdate)
 
     return () => {
-      window.removeEventListener('loom:image_models_updated', handleModelUpdate)
+      cancelled = true
+      window.removeEventListener(IMAGE_MODELS_UPDATED_EVENT, handleModelUpdate)
     }
-  }, [modelSlots.IMAGE])
+  }, [])
 
   // Persist model slots when they change
   useEffect(() => {
@@ -287,14 +313,14 @@ export function CircuitBoard() {
           cells.every((cell, idx) => cell.id === initialCells[idx]?.id)
         if (isInitialState) {
           // Extract positions and clean up temporary _position field
-          const cleanedModules = loadedModules.map((cell: any) => {
+          const cleanedModules = loadedModules.map((cell) => {
             const { _position, ...cleanCell } = cell
             return cleanCell
           })
           setCells(cleanedModules)
           if (viewMode === 'canvas') {
             // Use positions from backend modules
-            const nodesWithPositions = loadedModules.map((cell: any, index: number) => {
+            const nodesWithPositions = loadedModules.map((cell, index: number) => {
               const pos = cell._position || getNodePosition(index, cleanedModules)
               return {
                 id: cell.id,
@@ -332,7 +358,11 @@ export function CircuitBoard() {
   const handleSaveCircuit = useCallback(() => {
     const name = circuitName.trim().toLowerCase().replace(/\s+/g, '-')
     if (!name) {
-      alert('Please enter a circuit name')
+      setInfoDialog({
+        title: 'Circuit Name Required',
+        message: 'Enter a circuit name before saving this board.',
+      })
+      showErrorToast('Please enter a circuit name before saving.', 'Save Circuit')
       return
     }
 
@@ -346,8 +376,11 @@ export function CircuitBoard() {
     if (saveCircuit(circuit)) {
       setShowSaveSuccess(true)
       setTimeout(() => setShowSaveSuccess(false), 2000)
+      showSuccessToast(`Saved circuit "${name}".`, 'Save Circuit')
+    } else {
+      showErrorToast('Failed to save circuit.', 'Save Circuit')
     }
-  }, [circuitName, cells, modelSlots])
+  }, [circuitName, cells, modelSlots, setInfoDialog])
 
   // Resolve a slot to an actual model name
   const resolveModel = useCallback((slot?: ModelSlot, directModel?: string): string => {
@@ -361,6 +394,61 @@ export function CircuitBoard() {
     if (modelSlots.A) return modelSlots.A
     return status.activeModel || models[0] || 'llama3.1:8b'
   }, [modelSlots, status.activeModel, models])
+
+  const applyModelSlotPreset = useCallback((preset: 'balanced' | 'creative' | 'speed') => {
+    const chatModels = models.filter(isLikelyChatModel)
+    if (chatModels.length === 0) {
+      showInfoToast('No local chat models detected yet. Pull one first, then apply a preset.', 'Model Slots')
+      return
+    }
+
+    const creative = chatModels[0]
+    const critical = pickModelByHints(chatModels, CRITICAL_MODEL_HINTS) || chatModels[Math.min(1, chatModels.length - 1)] || creative
+    const fast = pickModelByHints(chatModels, FAST_MODEL_HINTS) || chatModels[chatModels.length - 1] || creative
+    const imageDefault = currentImageModel || imageModels[0]?.name || IMAGE_SLOT_DEFAULT
+
+    if (preset === 'balanced') {
+      setModelSlots(prev => ({
+        ...prev,
+        A: creative,
+        B: critical,
+        C: fast,
+        IMAGE: prev.IMAGE || imageDefault,
+      }))
+      showSuccessToast('Applied balanced slot defaults (A creative, B critical, C fast).', 'Model Slots')
+      return
+    }
+
+    if (preset === 'creative') {
+      setModelSlots(prev => ({
+        ...prev,
+        A: creative,
+        B: creative,
+        C: fast,
+        IMAGE: prev.IMAGE || imageDefault,
+      }))
+      showSuccessToast('Applied creative preset.', 'Model Slots')
+      return
+    }
+
+    setModelSlots(prev => ({
+      ...prev,
+      A: fast,
+      B: critical,
+      C: fast,
+      IMAGE: prev.IMAGE || imageDefault,
+    }))
+    showSuccessToast('Applied speed preset.', 'Model Slots')
+  }, [models, currentImageModel, imageModels])
+
+  const swapModelSlots = useCallback((left: ModelSlot, right: ModelSlot) => {
+    setModelSlots(prev => ({
+      ...prev,
+      [left]: prev[right],
+      [right]: prev[left],
+    }))
+    showInfoToast(`Swapped slot ${left} and ${right}.`, 'Model Slots')
+  }, [])
 
   // Sync nodes and edges when cells change in canvas mode
   useEffect(() => {
@@ -451,6 +539,10 @@ export function CircuitBoard() {
       vector_search: 'SEARCH',
       terminal_history: 'HISTORY',
       music_gen: 'MUSIC',
+      qdc_upload: 'QDC UPLOAD',
+      qdc_run: 'QDC RUN',
+      qdc_status: 'QDC STATUS',
+      qdc_results: 'QDC RESULT',
     }
 
     // Default content based on cell type - using real public data sources
@@ -468,6 +560,10 @@ export function CircuitBoard() {
       vector_index: '',
       vector_search: 'What are the main themes?',
       terminal_history: '',
+      qdc_upload: '/path/to/model-or-package',
+      qdc_run: 'Run this workload on QDC and summarize key outputs.',
+      qdc_status: 'qdc-job-xxxxxxxxxx',
+      qdc_results: 'qdc-job-xxxxxxxxxx',
     }
 
     // Default configurations for specific cell types
@@ -642,8 +738,18 @@ export function CircuitBoard() {
   }, [viewMode, getCellPosition])
 
   const deleteCell = (id: string) => {
+    const targetCell = cells.find(cell => cell.id === id)
+    const targetLabel = targetCell?.label || 'cell'
+    setDeleteCellDialog({ id, label: targetLabel })
+  }
+
+  const confirmDeleteCell = useCallback(() => {
+    if (!deleteCellDialog) return
+    const { id, label } = deleteCellDialog
+    setDeleteCellDialog(null)
+
     setCells((prev) => prev.filter((cell) => cell.id !== id))
-    // Delete from backend
+    showInfoToast(`Deleted ${label}.`, 'Circuit')
     deleteModuleFromBackend(id)
       .then(success => {
         if (success) {
@@ -655,7 +761,7 @@ export function CircuitBoard() {
       .catch(error => {
         console.error(`[LOOM] ✗ Error deleting module ${id} from backend:`, error)
       })
-  }
+  }, [deleteCellDialog])
 
   const moveCell = (id: string, direction: 'up' | 'down') => {
     setCells((prev) => {
@@ -804,7 +910,7 @@ export function CircuitBoard() {
           // First ensure model is loaded
           updateCell(cell.id, { output: `Loading model "${imageModel}" & preparing...` })
 
-          const response = await fetch('http://localhost:8000/api/images/generate', {
+          const response = await fetch(`${API_BASE_URL}/api/images/generate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -853,7 +959,7 @@ export function CircuitBoard() {
         })
 
         try {
-          const response = await fetch('http://localhost:8000/api/music/generate', {
+          const response = await fetch(`${API_BASE_URL}/api/music/generate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -904,7 +1010,7 @@ export function CircuitBoard() {
           // Determine max chars based on read mode
           const maxChars = fileReadMode === 'preview' ? 5000 : 100000
 
-          const response = await fetch('http://localhost:8000/api/files/read', {
+          const response = await fetch(`${API_BASE_URL}/api/files/read`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1125,7 +1231,7 @@ export function CircuitBoard() {
         updateCell(cell.id, { output: `Indexing ${filePathToIndex}...` })
 
         try {
-          const response = await fetch('http://localhost:8000/api/search/index/file', {
+          const response = await fetch(`${API_BASE_URL}/api/search/index/file`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1161,7 +1267,7 @@ export function CircuitBoard() {
         updateCell(cell.id, { output: `Searching: ${searchQuery}...` })
 
         try {
-          const response = await fetch('http://localhost:8000/api/search/search', {
+          const response = await fetch(`${API_BASE_URL}/api/search/search`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1177,33 +1283,15 @@ export function CircuitBoard() {
           }
 
           const result = await response.json()
-          const results = result.results || []
+          const results = Array.isArray(result.results)
+            ? result.results as VectorSearchResult[]
+            : []
 
           if (results.length === 0) {
             return `🔍 No results found for: '${searchQuery}'\n\nMake sure you have indexed some documents first using the INDEX cell.`
           }
 
-          // Format results nicely
-          const outputLines = [`🔍 Found ${results.length} results for: '${searchQuery}'\n`]
-
-          for (let i = 0; i < results.length; i++) {
-            const r = results[i]
-            const similarity = r.similarity || 0
-            const contentPreview = (r.content || '').substring(0, 200)
-            const metadata = r.metadata || {}
-            const source = metadata.file_path || metadata.source || 'unknown'
-
-            outputLines.push(`\n[${i + 1}] Similarity: ${(similarity * 100).toFixed(1)}%`)
-            outputLines.push(`📄 Source: ${source}`)
-            outputLines.push(`💬 Preview: ${contentPreview}...`)
-          }
-
-          // Also include full content for RAG context
-          const fullContext = results.map((r: any, i: number) =>
-            `[${i + 1}] ${r.content || ''}`
-          ).join('\n\n---\n\n')
-
-          return outputLines.join('\n') + '\n\n---\n\n' + fullContext
+          return formatVectorSearchResults(searchQuery, results)
         } catch (e) {
           throw new Error(`Vector search failed: ${e instanceof Error ? e.message : e}`)
         }
@@ -1215,69 +1303,16 @@ export function CircuitBoard() {
         updateCell(cell.id, { output: 'Querying terminal history...' })
 
         try {
-          let query: any = {}
           const content = (input || cell.content || '').trim()
-
-          if (content) {
-            // Try to parse as JSON query
-            try {
-              query = JSON.parse(content)
-            } catch {
-              // If not JSON, treat as simple text search
-              query = { search: content }
-            }
-          }
-
-          // Parse query parameters from cell properties if available
-          const cellQuery: any = {
-            search: query.search || (cell as any).terminalHistorySearch,
-            types: query.types || (cell as any).terminalHistoryTypes,
-            limit: query.limit || (cell as any).terminalHistoryLimit || 20,
-            since: query.since || (cell as any).terminalHistorySince,
-            before: query.before || (cell as any).terminalHistoryBefore,
-            sessionName: query.sessionName || (cell as any).terminalHistorySession,
-          }
-
-          // Clean up undefined values
-          Object.keys(cellQuery).forEach(key => {
-            if (cellQuery[key] === undefined) delete cellQuery[key]
-          })
+          const cellQuery = buildTerminalHistoryQuery(content, cell)
 
           const entries = queryTerminalHistory(cellQuery)
 
           if (entries.length === 0) {
-            return `📜 No terminal history entries found matching query.\n\nQuery: ${JSON.stringify(cellQuery, null, 2)}`
+            return formatNoTerminalHistoryResults(cellQuery)
           }
 
-          // Format entries nicely
-          const outputLines = [`📜 Found ${entries.length} terminal history entries:\n`]
-
-          for (let i = 0; i < entries.length; i++) {
-            const entry = entries[i]
-            const time = new Date(entry.timestamp).toLocaleString()
-            const typeIcon = {
-              user: '👤',
-              ai: '🤖',
-              system: '⚙️',
-              error: '❌',
-              image: '🖼️',
-              audio: '🎵',
-            }[entry.type] || '○'
-
-            const contentPreview = entry.content.length > 200
-              ? entry.content.substring(0, 200) + '...'
-              : entry.content
-
-            outputLines.push(`\n[${i + 1}] ${typeIcon} [${entry.type.toUpperCase()}] ${time}`)
-            outputLines.push(`${contentPreview}`)
-          }
-
-          // Also include full content for processing
-          const fullContext = entries.map((e, i) =>
-            `[${i + 1}] [${e.type}] ${new Date(e.timestamp).toISOString()}\n${e.content}`
-          ).join('\n\n---\n\n')
-
-          return outputLines.join('\n') + '\n\n---\n\nFull Context:\n\n' + fullContext
+          return formatTerminalHistoryEntries(entries)
         } catch (e) {
           throw new Error(`Terminal history query failed: ${e instanceof Error ? e.message : e}`)
         }
@@ -1288,12 +1323,26 @@ export function CircuitBoard() {
   }, [resolveModel, sendChat, sendToTerminal, updateCell])
 
   // Run a single cell (loop-back is ignored: { loopBackTo } is treated as onFail)
+  const getValidationError = useCallback((cell: CellData, index: number) => {
+    return validateCell(cell, index)
+  }, [])
+
   const runCell = useCallback(async (id: string) => {
     // If already running, don't start another (unless we want to queue? simplify for now: block)
     if (isRunning) return
 
     const cellIndex = cells.findIndex((c) => c.id === id)
     if (cellIndex === -1) return
+
+    const validationError = getValidationError(cells[cellIndex], cellIndex)
+    if (validationError) {
+      updateCell(id, {
+        status: 'error',
+        error: `Validation: ${validationError}`,
+      })
+      showErrorToast(validationError, 'Cannot Run Cell')
+      return
+    }
 
     setIsRunning(true)
     isRunningRef.current = true
@@ -1318,7 +1367,7 @@ export function CircuitBoard() {
       setIsRunning(false)
       isRunningRef.current = false
     }
-  }, [cells, isRunning, executeCell, updateCell, gatherInput])
+  }, [cells, isRunning, executeCell, updateCell, gatherInput, getValidationError])
 
   // Active cell state (lifted from LinearView)
   const [activeCellId, setActiveCellId] = useState<string | null>(null)
@@ -1346,6 +1395,12 @@ export function CircuitBoard() {
         if (!isRunningRef.current) break
 
         const cell = workingCells[i]
+        const validationError = getValidationError(cell, i)
+        if (validationError) {
+          updateCell(cell.id, { status: 'error', error: `Validation: ${validationError}` })
+          showErrorToast(`Cell ${i + 1} (${cell.label}): ${validationError}`, 'Cannot Run Circuit')
+          break
+        }
         updateCell(cell.id, { status: 'running', output: undefined, error: undefined })
 
         const { input, originalQuestion } = gatherInput(i, workingCells)
@@ -1381,7 +1436,7 @@ export function CircuitBoard() {
       setIsRunning(false)
       isRunningRef.current = false
     }
-  }, [cells, isRunning, executeCell, updateCell, gatherInput])
+  }, [cells, isRunning, executeCell, updateCell, gatherInput, getValidationError])
 
   // Run just the active cell
   const runActiveCell = useCallback(() => {
@@ -1389,6 +1444,47 @@ export function CircuitBoard() {
       runCell(activeCellId)
     }
   }, [activeCellId, runCell])
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const root = rootRef.current
+      if (!root || root.offsetParent === null) return
+
+      const target = event.target as HTMLElement | null
+      const tag = target?.tagName || ''
+      if (target?.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+        return
+      }
+
+      const ctrlOrMeta = event.ctrlKey || event.metaKey
+      if (ctrlOrMeta && event.key === 'Enter') {
+        event.preventDefault()
+        if (event.shiftKey) runAllCells()
+        else runActiveCell()
+        return
+      }
+
+      if (ctrlOrMeta && event.key.toLowerCase() === 's') {
+        event.preventDefault()
+        handleSaveCircuit()
+        return
+      }
+
+      if (ctrlOrMeta && event.key.toLowerCase() === 'n') {
+        event.preventDefault()
+        newCircuit()
+        return
+      }
+
+      if (event.key === 'Escape' && isRunningRef.current) {
+        event.preventDefault()
+        stopRunning()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [runActiveCell, runAllCells, handleSaveCircuit, newCircuit, stopRunning])
 
   const handleViewModeChange = (mode: ViewMode) => {
     if (mode === 'canvas') {
@@ -1399,20 +1495,27 @@ export function CircuitBoard() {
 
   // Clear ALL cells (delete everything)
   const clearAllCells = useCallback(() => {
-    if (window.confirm('Are you sure you want to delete ALL cells?')) {
-      setCells([])
-      setCircuitName('')
-      setShowSaveSuccess(false)
-      // Sync canvas
-      if (viewMode === 'canvas') {
-        setNodes([])
-        setEdges([])
-      }
+    if (cells.length === 0) {
+      showInfoToast('Board is already empty.', 'Circuit')
+      return
+    }
+    setClearBoardDialogOpen(true)
+  }, [cells.length, setClearBoardDialogOpen])
+
+  const confirmClearAllCells = useCallback(() => {
+    setClearBoardDialogOpen(false)
+    setCells([])
+    setCircuitName('')
+    setShowSaveSuccess(false)
+    showInfoToast('Board cleared.', 'Circuit')
+    if (viewMode === 'canvas') {
+      setNodes([])
+      setEdges([])
     }
   }, [viewMode, setNodes, setEdges])
 
   return (
-    <div className="h-full w-full flex">
+    <div ref={rootRef} className="h-full w-full flex">
       {/* Templates Sidebar */}
       <TemplatesSidebar
         onSelectTemplate={loadTemplate}
@@ -1511,6 +1614,44 @@ export function CircuitBoard() {
                 ☁ Providers
               </button>
             </div>
+            <div className="mt-3 pt-3 border-t border-terminal-border/60 flex flex-wrap items-center gap-2">
+              <span className="text-[10px] text-terminal-muted tracking-wider">Quick Actions</span>
+              <button
+                onClick={() => applyModelSlotPreset('balanced')}
+                className="text-[10px] px-2 py-1 border border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor"
+                title="A: creative, B: critical, C: fast"
+              >
+                Balanced
+              </button>
+              <button
+                onClick={() => applyModelSlotPreset('creative')}
+                className="text-[10px] px-2 py-1 border border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor"
+                title="A and B favor high-quality generation"
+              >
+                Creative
+              </button>
+              <button
+                onClick={() => applyModelSlotPreset('speed')}
+                className="text-[10px] px-2 py-1 border border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor"
+                title="A and C favor faster models"
+              >
+                Speed
+              </button>
+              <button
+                onClick={() => swapModelSlots('A', 'B')}
+                className="text-[10px] px-2 py-1 border border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor"
+                title="Swap A and B"
+              >
+                Swap A/B
+              </button>
+              <button
+                onClick={() => swapModelSlots('B', 'C')}
+                className="text-[10px] px-2 py-1 border border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor"
+                title="Swap B and C"
+              >
+                Swap B/C
+              </button>
+            </div>
           </div>
         )}
 
@@ -1577,6 +1718,7 @@ export function CircuitBoard() {
               onDeleteCell={deleteCell}
               onMoveCell={moveCell}
               onRunCell={runCell}
+              getValidationError={getValidationError}
               activeCellId={activeCellId}
               onActiveCellChange={setActiveCellId}
             />
@@ -1656,6 +1798,38 @@ export function CircuitBoard() {
       />
 
       <ProviderSetup isOpen={showProviderSetup} onClose={() => setShowProviderSetup(false)} />
+
+      <DialogModal
+        isOpen={!!infoDialog}
+        title={infoDialog?.title || 'Notice'}
+        message={infoDialog?.message || ''}
+        confirmLabel="OK"
+        hideCancel
+        onConfirm={() => setInfoDialog(null)}
+        onCancel={() => setInfoDialog(null)}
+      />
+
+      <DialogModal
+        isOpen={!!deleteCellDialog}
+        title="Delete Cell"
+        message={`Delete ${deleteCellDialog?.label || 'this cell'}? This action cannot be undone.`}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        danger
+        onConfirm={confirmDeleteCell}
+        onCancel={() => setDeleteCellDialog(null)}
+      />
+
+      <DialogModal
+        isOpen={clearBoardDialogOpen}
+        title="Clear Board"
+        message={`Delete all ${cells.length} cells and reset this board?`}
+        confirmLabel="Clear Board"
+        cancelLabel="Cancel"
+        danger
+        onConfirm={confirmClearAllCells}
+        onCancel={() => setClearBoardDialogOpen(false)}
+      />
     </div>
   )
 }

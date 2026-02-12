@@ -1,6 +1,6 @@
 # LOOM Product State & Strategic Guidance
 
-**Last Updated:** January 27, 2026  
+**Last Updated:** February 12, 2026  
 **VP of Product:** AI Advisor
 
 ---
@@ -13,6 +13,9 @@
 - Local AI via Ollama (LLMs + Vision models)
 - Vector memory via ChromaDB for RAG and document indexing
 - Image analysis and generation capabilities
+- Music generation and speech interaction capabilities
+- Cloud provider connectivity with quick-lane routing
+- QDC async remote job lane
 - File processing and document indexing
 
 **Target Users:** Power users, developers, researchers, knowledge workers who want local-first AI tools with full control over their data.
@@ -31,13 +34,18 @@
 - Circuit templates and persistence
 - Session save/load/restore
 - Mobile-friendly chat interface (`/chat` endpoint)
+- Intent-aware model orchestration with auto model switching
+- Fast cloud lane command (`/quick`) with free/cheap preference
+- Conversational action confirmation (`yes` / `edit:` / `no`) for image/music/speech/QDC
+- QDC async job APIs + terminal event stream
+- Circuit QDC nodes (`qdc_upload`, `qdc_run`, `qdc_status`, `qdc_results`)
 
 ### 🚧 In Development
 - Enhanced RAG workflows
 - More circuit templates
 - Advanced image generation features
 - Performance optimizations
-- **Folder Context Feature** (strategic plan complete - see FOLDER_CONTEXT_STRATEGY.md)
+- Live Qualcomm QDC API backend integration (current lane is mock-backed)
 
 ### 📋 Planned Features
 - Multi-user support
@@ -63,6 +71,8 @@
 - SQLite (circuit and session persistence)
 - PyMuPDF (PDF processing)
 - Diffusers (image generation)
+- Provider registry + cloud model catalog
+- Async QDC lane service and router
 
 **Key Services:**
 - `ollama_client` - LLM inference
@@ -70,13 +80,16 @@
 - `file_loader` - Document processing
 - `module_executor` - Circuit execution
 - `local_image_gen` - Image generation
+- `orchestrator` - Intent-based model routing
+- `provider_manager` - Unified local/cloud model listing + quick-lane selection
+- `qdc_service` - Async remote job orchestration
 - `storage` - Persistence layer
 
 ---
 
 ## Product Metrics & Health
 
-### Current Status: **STABLE** ✅
+### Current Status: **STABLE / EXPANDING CLOUD LANES** ✅
 - Core features functional
 - Local-first architecture working
 - Good documentation coverage
@@ -87,6 +100,7 @@
 2. **Complete stack**: Full pipeline from ingestion → processing → output
 3. **Extensibility**: Circuit-based architecture allows for flexible workflows
 4. **Privacy-focused**: Everything runs locally
+5. **Progressive cloud support**: Optional cloud lanes without breaking local-first defaults
 
 ### Areas for Growth
 1. **User onboarding**: Could benefit from guided tutorials
@@ -99,11 +113,11 @@
 ## Strategic Priorities
 
 ### Immediate (Next 1-2 Weeks)
-- [x] **Folder Context Feature** - Strategic plan complete
-- [ ] Implement Phase 1: Core infrastructure (code context router, panel component)
-- [ ] Assess current user feedback and pain points
-- [ ] Review performance bottlenecks
-- [ ] Evaluate template library gaps
+- [x] QDC async lane UX wiring (terminal + API + events)
+- [x] Quick cloud lane routing (`/quick`)
+- [x] Conversational action-confirm flow for media and remote jobs
+- [ ] Replace QDC mock backend with live Qualcomm API calls
+- [ ] Expand onboarding/tooltips for non-technical users
 
 ### Short-term (Next 1-3 Months)
 - [ ] Enhanced RAG workflows (in progress)
@@ -124,6 +138,28 @@
 ---
 
 ## Product Decisions Log
+
+### February 12, 2026: Cloud Lane and QDC Integration
+
+**Decision:** Expand optional cloud capability while preserving local-first interaction defaults.
+
+**Delivered:**
+- Intent-aware model orchestration with session stickiness
+- `/quick` command path for fast/cheap model selection
+- Provider metadata/capabilities surfaced in setup UI
+- QDC async job lane (upload/run/status/log/result) integrated into terminal and circuit nodes
+- Conversational action confirmation flow for easier non-technical use
+
+**Rationale:**
+- Keeps local privacy and responsiveness as the base
+- Adds optional offload path for lower-priority or remote-heavy tasks
+- Maintains a single conversational UX rather than forcing users into mode-switch workflows
+
+**Status:** Implemented with mock-backed QDC execution; live QDC API backend is next.
+
+**See:** `CLOUD_ORCHESTRATION_AND_QDC.md` for implementation-level details.
+
+---
 
 ### January 27, 2026: Folder Context Feature
 

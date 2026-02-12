@@ -1,7 +1,7 @@
 import { ModuleType } from '../../types/module'
 
 export interface CellTypeConfig {
-    type: ModuleType | string
+    type: ModuleType
     label: string
     icon: string
     description: string
@@ -68,6 +68,34 @@ export const CELL_TYPES: CellTypeConfig[] = [
         label: 'Music Gen',
         icon: '🎵',
         description: 'Generate music and audio',
+        category: 'Output'
+    },
+    {
+        type: 'qdc_upload',
+        label: 'QDC Upload',
+        icon: '📡',
+        description: 'Upload artifact to QDC lane',
+        category: 'Data'
+    },
+    {
+        type: 'qdc_run',
+        label: 'QDC Run',
+        icon: '🚀',
+        description: 'Start async QDC remote job',
+        category: 'Code'
+    },
+    {
+        type: 'qdc_status',
+        label: 'QDC Status',
+        icon: '🛰️',
+        description: 'Check remote QDC job status',
+        category: 'Data'
+    },
+    {
+        type: 'qdc_results',
+        label: 'QDC Results',
+        icon: '📥',
+        description: 'Fetch QDC job results',
         category: 'Output'
     },
 

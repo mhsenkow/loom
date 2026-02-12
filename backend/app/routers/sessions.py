@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import time
+import logging
 from pathlib import Path
 
 from app.services.storage import (
@@ -20,6 +21,7 @@ from app.services.storage import (
 )
 
 router = APIRouter()
+logger = logging.getLogger("loom.router.sessions")
 
 
 class SaveSessionRequest(BaseModel):
@@ -103,7 +105,7 @@ async def remove_session(name: str, delete_media: bool = False):
                         full_path.unlink()
                         deleted_files.append(str(full_path))
             except Exception as e:
-                print(f"[LOOM] Failed to delete media file {media_path}: {e}")
+                logger.warning("delete_media_file_failed media_path=%s error=%s", media_path, e)
     
     # Delete session from DB
     success = storage_delete_session(name)
@@ -143,3 +145,39 @@ async def open_data_folder():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to open folder: {e}")
 
+
+def _resolve_model_folder(target: str) -> Path:
+    normalized = target.strip().lower()
+    if normalized == "ollama":
+        configured = os.getenv("OLLAMA_MODELS", "").strip()
+        if configured:
+            return Path(configured).expanduser()
+        return Path.home() / ".ollama" / "models"
+    if normalized == "diffusion":
+        return Path(__file__).resolve().parent.parent.parent / "models" / "diffusion"
+    if normalized == "music":
+        return Path.home() / ".cache" / "ace-step" / "checkpoints"
+    raise HTTPException(status_code=400, detail=f"Unknown model folder target: {target}")
+
+
+@router.post("/open-model-folder")
+async def open_model_folder(target: str = "ollama"):
+    """Open a model storage folder in Finder (Mac) or file explorer."""
+    folder = _resolve_model_folder(target)
+    folder.mkdir(parents=True, exist_ok=True)
+
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["open", str(folder)], check=True)
+        elif sys.platform == "win32":
+            subprocess.run(["explorer", str(folder)], check=True)
+        else:
+            subprocess.run(["xdg-open", str(folder)], check=True)
+
+        return {
+            "status": "opened",
+            "target": target,
+            "path": str(folder),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to open model folder: {e}")

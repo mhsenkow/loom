@@ -1,6 +1,13 @@
 import { useState, useEffect, useCallback } from 'react'
 import { CellData, ModelSlot, InputMode } from './CircuitBoard'
-import { loadSavedCircuits, deleteCircuit, refreshCircuitsFromBackend, SavedCircuit } from '../../hooks/useCircuitRunner'
+import {
+  loadSavedCircuits,
+  deleteCircuit,
+  refreshCircuitsFromBackend,
+  SavedCircuit,
+  CIRCUITS_KEY,
+  CIRCUITS_UPDATED_EVENT,
+} from '../../hooks/useCircuitRunner'
 
 export interface NotebookTemplate {
   id: string
@@ -1899,9 +1906,34 @@ export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircui
 
   useEffect(() => {
     refreshCircuitsFromBackend().then(refreshSavedCircuits)
-    // Refresh periodically to catch saves from other parts of the app
-    const interval = setInterval(refreshSavedCircuits, 2000)
-    return () => clearInterval(interval)
+
+    const handleCircuitChange = () => {
+      refreshSavedCircuits()
+    }
+
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === CIRCUITS_KEY) {
+        refreshSavedCircuits()
+      }
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        refreshCircuitsFromBackend().then(refreshSavedCircuits)
+      }
+    }
+
+    window.addEventListener(CIRCUITS_UPDATED_EVENT, handleCircuitChange)
+    window.addEventListener('storage', handleStorage)
+    window.addEventListener('focus', handleCircuitChange)
+    window.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      window.removeEventListener(CIRCUITS_UPDATED_EVENT, handleCircuitChange)
+      window.removeEventListener('storage', handleStorage)
+      window.removeEventListener('focus', handleCircuitChange)
+      window.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
   }, [refreshSavedCircuits])
 
   const handleDeleteCircuit = (name: string, e: React.MouseEvent) => {
@@ -2035,7 +2067,7 @@ export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircui
             <div className="flex items-center gap-2">
               <span className="text-sm text-phosphor">+</span>
               <span className="text-xs text-phosphor group-hover:text-phosphor">
-                New Circuit
+                New
               </span>
             </div>
             <p className="text-[9px] text-terminal-muted/60 mt-1 pl-6">
@@ -2183,7 +2215,7 @@ export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircui
               <span className="text-sm">+</span>
             </button>
             <div className="absolute left-full top-1/2 -translate-y-1/2 ml-2 px-2 py-1 bg-void border border-terminal-border text-xs text-phosphor whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50 shadow-xl">
-              New Circuit
+              New
             </div>
           </div>
 

@@ -7,6 +7,7 @@ import type { AudioAnalyzerState } from '../../hooks/useAudioAnalyzer'
 import type { LogEntry } from '../../types/module'
 import type { TTSModelType, OrpheusTTSParams, OrpheusReadingStyle, OrpheusSoundPreset } from '../../types/tts'
 import { ORPHEUS_VOICES } from '../../types/tts'
+import { API_BASE_URL } from '../../config/api'
 
 const READING_STYLES: { id: OrpheusReadingStyle; label: string }[] = [
   { id: 'neutral', label: 'Neutral' },
@@ -26,13 +27,11 @@ const SOUND_PRESETS: { id: OrpheusSoundPreset; label: string }[] = [
 ]
 
 function CollapsibleSection({
-  id,
   title,
   defaultOpen = false,
   children,
   className = '',
 }: {
-  id: string
   title: string
   defaultOpen?: boolean
   children: React.ReactNode
@@ -113,7 +112,7 @@ export interface AvatarPanelProps {
 }
 
 const MAX_AI_ENTRIES = 20
-const TTS_API_BASE = 'http://localhost:8000'
+const TTS_API_BASE = API_BASE_URL
 
 interface TTSStatus {
   orpheus_model_cached: boolean
@@ -206,7 +205,7 @@ export function AvatarPanel({
           listening={listening}
           audioSensitivityOverride={audioSensitivityOverride}
           soundVisualParams={soundVisualParams}
-          pixelate={false}
+          pixelate={pixelate}
           transparent={true}
           width={420}
           height={420}
@@ -236,7 +235,6 @@ export function AvatarPanel({
         <div className="flex flex-col gap-3 pb-4">
         {/* Select response to read / play */}
         <CollapsibleSection
-          id="read-aloud"
           title={autoGenerateAudio ? 'Response audio' : 'Response to read aloud'}
           defaultOpen={true}
           className="bg-void/80 backdrop-blur-sm p-3 -mx-4 px-4 border-y border-terminal-border/30"
@@ -344,7 +342,6 @@ export function AvatarPanel({
 
         {/* TTS model type: Browser vs Orpheus — collapsed when auto-generate is on */}
         <CollapsibleSection
-          id="tts-model"
           title="TTS model"
           defaultOpen={!autoGenerateAudio}
           className="bg-void/70 backdrop-blur-sm p-3 -mx-4 px-4 border-y border-terminal-border/50"
@@ -517,7 +514,6 @@ export function AvatarPanel({
 
         {/* Voice control options (browser TTS) */}
         <CollapsibleSection
-          id="voice-tts"
           title="Voice (TTS)"
           defaultOpen={false}
           className="bg-void/70 backdrop-blur-sm p-3 -mx-4 px-4 border-y border-terminal-border/50"
@@ -591,7 +587,6 @@ export function AvatarPanel({
 
         {/* Sound → visual (5 parameters) */}
         <CollapsibleSection
-          id="sound-orb"
           title="Sound → orb"
           defaultOpen={false}
           className="bg-void/70 backdrop-blur-sm p-3 -mx-4 px-4 border-y border-terminal-border/50"
@@ -680,7 +675,6 @@ export function AvatarPanel({
 
         {/* Avatar style & sensitivity */}
         <CollapsibleSection
-          id="avatar-style"
           title="Avatar style"
           defaultOpen={false}
           className="bg-void/70 backdrop-blur-sm p-3 -mx-4 px-4 border-y border-terminal-border/50"

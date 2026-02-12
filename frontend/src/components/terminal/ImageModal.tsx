@@ -7,7 +7,7 @@ interface ImageMetadata {
   dimensions?: { width: number; height: number }
   provider?: string
   analysis?: string
-  [key: string]: any
+  [key: string]: unknown
 }
 
 interface ImageModalProps {

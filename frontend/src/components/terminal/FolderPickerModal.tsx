@@ -1,4 +1,4 @@
-import { useRef, useCallback, useState } from 'react'
+import { useRef, useCallback, useState, type InputHTMLAttributes } from 'react'
 
 interface FolderPickerModalProps {
   isOpen: boolean
@@ -6,10 +6,18 @@ interface FolderPickerModalProps {
   onSelect: (folderPath: string) => void
 }
 
+function isAbortError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'name' in error && (error as { name?: string }).name === 'AbortError'
+}
+
 export function FolderPickerModal({ isOpen, onClose, onSelect }: FolderPickerModalProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [manualPath, setManualPath] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
+  const directoryInputProps = {
+    webkitdirectory: '',
+    directory: '',
+  } as unknown as InputHTMLAttributes<HTMLInputElement>
 
   const handleFileInputClick = useCallback(() => {
     fileInputRef.current?.click()
@@ -41,8 +49,8 @@ export function FolderPickerModal({ isOpen, onClose, onSelect }: FolderPickerMod
       } else {
         throw new Error('File System Access API not supported')
       }
-    } catch (err: any) {
-      if (err.name === 'AbortError') {
+    } catch (err: unknown) {
+      if (isAbortError(err)) {
         // User cancelled - do nothing
         return
       }
@@ -201,8 +209,7 @@ export function FolderPickerModal({ isOpen, onClose, onSelect }: FolderPickerMod
         <input
           ref={fileInputRef}
           type="file"
-          webkitdirectory=""
-          directory=""
+          {...directoryInputProps}
           multiple
           style={{ display: 'none' }}
           onChange={handleFolderSelect}

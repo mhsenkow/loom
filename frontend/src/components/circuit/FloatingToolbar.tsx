@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { AddCellMenu } from './AddCellMenu'
-import { CELL_TYPES } from './CellTypes'
+import { CELL_TYPES, type CellTypeConfig } from './CellTypes'
 
 interface FloatingToolbarProps {
-    onAddCell: (type: any) => void
+    onAddCell: (type: CellTypeConfig['type']) => void
     onRunAll: () => void
     onRunActive: () => void
     onStop: () => void
@@ -75,7 +75,7 @@ export function FloatingToolbar({
     }
 
     return (
-        <div className="fixed bottom-12 left-1/2 -translate-x-1/2 z-50 flex items-center justify-center w-full max-w-3xl px-4 pointer-events-none">
+        <div className="fixed bottom-4 sm:bottom-12 left-1/2 -translate-x-1/2 z-50 flex items-center justify-center w-full max-w-3xl px-2 sm:px-4 pointer-events-none">
             {/* Main Toolbar Container */}
             <div
                 ref={containerRef}
@@ -87,15 +87,16 @@ export function FloatingToolbar({
                     onClick={onRunActive}
                     disabled={isRunning || !activeCellId}
                     className={`
-                        flex items-center justify-center w-10 h-10 rounded-xl transition-all duration-300
+                        flex items-center justify-center h-10 px-3 rounded-xl transition-all duration-300 text-xs font-semibold
                         ${!activeCellId || isRunning
                             ? 'opacity-30 cursor-not-allowed text-terminal-muted'
                             : 'bg-phosphor/5 text-phosphor hover:bg-phosphor hover:text-black hover:shadow-glow'
                         }
                     `}
-                    title="Run active cell"
+                    title="Run selected cell"
+                    aria-label="Run selected cell (Ctrl/Cmd+Enter)"
                 >
-                    <span className="text-lg font-bold">▶</span>
+                    Run
                 </button>
 
                 {/* Run All Button (Double Arrow) */}
@@ -103,15 +104,16 @@ export function FloatingToolbar({
                     onClick={onRunAll}
                     disabled={isRunning}
                     className={`
-                        group relative flex items-center justify-center w-12 h-10 rounded-xl transition-all duration-300
+                        group relative flex items-center justify-center h-10 px-3 rounded-xl transition-all duration-300 text-xs font-semibold
                         ${isRunning
                             ? 'bg-yellow-400/10 text-yellow-400 cursor-wait'
                             : 'bg-phosphor/10 text-phosphor hover:bg-phosphor hover:text-black hover:shadow-glow'
                         }
                     `}
                     title="Run all cells"
+                    aria-label="Run all cells (Ctrl/Cmd+Shift+Enter)"
                 >
-                    <span className="text-xl font-bold tracking-tighter">»</span>
+                    Run All
                 </button>
 
                 {/* Divider */}
@@ -167,18 +169,20 @@ export function FloatingToolbar({
                     {isRunning ? (
                         <button
                             onClick={onStop}
-                            className="p-2 text-red-400 hover:bg-red-400/10 rounded-lg transition-colors animate-pulse"
-                            title="Stop execution"
+                            className="px-3 h-10 text-xs font-semibold text-red-400 hover:bg-red-400/10 rounded-lg transition-colors animate-pulse"
+                            title="Stop"
+                            aria-label="Stop running circuit"
                         >
-                            <span className="text-lg">⏹</span>
+                            Stop
                         </button>
                     ) : (
                         <button
                             onClick={onClearBoard}
-                            className="p-2 text-terminal-muted hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors"
-                            title="Clear notebook (Remove all cells)"
+                            className="px-3 h-10 text-xs font-semibold text-terminal-muted hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors"
+                            title="New"
+                            aria-label="Clear board and start new"
                         >
-                            <span className="text-lg">🗑️</span>
+                            New
                         </button>
                     )}
                 </div>

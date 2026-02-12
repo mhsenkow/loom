@@ -8,11 +8,16 @@
 | **Local inference server** | ✅ Yes | **Ollama** runs locally (HTTP API). Not Hugging Face/ONNX directly—Ollama handles loading, tokenization, and GPU/Metal. |
 | **Retrieval-augmented generation (RAG)** | ✅ Yes | **ChromaDB** + **vector_store** + optional **code context**. Chat accepts `use_rag` and `use_code_context`; `search_for_rag()` injects context into the prompt. See `main.py` chat handler and `FOLDER_CONTEXT_STRATEGY.md`. |
 | **Dialogue manager / conversation context** | ✅ Yes | **Conversation manager** in `conversationContext.ts` builds context from last N messages (user/ai/image/system). Sent as “Previous conversation” in the prompt. `contextMode`: input / key / full. See `utils/conversationContext.ts`. |
+| **Per-turn model orchestrator** | ✅ Yes | `orchestrator.py` scores local+cloud candidates by intent/speed/cost/quality, supports router-model classification, and emits model switch events via Socket.IO. |
+| **Fast/cheap cloud lane** | ✅ Yes | `/quick` uses backend `GET /api/providers/quick-model` (provider manager) to prefer free/economy fast models, then tiny local fallback. |
+| **QDC async remote lane** | ✅ Yes (job lane) | QDC is integrated as async jobs (`/api/qdc/*`, `qdc_service.py`) with progress events (`qdc_job_event`). It is not a direct token-streaming chat-completions provider. |
 | **Tokenizer** | ✅ Yes | Handled inside **Ollama** (no explicit tokenizer in app code). Ollama tokenizes for the model you pick. |
 
-So you already have the full baseline: LLM (Ollama), local server (Ollama), RAG (ChromaDB + code context), **conversation manager** (conversation context builder in `conversationContext.ts`), and tokenization (inside Ollama).
+So you already have the full baseline: LLM (Ollama), local server (Ollama), RAG (ChromaDB + code context), **conversation manager** (conversation context builder in `conversationContext.ts`), model orchestration (local+cloud), quick lane routing, and tokenization (inside Ollama).
 
 **Faster audio reply:** **Stream TTS** is implemented: enable "Automatically generate audio" and "Speak as it streams (faster)" in the Voice panel. The response is turned into audio sentence-by-sentence and played in order, so time-to-first-audio is much lower than waiting for the full response.
+
+**Conversational action assist:** In terminal chat, image/music/speech/QDC intents can be confirmed with `yes`, modified with `edit: ...`, or canceled with `no`.
 
 ---
 

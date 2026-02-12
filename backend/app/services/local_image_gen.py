@@ -5,15 +5,13 @@ Optimized for high-memory Macs
 
 import torch
 import gc
-import os
-from typing import Optional, Literal
+import logging
+from typing import Optional
 from pathlib import Path
 import base64
 from io import BytesIO
 
-# Lazy imports to avoid startup delay
-_pipe = None
-_current_model = None
+logger = logging.getLogger("loom.image.local")
 
 
 def get_device():
@@ -84,9 +82,9 @@ class LocalImageGenerator:
         self.pipe = None
         self.hf_token: Optional[str] = None
         
-        print(f"[LOOM] LocalImageGenerator initialized on device: {self.device}")
+        logger.info("local_image_generator_initialized device=%s", self.device)
         if self.device == "mps":
-            print("[LOOM] Apple Silicon detected - MPS acceleration enabled")
+            logger.info("local_image_generator_mps_enabled")
     
     def set_hf_token(self, token: str):
         """Set HuggingFace token for gated models"""
@@ -122,7 +120,7 @@ class LocalImageGenerator:
         # Unload current model
         self.unload_model()
         
-        print(f"[LOOM] Loading model: {model_name}")
+        logger.info("loading_image_model model=%s", model_name)
         
         try:
             if model_name in MODELS:
@@ -173,7 +171,7 @@ class LocalImageGenerator:
                     self.pipe.enable_attention_slicing()
                 
                 self.current_model = model_name
-                print(f"[LOOM] Model loaded: {model_name}")
+                logger.info("image_model_loaded model=%s", model_name)
                 return True
             
             else:
@@ -191,8 +189,8 @@ class LocalImageGenerator:
                 else:
                     raise ValueError(f"Model not found: {model_name}")
         
-        except Exception as e:
-            print(f"[LOOM] Failed to load model: {e}")
+        except Exception:
+            logger.exception("image_model_load_failed model=%s", model_name)
             self.pipe = None
             self.current_model = None
             raise
@@ -210,7 +208,7 @@ class LocalImageGenerator:
                 torch.mps.empty_cache()
             elif self.device == "cuda":
                 torch.cuda.empty_cache()
-            print("[LOOM] Model unloaded")
+            logger.info("image_model_unloaded")
     
     async def generate(
         self,
@@ -246,7 +244,14 @@ class LocalImageGenerator:
             else:
                 generator = torch.Generator(self.device).manual_seed(seed)
         
-        print(f"[LOOM] Generating: {prompt[:50]}... ({width}x{height}, {steps} steps)")
+        logger.info(
+            "image_generation_started model=%s size=%sx%s steps=%s prompt_preview=%s",
+            model,
+            width,
+            height,
+            steps,
+            prompt[:80],
+        )
         
         try:
             # Generate
@@ -272,7 +277,7 @@ class LocalImageGenerator:
             filepath = images_dir / filename
             image.save(str(filepath), format="PNG")
             file_url = f"/api/images/files/{filename}"
-            print(f"[LOOM] Image saved: {filepath}")
+            logger.info("image_generation_saved path=%s", filepath)
             
             # Convert to base64 for immediate display
             buffer = BytesIO()
@@ -289,7 +294,7 @@ class LocalImageGenerator:
             }
         
         except Exception as e:
-            print(f"[LOOM] Generation error: {e}")
+            logger.exception("image_generation_failed model=%s", model)
             raise RuntimeError(f"Generation failed: {e}")
     
     def download_civitai_model(self, url: str, name: str) -> str:
@@ -301,7 +306,7 @@ class LocalImageGenerator:
         if save_path.exists():
             return str(save_path)
         
-        print(f"[LOOM] Downloading from CivitAI: {url}")
+        logger.info("civitai_download_started name=%s url=%s", name, url)
         
         with httpx.stream("GET", url, follow_redirects=True) as response:
             response.raise_for_status()
@@ -309,14 +314,18 @@ class LocalImageGenerator:
             
             with open(save_path, "wb") as f:
                 downloaded = 0
+                last_progress_bucket = -1
                 for chunk in response.iter_bytes(chunk_size=8192):
                     f.write(chunk)
                     downloaded += len(chunk)
                     if total:
                         pct = (downloaded / total) * 100
-                        print(f"\r[LOOM] Downloading: {pct:.1f}%", end="", flush=True)
+                        bucket = int(pct // 10)
+                        if bucket > last_progress_bucket:
+                            logger.info("civitai_download_progress name=%s progress=%.1f%%", name, pct)
+                            last_progress_bucket = bucket
         
-        print(f"\n[LOOM] Downloaded: {save_path}")
+        logger.info("civitai_download_completed name=%s path=%s", name, save_path)
         return str(save_path)
 
 

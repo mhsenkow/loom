@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
+import { API_BASE_URL } from '../../config/api'
+import { showErrorToast, showInfoToast, showSuccessToast } from '../../utils/uiNotifications'
 
-const API_BASE = 'http://localhost:8000'
+const API_BASE = API_BASE_URL
 
 interface ProviderInfo {
     name: string
@@ -8,6 +10,10 @@ interface ProviderInfo {
     connected: boolean
     key_url: string
     key_hint: string
+    supports_chat?: boolean
+    supports_quick?: boolean
+    free_tier_available?: boolean
+    notes?: string
 }
 
 interface ProviderSetupProps {
@@ -65,12 +71,16 @@ export function ProviderSetup({ isOpen, onClose }: ProviderSetupProps) {
                 fetchProviders()
                 // Notify the rest of the app
                 window.dispatchEvent(new CustomEvent('loom:providers_updated'))
+                showSuccessToast(`Connected ${data.display_name}.`, 'Providers')
             } else {
                 const data = await res.json()
-                setError(data.detail || 'Invalid API key. Please check and try again.')
+                const message = data.detail || 'Invalid API key. Please check and try again.'
+                setError(message)
+                showErrorToast(message, 'Providers')
             }
         } catch (e) {
             setError('Could not reach backend. Is the server running?')
+            showErrorToast('Could not reach backend. Is the server running?', 'Providers')
         } finally {
             setValidating(false)
         }
@@ -84,9 +94,11 @@ export function ProviderSetup({ isOpen, onClose }: ProviderSetupProps) {
             if (res.ok) {
                 fetchProviders()
                 window.dispatchEvent(new CustomEvent('loom:providers_updated'))
+                showInfoToast(`Disconnected ${providerName}.`, 'Providers')
             }
         } catch (e) {
             console.error('[LOOM] Failed to disconnect provider:', e)
+            showErrorToast(`Failed to disconnect ${providerName}.`, 'Providers')
         }
     }
 
@@ -99,6 +111,8 @@ export function ProviderSetup({ isOpen, onClose }: ProviderSetupProps) {
         gemini: { emoji: '✨', color: '#4285f4' },
         mistral: { emoji: '🌊', color: '#ff7000' },
         deepseek: { emoji: '🔮', color: '#0066ff' },
+        openrouter: { emoji: '🛰️', color: '#8b5cf6' },
+        qdc: { emoji: '📡', color: '#2ec4b6' },
     }
 
     return (
@@ -222,6 +236,11 @@ export function ProviderSetup({ isOpen, onClose }: ProviderSetupProps) {
                                                     : 'Click to set up'
                                                 }
                                             </div>
+                                            <div style={{ color: '#4b5563', fontSize: 10, marginTop: 2 }}>
+                                                {prov.supports_chat === false ? 'Job connector' : 'Chat provider'}
+                                                {prov.supports_quick ? ' • Quick lane' : ''}
+                                                {prov.free_tier_available ? ' • Free tier' : ''}
+                                            </div>
                                         </div>
                                     </div>
 
@@ -271,6 +290,12 @@ export function ProviderSetup({ isOpen, onClose }: ProviderSetupProps) {
                                             </a>
                                             <br />
                                             2. Paste it below:
+                                            {prov.notes && (
+                                                <>
+                                                    <br />
+                                                    <span style={{ color: '#9ca3af' }}>{prov.notes}</span>
+                                                </>
+                                            )}
                                         </div>
 
                                         {/* Key input */}

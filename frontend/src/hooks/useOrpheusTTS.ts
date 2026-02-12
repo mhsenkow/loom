@@ -1,8 +1,9 @@
 import { useCallback, useState, useRef, useEffect } from 'react'
 import type { OrpheusTTSParams } from '../types/tts'
-import { AudioProcessor, type SoundPreset, type AudioProcessorConfig } from '../utils/audioProcessor'
+import { AudioProcessor, type SoundPreset } from '../utils/audioProcessor'
+import { API_BASE_URL } from '../config/api'
 
-const API_BASE = 'http://localhost:8000'
+const API_BASE = API_BASE_URL
 
 export interface UseOrpheusTTSOptions {
   backendUrl?: string

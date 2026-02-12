@@ -33,6 +33,10 @@ export const ModuleNode = memo(({ data, selected }: NodeProps<ModuleNodeData>) =
     vector_search: '🔍',
     terminal_history: '📜',
     music_gen: '🎵',
+    qdc_upload: '📡',
+    qdc_run: '🚀',
+    qdc_status: '🛰',
+    qdc_results: '📥',
   }
 
   const headerColors: Record<ModuleType, string> = {
@@ -49,6 +53,10 @@ export const ModuleNode = memo(({ data, selected }: NodeProps<ModuleNodeData>) =
     vector_search: 'bg-indigo-600 text-white',
     terminal_history: 'bg-orange-600 text-white',
     music_gen: 'bg-violet-600 text-white',
+    qdc_upload: 'bg-teal-600 text-white',
+    qdc_run: 'bg-emerald-600 text-white',
+    qdc_status: 'bg-sky-700 text-white',
+    qdc_results: 'bg-indigo-700 text-white',
   }
 
   return (

@@ -7,6 +7,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Optional
 
+SCHEMA_VERSION = 1
+
 # DB path: project root / data / loom.db
 def _db_path() -> Path:
     base = Path(__file__).resolve().parent.parent.parent
@@ -22,37 +24,74 @@ def _get_conn() -> sqlite3.Connection:
     return conn
 
 
+def _ensure_migrations_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version INTEGER PRIMARY KEY,
+            applied_at REAL NOT NULL
+        );
+        """
+    )
+
+
+def _applied_versions(conn: sqlite3.Connection) -> set[int]:
+    rows = conn.execute("SELECT version FROM schema_migrations").fetchall()
+    return {int(r["version"]) for r in rows}
+
+
+def _apply_migration_1(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS modules (
+            id TEXT PRIMARY KEY,
+            type TEXT NOT NULL,
+            content TEXT DEFAULT '',
+            position_x REAL DEFAULT 0,
+            position_y REAL DEFAULT 0,
+            status TEXT DEFAULT 'idle',
+            metadata TEXT DEFAULT '{}',
+            created_at REAL,
+            updated_at REAL
+        );
+        CREATE TABLE IF NOT EXISTS circuits (
+            name TEXT PRIMARY KEY,
+            description TEXT,
+            cells TEXT NOT NULL,
+            model_slots TEXT NOT NULL,
+            saved_at REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS sessions (
+            name TEXT PRIMARY KEY,
+            entries TEXT NOT NULL,
+            media_files TEXT DEFAULT '[]',
+            entry_count INTEGER DEFAULT 0,
+            saved_at REAL NOT NULL
+        );
+        """
+    )
+
+
+MIGRATIONS: list[tuple[int, Any]] = [
+    (1, _apply_migration_1),
+]
+
+
 def init_db() -> None:
-    """Create tables if they don't exist."""
+    """Initialize SQLite schema and apply pending migrations."""
     conn = _get_conn()
     try:
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS modules (
-                id TEXT PRIMARY KEY,
-                type TEXT NOT NULL,
-                content TEXT DEFAULT '',
-                position_x REAL DEFAULT 0,
-                position_y REAL DEFAULT 0,
-                status TEXT DEFAULT 'idle',
-                metadata TEXT DEFAULT '{}',
-                created_at REAL,
-                updated_at REAL
-            );
-            CREATE TABLE IF NOT EXISTS circuits (
-                name TEXT PRIMARY KEY,
-                description TEXT,
-                cells TEXT NOT NULL,
-                model_slots TEXT NOT NULL,
-                saved_at REAL NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS sessions (
-                name TEXT PRIMARY KEY,
-                entries TEXT NOT NULL,
-                media_files TEXT DEFAULT '[]',
-                entry_count INTEGER DEFAULT 0,
-                saved_at REAL NOT NULL
-            );
-        """)
+        _ensure_migrations_table(conn)
+        applied = _applied_versions(conn)
+        import time
+        for version, migration_fn in MIGRATIONS:
+            if version in applied:
+                continue
+            migration_fn(conn)
+            conn.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                (version, time.time()),
+            )
         conn.commit()
     finally:
         conn.close()
@@ -356,4 +395,3 @@ def delete_session(name: str) -> bool:
         return cur.rowcount > 0
     finally:
         conn.close()
-

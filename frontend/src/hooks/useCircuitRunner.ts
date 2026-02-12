@@ -2,10 +2,19 @@ import { useState, useCallback, useEffect } from 'react'
 import { CellData, ModelSlotConfig, InputMode, ModelSlot } from '../components/circuit/CircuitBoard'
 import { useSocket } from './useSocket'
 import { useSystemStatus } from './useSystemStatus'
+import { API_BASE_URL } from '../config/api'
+import {
+  buildTerminalHistoryQuery,
+  formatNoTerminalHistoryResults,
+  formatTerminalHistoryEntries,
+  formatVectorSearchResults,
+  type VectorSearchResult,
+} from '../utils/circuitExecutionUtils'
 
-const CIRCUITS_KEY = 'loom-saved-circuits'
+export const CIRCUITS_KEY = 'loom-saved-circuits'
+export const CIRCUITS_UPDATED_EVENT = 'loom:circuits-updated'
 const SLOTS_KEY = 'loom-model-slots'
-const API_BASE = 'http://localhost:8000'
+const API_BASE = API_BASE_URL
 
 export interface SavedCircuit {
   name: string
@@ -74,6 +83,9 @@ export async function refreshCircuitsFromBackend(): Promise<void> {
     const local = loadSavedCircuits()
     const merged = { ...local, ...fromApi }
     localStorage.setItem(CIRCUITS_KEY, JSON.stringify(merged))
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(CIRCUITS_UPDATED_EVENT))
+    }
   } catch {
     // Backend unreachable; keep using localStorage
   }
@@ -85,6 +97,9 @@ export function saveCircuit(circuit: SavedCircuit): boolean {
     const circuits = loadSavedCircuits()
     circuits[circuit.name] = circuit
     localStorage.setItem(CIRCUITS_KEY, JSON.stringify(circuits))
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(CIRCUITS_UPDATED_EVENT, { detail: { name: circuit.name } }))
+    }
     fetch(`${API_BASE}/api/circuits/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -108,6 +123,9 @@ export function deleteCircuit(name: string): boolean {
     const circuits = loadSavedCircuits()
     delete circuits[name]
     localStorage.setItem(CIRCUITS_KEY, JSON.stringify(circuits))
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(CIRCUITS_UPDATED_EVENT, { detail: { name } }))
+    }
     fetch(`${API_BASE}/api/circuits/${encodeURIComponent(name)}`, { method: 'DELETE' }).catch(() => { })
     return true
   } catch (e) {
@@ -258,7 +276,7 @@ export function useCircuitRunner() {
         const fileReadMode = cell.readMode || 'raw'
         const maxChars = fileReadMode === 'preview' ? 5000 : 100000
 
-        const response = await fetch('http://localhost:8000/api/files/read', {
+        const response = await fetch(`${API_BASE}/api/files/read`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -471,7 +489,7 @@ export function useCircuitRunner() {
         console.log(`[LOOM] Indexing file: ${filePathToIndex}`)
 
         try {
-          const response = await fetch('http://localhost:8000/api/search/index/file', {
+          const response = await fetch(`${API_BASE}/api/search/index/file`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -507,7 +525,7 @@ export function useCircuitRunner() {
         console.log(`[LOOM] Searching vector store: ${searchQuery}`)
 
         try {
-          const response = await fetch('http://localhost:8000/api/search/search', {
+          const response = await fetch(`${API_BASE}/api/search/search`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -523,33 +541,15 @@ export function useCircuitRunner() {
           }
 
           const result = await response.json()
-          const results = result.results || []
+          const results = Array.isArray(result.results)
+            ? result.results as VectorSearchResult[]
+            : []
 
           if (results.length === 0) {
             return `🔍 No results found for: '${searchQuery}'\n\nMake sure you have indexed some documents first using the INDEX cell.`
           }
 
-          // Format results nicely
-          const outputLines = [`🔍 Found ${results.length} results for: '${searchQuery}'\n`]
-
-          for (let i = 0; i < results.length; i++) {
-            const r = results[i]
-            const similarity = r.similarity || 0
-            const contentPreview = (r.content || '').substring(0, 200)
-            const metadata = r.metadata || {}
-            const source = metadata.file_path || metadata.source || 'unknown'
-
-            outputLines.push(`\n[${i + 1}] Similarity: ${(similarity * 100).toFixed(1)}%`)
-            outputLines.push(`📄 Source: ${source}`)
-            outputLines.push(`💬 Preview: ${contentPreview}...`)
-          }
-
-          // Also include full content for RAG context
-          const fullContext = results.map((r: any, i: number) =>
-            `[${i + 1}] ${r.content || ''}`
-          ).join('\n\n---\n\n')
-
-          return outputLines.join('\n') + '\n\n---\n\n' + fullContext
+          return formatVectorSearchResults(searchQuery, results)
         } catch (e) {
           throw new Error(`Vector search failed: ${e instanceof Error ? e.message : e}`)
         }
@@ -562,70 +562,16 @@ export function useCircuitRunner() {
         const { queryTerminalHistory } = await import('./useTerminalOutput')
 
         try {
-          let query: any = {}
           const content = (input || cell.content || '').trim()
-
-          if (content) {
-            // Try to parse as JSON query
-            try {
-              query = JSON.parse(content)
-            } catch {
-              // If not JSON, treat as simple text search
-              query = { search: content }
-            }
-          }
-
-          // Parse query parameters from cell properties if available
-          // Support: terminalHistoryTypes, terminalHistoryLimit, terminalHistorySince, terminalHistoryBefore
-          const cellQuery: any = {
-            search: query.search || (cell as any).terminalHistorySearch,
-            types: query.types || (cell as any).terminalHistoryTypes,
-            limit: query.limit || (cell as any).terminalHistoryLimit || 20,
-            since: query.since || (cell as any).terminalHistorySince,
-            before: query.before || (cell as any).terminalHistoryBefore,
-            sessionName: query.sessionName || (cell as any).terminalHistorySession,
-          }
-
-          // Clean up undefined values
-          Object.keys(cellQuery).forEach(key => {
-            if (cellQuery[key] === undefined) delete cellQuery[key]
-          })
+          const cellQuery = buildTerminalHistoryQuery(content, cell)
 
           const entries = queryTerminalHistory(cellQuery)
 
           if (entries.length === 0) {
-            return `📜 No terminal history entries found matching query.\n\nQuery: ${JSON.stringify(cellQuery, null, 2)}`
+            return formatNoTerminalHistoryResults(cellQuery)
           }
 
-          // Format entries nicely
-          const outputLines = [`📜 Found ${entries.length} terminal history entries:\n`]
-
-          for (let i = 0; i < entries.length; i++) {
-            const entry = entries[i]
-            const time = new Date(entry.timestamp).toLocaleString()
-            const typeIcon = {
-              user: '👤',
-              ai: '🤖',
-              system: '⚙️',
-              error: '❌',
-              image: '🖼️',
-              audio: '🎵',
-            }[entry.type] || '○'
-
-            const contentPreview = entry.content.length > 200
-              ? entry.content.substring(0, 200) + '...'
-              : entry.content
-
-            outputLines.push(`\n[${i + 1}] ${typeIcon} [${entry.type.toUpperCase()}] ${time}`)
-            outputLines.push(`${contentPreview}`)
-          }
-
-          // Also include full content for processing
-          const fullContext = entries.map((e, i) =>
-            `[${i + 1}] [${e.type}] ${new Date(e.timestamp).toISOString()}\n${e.content}`
-          ).join('\n\n---\n\n')
-
-          return outputLines.join('\n') + '\n\n---\n\nFull Context:\n\n' + fullContext
+          return formatTerminalHistoryEntries(entries)
         } catch (e) {
           throw new Error(`Terminal history query failed: ${e instanceof Error ? e.message : e}`)
         }
@@ -685,6 +631,82 @@ export function useCircuitRunner() {
         } catch (e) {
           throw new Error(`Music generation failed: ${e instanceof Error ? e.message : e}`)
         }
+
+      case 'qdc_upload': {
+        const artifactPath = (input || cell.content || '').trim()
+        if (!artifactPath) {
+          throw new Error('No artifact path specified for QDC upload.')
+        }
+
+        const response = await fetch(`${API_BASE}/api/qdc/upload`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: artifactPath }),
+        })
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) {
+          throw new Error(data.detail || 'QDC upload failed')
+        }
+        const artifactId = String(data?.artifact?.id || '')
+        return artifactId
+          ? `QDC artifact uploaded: ${artifactId}`
+          : 'QDC artifact uploaded'
+      }
+
+      case 'qdc_run': {
+        const qdcPrompt = (input || cell.content || '').trim()
+        if (!qdcPrompt) {
+          throw new Error('No prompt specified for QDC run.')
+        }
+        // Accept artifact id from input when previous cell output contains one.
+        const artifactIdMatch = (input || '').match(/qdc-artifact-[a-z0-9]+/i)
+        const artifactId = artifactIdMatch?.[0]
+
+        const response = await fetch(`${API_BASE}/api/qdc/jobs`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: qdcPrompt,
+            artifact_id: artifactId,
+            target: 'auto',
+            priority: 'normal',
+          }),
+        })
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) {
+          throw new Error(data.detail || 'QDC run failed')
+        }
+        const jobId = String(data?.job?.id || '')
+        return jobId ? `QDC job started: ${jobId}` : 'QDC job started'
+      }
+
+      case 'qdc_status': {
+        const jobId = ((input || cell.content || '').match(/qdc-job-[a-z0-9]+/i)?.[0] || '').trim()
+        if (!jobId) {
+          throw new Error('No QDC job id specified.')
+        }
+        const response = await fetch(`${API_BASE}/api/qdc/jobs/${encodeURIComponent(jobId)}`)
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) {
+          throw new Error(data.detail || 'QDC status lookup failed')
+        }
+        const statusValue = String(data?.job?.status || 'unknown')
+        return `QDC ${jobId} status: ${statusValue}`
+      }
+
+      case 'qdc_results': {
+        const jobId = ((input || cell.content || '').match(/qdc-job-[a-z0-9]+/i)?.[0] || '').trim()
+        if (!jobId) {
+          throw new Error('No QDC job id specified.')
+        }
+        const response = await fetch(`${API_BASE}/api/qdc/jobs/${encodeURIComponent(jobId)}/results`)
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) {
+          throw new Error(data.detail || 'QDC results lookup failed')
+        }
+        const summary = String(data?.result?.summary || '')
+        return summary ? `QDC ${jobId}: ${summary}` : `QDC ${jobId}: result pending`
+      }
 
       default:
         return input

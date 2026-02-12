@@ -396,7 +396,7 @@ export async function playBlobWithPreset(
 /**
  * Fetch pause hint from backend for a sentence.
  */
-export async function fetchPauseHint(sentence: string, backendUrl: string = 'http://localhost:8000'): Promise<number> {
+export async function fetchPauseHint(sentence: string, backendUrl: string = API_BASE_URL): Promise<number> {
   try {
     const res = await fetch(`${backendUrl}/api/tts/pause-hint`, {
       method: 'POST',
@@ -410,3 +410,4 @@ export async function fetchPauseHint(sentence: string, backendUrl: string = 'htt
     return 300
   }
 }
+import { API_BASE_URL } from '../config/api'

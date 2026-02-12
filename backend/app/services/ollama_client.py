@@ -5,6 +5,9 @@ Ollama client service for AI processing
 from typing import AsyncGenerator, Optional
 from ollama import AsyncClient
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class OllamaClient:
@@ -58,7 +61,7 @@ class OllamaClient:
             
             return result
         except Exception as e:
-            print(f"[LOOM] Error listing models: {e}")
+            logger.warning("error_listing_models error=%s", e)
             return []
     
     async def get_running_models(self) -> list[dict]:
@@ -80,9 +83,14 @@ class OllamaClient:
                                 model.get("model_name") or
                                 "unknown"
                             )
+                            size_vram = model.get("size_vram", 0) or 0
+                            size = model.get("size", 0) or 0
                             result.append({
                                 "name": model_name,
-                                "size": model.get("size", 0) or model.get("size_vram", 0),  # Size in bytes
+                                # Prefer VRAM/RAM footprint when present; fallback to model size.
+                                "size": size_vram or size,
+                                "size_vram": size_vram,
+                                "size_disk": size,
                                 "memory": model.get("memory", {}),  # Memory allocation info
                             })
                         else:
@@ -91,15 +99,19 @@ class OllamaClient:
                                 getattr(model, 'model', None) or
                                 'unknown'
                             )
+                            size_vram = getattr(model, 'size_vram', 0) or 0
+                            size = getattr(model, 'size', 0) or 0
                             result.append({
                                 "name": model_name,
-                                "size": getattr(model, 'size', 0) or getattr(model, 'size_vram', 0),
+                                "size": size_vram or size,
+                                "size_vram": size_vram,
+                                "size_disk": size,
                                 "memory": getattr(model, 'memory', {}),
                             })
                     return result
             return []
         except Exception as e:
-            print(f"[LOOM] Error getting running models: {e}")
+            logger.warning("error_getting_running_models error=%s", e)
             return []
     
     async def get_first_available_model(self) -> Optional[str]:
@@ -258,7 +270,7 @@ class OllamaClient:
         Yields progress dicts with status, completed, total, etc.
         """
         try:
-            print(f"[LOOM] Starting pull for model: {model_name}")
+            logger.info("starting_model_pull model=%s", model_name)
             
             # Try to get the pull stream - handle different API versions
             pull_result = self.client.pull(model=model_name, stream=True)
@@ -298,15 +310,12 @@ class OllamaClient:
                 # Include error if present
                 if error:
                     result["error"] = str(error)
-                    print(f"[LOOM] Pull error in progress: {error}")
+                    logger.warning("pull_error model=%s error=%s", model_name, error)
                 
                 yield result
                 
         except Exception as e:
-            import traceback
-            error_details = traceback.format_exc()
-            print(f"[LOOM] Exception in pull_model for {model_name}: {e}")
-            print(f"[LOOM] Traceback: {error_details}")
+            logger.exception("pull_model_exception model=%s", model_name)
             yield {
                 "status": "error",
                 "error": str(e),
@@ -337,7 +346,7 @@ class OllamaClient:
                 name = m.get("name", "").lower()
                 if any(img_model in name for img_model in image_gen_models):
                     model = m.get("name")
-                    print(f"[LOOM] Using image generation model: {model}")
+                    logger.info("using_image_generation_model model=%s", model)
                     break
             
             # Fallback to flux2-klein if available
@@ -346,7 +355,7 @@ class OllamaClient:
                 for m in models:
                     if 'flux2-klein' in m.get("name", "").lower():
                         model = m.get("name")
-                        print(f"[LOOM] Using image generation model: {model}")
+                        logger.info("using_image_generation_model model=%s", model)
                         break
         
         if not model:
@@ -424,21 +433,19 @@ class OllamaClient:
                         # Ensure it has the data URL prefix
                         if not image_data.startswith("data:image"):
                             image_data = f"data:image/png;base64,{image_data}"
-                        print(f"[LOOM] Successfully received image data, length: {len(image_data)}")
+                        logger.debug("received_image_data length=%s", len(image_data))
                         return image_data
                     elif full_response:
                         # If we got text response, the model might not be an image generation model
-                        print(f"[LOOM] Received text response instead of image: {full_response[:200]}")
+                        logger.warning("received_text_response_instead_of_image preview=%s", full_response[:200])
                         raise RuntimeError(f"Model returned text instead of image. Response: {full_response[:100]}...")
                     else:
-                        print(f"[LOOM] No image data received from Ollama")
+                        logger.warning("no_image_data_received_from_ollama model=%s", model)
                         raise RuntimeError("No image data received from Ollama - model may not be an image generation model or response format is unexpected")
         
         except Exception as e:
             error_msg = f"Ollama image generation error: {e}"
-            print(f"[LOOM] {error_msg}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("ollama_image_generation_error model=%s", model)
             raise RuntimeError(error_msg)
     
     async def analyze_image(
@@ -470,13 +477,12 @@ class OllamaClient:
                 name = m.get("name", "").lower()
                 if any(vm in name for vm in vision_models):
                     model = m.get("name")
-                    print(f"[LOOM] Using vision model: {model}")
+                    logger.info("using_vision_model model=%s", model)
                     break
             
             # Fallback to default if no vision model found
             if not model:
-                print(f"[LOOM] Warning: No vision model found, using default: {self._default_model}")
-                print(f"[LOOM] Available models: {[m.get('name') for m in models]}")
+                logger.warning("no_vision_model_found_using_default default_model=%s available_models=%s", self._default_model, [m.get("name") for m in models])
                 model = self._default_model
         
         # Ollama Python client format: images should be in the message content
@@ -488,7 +494,7 @@ class OllamaClient:
         }]
         
         try:
-            print(f"[LOOM] Analyzing image with model: {model}, image size: {len(image_base64)} chars")
+            logger.info("analyzing_image model=%s image_size=%s", model, len(image_base64))
             response = await self.client.chat(
                 model=model,
                 messages=messages,
@@ -506,11 +512,11 @@ class OllamaClient:
             if not content:
                 raise RuntimeError("Empty response from vision model - model may not support vision")
             
-            print(f"[LOOM] Vision analysis complete, response length: {len(content)}")
+            logger.debug("vision_analysis_complete response_length=%s", len(content))
             return content
         except Exception as e:
             error_msg = f"Ollama vision analysis error: {e}"
-            print(f"[LOOM] {error_msg}")
+            logger.exception("ollama_vision_analysis_error model=%s", model)
             raise RuntimeError(error_msg)
 
 

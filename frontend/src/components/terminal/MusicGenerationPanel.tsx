@@ -113,7 +113,7 @@ export function MusicGenerationPanel({
     const status = generation?.status || 'empty'
 
     return (
-        <div className="fixed right-0 top-0 bottom-0 w-96 bg-slate border-l-2 border-phosphor z-40 flex flex-col overflow-hidden">
+        <div className="fixed right-0 top-0 bottom-0 w-full sm:w-96 bg-slate border-l-2 border-phosphor z-40 flex flex-col overflow-hidden">
             {/* Header */}
             <div className="p-4 border-b border-terminal-border flex items-center justify-between bg-void/50">
                 <div className="flex items-center gap-2">

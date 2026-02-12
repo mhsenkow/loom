@@ -5,7 +5,7 @@ interface AddCellMenuProps {
     isOpen: boolean
     results: CellTypeConfig[]
     selectedIndex: number
-    onSelect: (type: string) => void
+    onSelect: (type: CellTypeConfig['type']) => void
     anchorRect?: DOMRect | null
     onHoverIndex: (index: number) => void
 }
