@@ -1,4 +1,7 @@
-# LOOM // Personal Intelligence OS
+# LOOM // Personal Intelligence OS or "What if my AI UI was fun"
+
+<img width="2560" height="1440" alt="image" src="https://github.com/user-attachments/assets/dfc9e8e9-8c69-4b9f-a149-4372fe9a6507" />
+
 
 <img width="2560" height="1440" alt="image" src="https://github.com/user-attachments/assets/23072505-1b8f-41a8-88a7-d3815a4ad8dc" />
 
