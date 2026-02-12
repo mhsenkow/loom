@@ -29,6 +29,8 @@ _CHAT_MODEL_EXCLUDE_KEYWORDS = (
     "moondream",
 )
 _QUICK_HINTS = ("flash", "nano", "mini", "haiku", "small", "tiny", ":free")
+_REFINEMENT_HINTS = ("pro", "sonnet", "opus", "o3", "gpt-4", "reasoner", "large", "70b")
+_REFINEMENT_CODE_HINTS = ("code", "codestral", "coder", "reason")
 
 
 class ProviderManager:
@@ -272,6 +274,53 @@ class ProviderManager:
         models = await self.list_all_models()
         return self._pick_quick_from_catalog(models, active_model=active_model)
 
+    def _refinement_cloud_score(self, model: dict, task: Optional[str] = None) -> float:
+        model_text = f"{model.get('id', '')} {model.get('name', '')}".lower()
+        score = 0.45
+
+        if any(hint in model_text for hint in _REFINEMENT_HINTS):
+            score += 0.28
+        if bool(model.get("context_window")):
+            score += 0.10
+        if model.get("cost_tier") == "premium":
+            score += 0.09
+        if model.get("is_free"):
+            score -= 0.06
+        if any(hint in model_text for hint in _QUICK_HINTS):
+            score -= 0.08
+
+        if task == "code" and any(hint in model_text for hint in _REFINEMENT_CODE_HINTS):
+            score += 0.18
+        elif task == "reasoning" and any(hint in model_text for hint in ("reason", "o3", "pro", "sonnet")):
+            score += 0.16
+
+        return score
+
+    async def suggest_refinement_model(self, active_model: Optional[str] = None, task: Optional[str] = None) -> Optional[dict]:
+        """Pick a high-quality cloud model for second-pass refinement."""
+        models = await self.list_all_models()
+        cloud_candidates = [
+            m for m in models
+            if str(m.get("provider_type") or "") == "cloud" and self._is_likely_chat_model(str(m.get("name") or m.get("id") or ""))
+        ]
+        if not cloud_candidates:
+            return None
+
+        scored = sorted(
+            cloud_candidates,
+            key=lambda m: self._refinement_cloud_score(m, task=task),
+            reverse=True,
+        )
+        best = scored[0]
+        if active_model and best.get("id") == active_model:
+            return None
+        return {
+            "model": best["id"],
+            "provider_type": "cloud",
+            "provider": best.get("provider"),
+            "reason": "quality refinement pass",
+        }
+
     # ------------------------------------------------------------------
     # Routing chat to the right provider
     # ------------------------------------------------------------------
@@ -292,6 +341,10 @@ class ProviderManager:
                 return prefix, model_id[len(prefix) + 1:]
         # No recognized prefix → Ollama
         return "ollama", model_id
+
+    def resolve_model_id(self, model_id: str) -> tuple[str, str]:
+        """Public model parser for callers that need provider/model split metadata."""
+        return self._parse_model_id(model_id)
 
     async def chat(
         self,

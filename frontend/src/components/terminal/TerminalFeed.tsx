@@ -39,6 +39,24 @@ import {
 import { NOTEBOOK_TEMPLATES } from '../circuit/TemplatesSidebar'
 import type { LogEntry } from '../../types/module'
 import { buildConversationContext, buildEnhancedPrompt } from '../../utils/conversationContext'
+import { buildConversationProfileFromSettings, normalizeProfileLines, toMultilineText } from '../../utils/conversationProfile'
+import {
+  addMemoryEntry,
+  buildSettingsMemoryNotesFromVault,
+  pruneMemoryVault,
+  removeMemoryEntryById,
+  selectRelevantMemory,
+  syncLegacyMemoryNotes,
+  touchMemoryEntries,
+  type MemoryTier,
+} from '../../utils/memoryVault'
+import {
+  clearMaintenanceQueue,
+  loadMaintenanceQueue,
+  markMaintenanceTaskDone,
+  upsertMaintenanceTask,
+  type MaintenanceTask,
+} from '../../utils/maintenanceQueue'
 import { API_BASE_URL } from '../../config/api'
 import { loadEntriesFromLocalStorage } from '../../utils/terminalHistory'
 import {
@@ -63,6 +81,7 @@ import {
   indexCodeContextFolder,
   type CodeContextIndexOptions,
 } from '../../utils/codeContextApi'
+import { DOWNLOAD_TELEMETRY_EVENT, type DownloadTelemetryDetail } from '../../utils/downloadTelemetry'
 import { showErrorToast, showInfoToast, showSuccessToast } from '../../utils/uiNotifications'
 
 const BACKEND_URL = API_BASE_URL
@@ -83,6 +102,10 @@ const IDLE_MATRIX_CHARSET = '01ABCDEF[]{}<>/\\|*+-._:;'.split('')
 const TERMINAL_SNIPPETS_KEY = 'loom-terminal-snippets-v1'
 const TERMINAL_PINS_KEY = 'loom-terminal-pins-v1'
 const CIRCUIT_IMPORT_EVENT = 'loom:circuit-import'
+const AGENT_FEEDBACK_KEY = 'loom-agent-feedback-v1'
+const SESSION_MISSION_KEY = 'loom-session-mission-v1'
+const QDC_CONTEXT_KEY = 'loom-qdc-context-v1'
+const WATCHDOG_INTERVAL_MS = 45000
 
 const CHAT_MODEL_EXCLUDE_KEYWORDS = ['flux', 'flux2', 'stable-diffusion', 'sdxl', 'llava', 'bakllava', 'moondream', 'vision']
 const QUICK_MODEL_PRIORITY_HINTS = [
@@ -111,6 +134,104 @@ const CONTEXT_FOLLOWUP_STARTS = ['and ', 'also ', 'what about', 'how about', 'ca
 const ASSIST_CONFIRM_YES = new Set(['yes', 'y', 'ok', 'okay', 'do it', 'run it', 'go', 'sure'])
 const ASSIST_CONFIRM_NO = new Set(['no', 'n', 'cancel', 'stop', 'nevermind', 'never mind'])
 const ASSIST_CONFIRM_EDIT_PREFIXES = ['edit:', 'change:', 'update:']
+
+const CONVERSATION_STARTERS: Array<{
+  id: string
+  title: string
+  capability: string
+  prompt: string
+}> = [
+  {
+    id: 'founder-mode',
+    title: 'Build My Next Product',
+    capability: 'Strategy + execution',
+    prompt: 'Act like my technical cofounder. Ask 3 high-signal questions, then build a 30-day product plan with milestones, risks, and what to do first this week.',
+  },
+  {
+    id: 'debug-mode',
+    title: 'Debug Something Fast',
+    capability: 'Engineering triage',
+    prompt: 'Help me debug a tricky issue quickly. Start by asking for symptoms, expected behavior, and environment, then produce a ranked root-cause checklist and first 3 tests to run.',
+  },
+  {
+    id: 'repo-audit',
+    title: 'Audit This Codebase',
+    capability: 'Code quality + architecture',
+    prompt: 'Run a practical codebase audit mindset: identify likely reliability risks, maintainability problems, and missing tests. Give me a prioritized fix plan.',
+  },
+  {
+    id: 'research-brief',
+    title: 'Research Anything',
+    capability: 'Structured research',
+    prompt: 'I need a research brief on a topic. Ask me the topic and desired depth, then produce a clear brief with key findings, open questions, and an action summary.',
+  },
+  {
+    id: 'automation-flow',
+    title: 'Automate a Workflow',
+    capability: 'Systems + automation',
+    prompt: 'Help me automate a repetitive workflow end-to-end. Ask what I do manually now, then propose a robust automation design with fallback steps and monitoring.',
+  },
+  {
+    id: 'image-creative',
+    title: 'Create Visual Concepts',
+    capability: 'Image ideation',
+    prompt: 'I want to create visuals. Help me turn my idea into 5 strong image concepts with generation-ready prompts, style directions, and a recommendation for the first one to try.',
+  },
+  {
+    id: 'music-creative',
+    title: 'Compose a Track',
+    capability: 'Music ideation',
+    prompt: 'Help me create an original music track concept. Build mood, genre, tempo, lyrics hook, and a production prompt I can use right away.',
+  },
+  {
+    id: 'learning-coach',
+    title: 'Teach Me a Skill',
+    capability: 'Adaptive tutoring',
+    prompt: 'Teach me a skill efficiently. Start by checking my current level, then create a progressive learning path with exercises, checkpoints, and a mini-project.',
+  },
+  {
+    id: 'decision-support',
+    title: 'Make a Tough Decision',
+    capability: 'Decision framework',
+    prompt: 'Help me make a hard decision. Build a weighted decision matrix, highlight blind spots, and recommend a choice with confidence and tradeoffs.',
+  },
+  {
+    id: 'career-ops',
+    title: 'Career Power Move',
+    capability: 'Career strategy',
+    prompt: 'Help me plan my next career move. Ask about goals and constraints, then give me a concrete 4-week plan with networking, portfolio, and outreach actions.',
+  },
+  {
+    id: 'business-ops',
+    title: 'Grow My Business',
+    capability: 'Business operations',
+    prompt: 'Act as an operator. Build a growth plan for my business with acquisition ideas, conversion improvements, retention tactics, and weekly KPIs to track.',
+  },
+  {
+    id: 'life-planning',
+    title: 'Design My Week',
+    capability: 'Personal planning',
+    prompt: 'Help me design a focused week. Ask for priorities and constraints, then create a realistic schedule with deep work blocks, recovery time, and success criteria.',
+  },
+]
+
+type AgentFeedbackKind = 'verbose' | 'vague' | 'robotic' | 'perfect'
+
+interface AgentFeedbackProfile {
+  verbose: number
+  vague: number
+  robotic: number
+  perfect: number
+  updatedAt: number
+}
+
+interface SessionMission {
+  objective: string
+  nextAction: string
+  blocker: string
+  progress: string
+  updatedAt: number
+}
 
 // State for collecting circuit inputs
 interface CircuitInputState {
@@ -358,6 +479,58 @@ function buildCommandStatusContent(commandText: string, state: CommandLifecycleS
   return `${marker} ${commandText}\n${detail}`
 }
 
+function loadAgentFeedbackProfile(): AgentFeedbackProfile {
+  try {
+    const raw = localStorage.getItem(AGENT_FEEDBACK_KEY)
+    if (!raw) {
+      return { verbose: 0, vague: 0, robotic: 0, perfect: 0, updatedAt: 0 }
+    }
+    const parsed = JSON.parse(raw) as Partial<AgentFeedbackProfile>
+    return {
+      verbose: Number(parsed.verbose || 0),
+      vague: Number(parsed.vague || 0),
+      robotic: Number(parsed.robotic || 0),
+      perfect: Number(parsed.perfect || 0),
+      updatedAt: Number(parsed.updatedAt || 0),
+    }
+  } catch {
+    return { verbose: 0, vague: 0, robotic: 0, perfect: 0, updatedAt: 0 }
+  }
+}
+
+function saveAgentFeedbackProfile(profile: AgentFeedbackProfile) {
+  localStorage.setItem(AGENT_FEEDBACK_KEY, JSON.stringify(profile))
+}
+
+function feedbackToBias(profile: AgentFeedbackProfile) {
+  const total = Math.max(1, profile.verbose + profile.vague + profile.robotic + profile.perfect)
+  const verboseRatio = profile.verbose / total
+  const vagueRatio = profile.vague / total
+  const roboticRatio = profile.robotic / total
+  const perfectRatio = profile.perfect / total
+  return {
+    conciseBias: Math.max(-1, Math.min(1, (verboseRatio * 1.4) - (perfectRatio * 0.3))),
+    clarityBias: Math.max(-1, Math.min(1, (vagueRatio * 1.5) - (perfectRatio * 0.25))),
+    warmthBias: Math.max(-1, Math.min(1, (roboticRatio * 1.4) - (perfectRatio * 0.2))),
+    directnessBias: Math.max(-1, Math.min(1, ((vagueRatio + verboseRatio) * 0.7) - (perfectRatio * 0.15))),
+  }
+}
+
+function loadMissionMap(): Record<string, SessionMission> {
+  try {
+    const raw = localStorage.getItem(SESSION_MISSION_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as Record<string, SessionMission>
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function saveMissionMap(map: Record<string, SessionMission>) {
+  localStorage.setItem(SESSION_MISSION_KEY, JSON.stringify(map))
+}
+
 function emitCrtBurst(kind: string, strength = 1, durationMs = 170) {
   window.dispatchEvent(new CustomEvent('loom:crt-burst', {
     detail: { kind, strength, durationMs },
@@ -385,13 +558,13 @@ function buildTelemetryRailLine(
   tokens: string[],
   deltaTokens: string[],
   mode: 'idle' | 'active',
-): { text: string; isToken: boolean; isDelta: boolean } {
+): { text: string; isToken: boolean; isDelta: boolean; isTransfer: boolean } {
   const safeTokens = tokens.length > 0 ? tokens : ['SOCKET:DOWN', 'MODEL:NONE', 'PHASE:IDLE']
   const safeDeltaTokens = deltaTokens.filter(Boolean)
   const tokenChance = mode === 'active' ? 0.95 : 0.88
   const useToken = Math.random() < tokenChance
   if (!useToken) {
-    return { text: randomGlyphLine(3, 7), isToken: false, isDelta: false }
+    return { text: randomGlyphLine(3, 7), isToken: false, isDelta: false, isTransfer: false }
   }
 
   const useDeltaToken = safeDeltaTokens.length > 0 && Math.random() < (mode === 'active' ? 0.7 : 0.52)
@@ -399,10 +572,12 @@ function buildTelemetryRailLine(
   const token = pool[Math.floor(Math.random() * pool.length)]
   const noisyPrefix = randomGlyphLine(1, 2)
   const noisySuffix = randomGlyphLine(1, 2)
+  const isTransferToken = token.includes('PULL:') || token.includes('PULLST:') || token.includes('PULLPCT:') || token.includes('D_PULL')
   return {
     text: useDeltaToken ? `${noisyPrefix} ${token}` : `${noisyPrefix} ${token} ${noisySuffix}`,
     isToken: true,
     isDelta: useDeltaToken,
+    isTransfer: isTransferToken,
   }
 }
 
@@ -435,6 +610,26 @@ export function TerminalFeed() {
     percent?: number
     message?: string
     error?: string
+    speedBps?: number
+    etaSeconds?: number
+    fileName?: string
+    filesCompleted?: number
+    filesTotal?: number
+  } | null>(null)
+  const [ambientDownloadProgress, setAmbientDownloadProgress] = useState<{
+    model: string
+    status: string
+    completed: number
+    total: number
+    percent?: number
+    message?: string
+    error?: string
+    scope: string
+    speedBps?: number
+    etaSeconds?: number
+    fileName?: string
+    filesCompleted?: number
+    filesTotal?: number
   } | null>(null)
   const [imageAnalysis, setImageAnalysis] = useState<{
     imageUrl: string
@@ -495,6 +690,8 @@ export function TerminalFeed() {
     seed?: number
   } | null>(null)
   const [pendingAssistantAction, setPendingAssistantAction] = useState<PendingAssistantAction | null>(null)
+  const [maintenanceQueue, setMaintenanceQueue] = useState<MaintenanceTask[]>(() => loadMaintenanceQueue())
+  const [agentFeedbackProfile, setAgentFeedbackProfile] = useState<AgentFeedbackProfile>(loadAgentFeedbackProfile)
   const [aiRuntimeTelemetry, setAiRuntimeTelemetry] = useState({
     active: false,
     phase: 'Idle',
@@ -748,6 +945,13 @@ export function TerminalFeed() {
       return null
     }
   })
+  const [sessionMission, setSessionMission] = useState<SessionMission>(() => ({
+    objective: '',
+    nextAction: '',
+    blocker: '',
+    progress: '',
+    updatedAt: 0,
+  }))
   const lastSavedEntriesCountRef = useRef(0)
   const lastSessionRefreshEventMsRef = useRef(0)
 
@@ -758,8 +962,39 @@ export function TerminalFeed() {
   const pendingImageUrlRef = useRef<string | null>(null)
   const commandInputEditorRef = useRef<Editor | null>(null)
   const lastDownloadToastKeyRef = useRef<string | null>(null)
+  const ambientDownloadClearTimerRef = useRef<number | null>(null)
   const wasConnectedRef = useRef(false)
   const lastConnectedNoticeRef = useRef(0)
+  const lastWatchdogEventRef = useRef<Record<string, number>>({})
+  const initialBriefingDoneRef = useRef(false)
+
+  useEffect(() => {
+    saveAgentFeedbackProfile(agentFeedbackProfile)
+  }, [agentFeedbackProfile])
+
+  useEffect(() => {
+    const map = loadMissionMap()
+    const key = currentSessionName || '__current__'
+    const mission = map[key]
+    if (mission) {
+      setSessionMission(mission)
+      return
+    }
+    setSessionMission({ objective: '', nextAction: '', blocker: '', progress: '', updatedAt: 0 })
+  }, [currentSessionName])
+
+  const persistSessionMission = useCallback((next: SessionMission) => {
+    setSessionMission(next)
+    const map = loadMissionMap()
+    const key = currentSessionName || '__current__'
+    map[key] = next
+    saveMissionMap(map)
+  }, [currentSessionName])
+
+  useEffect(() => {
+    const settings = loadSettings()
+    syncLegacyMemoryNotes(settings.memoryNotes || '')
+  }, [])
 
   const isNearFeedBottom = useCallback((el: HTMLDivElement) => {
     const distanceFromBottom = el.scrollHeight - el.clientHeight - el.scrollTop
@@ -775,6 +1010,72 @@ export function TerminalFeed() {
       return next.slice(0, 18)
     })
   }, [])
+
+  useEffect(() => {
+    const handleDownloadTelemetry = (event: Event) => {
+      const custom = event as CustomEvent<DownloadTelemetryDetail>
+      const detail = custom.detail
+      if (!detail) return
+
+      const nextProgress = {
+        model: detail.model || 'unknown',
+        status: detail.status || 'unknown',
+        completed: detail.completed || 0,
+        total: detail.total || 0,
+        percent: detail.percent,
+        message: detail.message,
+        error: detail.error,
+        scope: detail.scope,
+        speedBps: detail.speedBps,
+        etaSeconds: detail.etaSeconds,
+        fileName: detail.fileName,
+        filesCompleted: detail.filesCompleted,
+        filesTotal: detail.filesTotal,
+      }
+      setAmbientDownloadProgress(nextProgress)
+
+      const scopeToken = (detail.scope || 'unknown').toUpperCase()
+      const statusToken = (detail.status || 'unknown').toUpperCase()
+      pushTelemetryDelta(`D_PULL:${scopeToken}:${statusToken}`)
+      if (detail.model) {
+        pushTelemetryDelta(`D_PULLM:${detail.model}`)
+      }
+      if (typeof detail.percent === 'number') {
+        pushTelemetryDelta(`D_PULLP:${Math.round(detail.percent)}`)
+      }
+      if (typeof detail.speedBps === 'number' && detail.speedBps > 0) {
+        const speedMbps = (detail.speedBps / (1024 * 1024)).toFixed(1)
+        pushTelemetryDelta(`D_PULLSPD:${speedMbps}MBPS`)
+      }
+      if (typeof detail.filesCompleted === 'number' && typeof detail.filesTotal === 'number' && detail.filesTotal > 0) {
+        pushTelemetryDelta(`D_PULLF:${detail.filesCompleted}/${detail.filesTotal}`)
+      }
+
+      if (ambientDownloadClearTimerRef.current) {
+        window.clearTimeout(ambientDownloadClearTimerRef.current)
+        ambientDownloadClearTimerRef.current = null
+      }
+      if (detail.status === 'success' || detail.status === 'error') {
+        ambientDownloadClearTimerRef.current = window.setTimeout(() => {
+          setAmbientDownloadProgress(current => {
+            if (!current || current.model !== nextProgress.model || current.scope !== nextProgress.scope) return current
+            if (current.status !== detail.status) return current
+            return null
+          })
+          ambientDownloadClearTimerRef.current = null
+        }, 4200)
+      }
+    }
+
+    window.addEventListener(DOWNLOAD_TELEMETRY_EVENT, handleDownloadTelemetry as EventListener)
+    return () => {
+      window.removeEventListener(DOWNLOAD_TELEMETRY_EVENT, handleDownloadTelemetry as EventListener)
+      if (ambientDownloadClearTimerRef.current) {
+        window.clearTimeout(ambientDownloadClearTimerRef.current)
+        ambientDownloadClearTimerRef.current = null
+      }
+    }
+  }, [pushTelemetryDelta])
 
   // Persist panel state
   useEffect(() => {
@@ -995,6 +1296,33 @@ export function TerminalFeed() {
     }])
   }, [])
 
+  const emitSessionRitualBriefing = useCallback((timestamp: number) => {
+    const missionLines = [
+      sessionMission.objective ? `Objective: ${sessionMission.objective}` : 'Objective: (not set)',
+      sessionMission.nextAction ? `Next: ${sessionMission.nextAction}` : 'Next: (not set)',
+      sessionMission.blocker ? `Blocker: ${sessionMission.blocker}` : 'Blocker: none',
+    ]
+    const queueOpen = maintenanceQueue.filter(task => task.status === 'open').length
+    const memoryCount = pruneMemoryVault().length
+    addSystemEntry(
+      [
+        '[SESSION BRIEFING]',
+        ...missionLines,
+        `Open maintenance tasks: ${queueOpen}`,
+        `Dynamic memories: ${memoryCount}`,
+      ].join('\n'),
+      timestamp,
+    )
+  }, [addSystemEntry, maintenanceQueue, sessionMission.blocker, sessionMission.nextAction, sessionMission.objective])
+
+  useEffect(() => {
+    if (initialBriefingDoneRef.current) return
+    const hasMeaningfulHistory = entries.some(entry => entry.type === 'user' || entry.type === 'ai')
+    if (!hasMeaningfulHistory) return
+    initialBriefingDoneRef.current = true
+    emitSessionRitualBriefing(Date.now())
+  }, [emitSessionRitualBriefing, entries])
+
   useEffect(() => {
     if (!aiRuntimeTelemetry.active) return
     const interval = window.setInterval(() => {
@@ -1116,17 +1444,90 @@ export function TerminalFeed() {
       addSystemEntry(parts.join(' '), Date.now())
     }
 
+    const handleAiMetaEvent = (event: Event) => {
+      const detail = (event as CustomEvent<Record<string, unknown>>).detail || {}
+      const phase = typeof detail.phase === 'string' ? detail.phase : ''
+      const entryId = currentAIEntryRef.current
+      if (!entryId) return
+
+      setEntries(prev => prev.map(entry => {
+        if (entry.id !== entryId) return entry
+        return {
+          ...entry,
+          metadata: {
+            ...(entry.metadata || {}),
+            route: detail.route,
+            confidence: detail.confidence,
+            responseContract: detail.response_contract,
+            provenance: detail.provenance,
+            refinedBy: detail.refinement_model || detail.refined_by,
+            requiresClarification: detail.requires_clarification,
+            phase: phase || entry.metadata?.phase,
+          },
+        }
+      }))
+    }
+
     window.addEventListener('loom:models_updated', handleModelsUpdated)
     window.addEventListener('orchestrator_event', handleOrchestratorEvent)
     window.addEventListener('qdc_job_event', handleQdcJobEvent)
+    window.addEventListener('ai_meta', handleAiMetaEvent)
     getSocketInstance()
 
     return () => {
       window.removeEventListener('loom:models_updated', handleModelsUpdated)
       window.removeEventListener('orchestrator_event', handleOrchestratorEvent)
       window.removeEventListener('qdc_job_event', handleQdcJobEvent)
+      window.removeEventListener('ai_meta', handleAiMetaEvent)
     }
   }, [fetchModels, addSystemEntry])
+
+  useEffect(() => {
+    const tick = () => {
+      const now = Date.now()
+
+      const registerWatchdog = (key: string, title: string, detail: string, severity: 'low' | 'medium' | 'high') => {
+        const last = lastWatchdogEventRef.current[key] || 0
+        if (now - last < 120000) return
+        lastWatchdogEventRef.current[key] = now
+        const task = upsertMaintenanceTask({ title, detail, severity, source: 'watchdog' })
+        setMaintenanceQueue(loadMaintenanceQueue())
+        addSystemEntry(`[WATCHDOG] ${title}\n${detail}\nTask: ${task.id}`, now)
+      }
+
+      if (!connected) {
+        registerWatchdog(
+          'backend-disconnected',
+          'Backend connection unstable',
+          'Socket disconnected. Verify backend process and reconnect health checks.',
+          'high',
+        )
+      }
+
+      if (typeof status.ramUsedPercent === 'number' && status.ramUsedPercent >= 92) {
+        registerWatchdog(
+          'ram-pressure',
+          'High memory pressure',
+          `RAM usage is ${Math.round(status.ramUsedPercent)}%. Consider unloading heavy models.`,
+          'medium',
+        )
+      }
+
+      const recentErrors = entries.slice(-30).filter(entry => entry.type === 'error').length
+      if (recentErrors >= 3) {
+        registerWatchdog(
+          'error-spike',
+          'Recent error spike',
+          `${recentErrors} error entries in recent history. Run /eval for diagnostics.`,
+          'medium',
+        )
+      }
+    }
+
+    tick()
+    const interval = window.setInterval(tick, WATCHDOG_INTERVAL_MS)
+    return () => window.clearInterval(interval)
+  }, [addSystemEntry, connected, entries, status.ramUsedPercent])
 
   // Handle folder indexing
   const handleIndexFolder = useCallback(async (folderPath: string, options?: CodeContextIndexOptions) => {
@@ -1226,6 +1627,8 @@ export function TerminalFeed() {
         requestedModel: modelToUse,
         sourcePrompt: prompt,
         contextMode: effectiveContextMode,
+        requestId: entryId,
+        missionObjective: sessionMission.objective || undefined,
       },
     }])
 
@@ -1269,7 +1672,19 @@ export function TerminalFeed() {
       ))
     }
 
-    const handleStatus = (statusData: { status: string; message: string; model?: string }) => {
+    const handleStatus = (statusData: {
+      status: string
+      message: string
+      model?: string
+      route?: string
+      confidence?: number
+      response_contract?: string
+      provenance?: string[]
+      refined_by?: string
+      requires_clarification?: boolean
+      agent_mode?: 'off' | 'auto'
+      agent_used?: boolean
+    }) => {
       if (statusData.status === 'running') {
         setAiRuntimeTelemetry(prev => ({
           active: true,
@@ -1277,6 +1692,24 @@ export function TerminalFeed() {
           signal: Math.max(prev.signal, 0.22),
           charsPerSec: prev.charsPerSec,
         }))
+        setEntries(prev => prev.map(ent => (
+          ent.id === entryId
+            ? {
+              ...ent,
+              metadata: {
+                ...(ent.metadata || {}),
+                route: statusData.route ?? ent.metadata?.route,
+                confidence: typeof statusData.confidence === 'number' ? statusData.confidence : ent.metadata?.confidence,
+                responseContract: statusData.response_contract ?? ent.metadata?.responseContract,
+                provenance: statusData.provenance ?? ent.metadata?.provenance,
+                refinedBy: statusData.refined_by ?? ent.metadata?.refinedBy,
+                requiresClarification: statusData.requires_clarification ?? ent.metadata?.requiresClarification,
+                agentMode: statusData.agent_mode ?? ent.metadata?.agentMode,
+                agentUsed: typeof statusData.agent_used === 'boolean' ? statusData.agent_used : ent.metadata?.agentUsed,
+              },
+            }
+            : ent
+        )))
         return
       }
 
@@ -1323,6 +1756,14 @@ export function TerminalFeed() {
                   requestedModel: (ent.metadata?.requestedModel as string | undefined) || modelToUse,
                   sourcePrompt: (ent.metadata?.sourcePrompt as string | undefined) || prompt,
                   contextMode: (ent.metadata?.contextMode as string | undefined) || effectiveContextMode,
+                  route: statusData.route ?? ent.metadata?.route,
+                  confidence: typeof statusData.confidence === 'number' ? statusData.confidence : ent.metadata?.confidence,
+                  responseContract: statusData.response_contract ?? ent.metadata?.responseContract,
+                  provenance: statusData.provenance ?? ent.metadata?.provenance,
+                  refinedBy: statusData.refined_by ?? ent.metadata?.refinedBy,
+                  requiresClarification: statusData.requires_clarification ?? ent.metadata?.requiresClarification,
+                  agentMode: statusData.agent_mode ?? ent.metadata?.agentMode,
+                  agentUsed: typeof statusData.agent_used === 'boolean' ? statusData.agent_used : ent.metadata?.agentUsed,
                   streamSignal: 0,
                 },
                 content: statusData.status === 'error'
@@ -1336,18 +1777,48 @@ export function TerminalFeed() {
       }
     }
 
-    const circuitContext = getCircuitContext()
-    let enhancedPrompt: string
-
-    if (effectiveContextMode === 'input') {
-      enhancedPrompt = circuitContext
-        ? `${circuitContext}\n\n---\n\nUser question: ${prompt}`
-        : prompt
-    } else {
-      const maxTurns = effectiveContextMode === 'full' ? 100 : 24
-      const conversationBlock = buildConversationContext(entries, { contextMode: effectiveContextMode, maxTurns })
-      enhancedPrompt = buildEnhancedPrompt(prompt, conversationBlock, circuitContext)
+    const activeSettings = loadSettings()
+    const memoryVault = pruneMemoryVault()
+    const relevantMemory = selectRelevantMemory(prompt, memoryVault, 8)
+    if (relevantMemory.length > 0) {
+      touchMemoryEntries(relevantMemory.map(item => item.entry.id))
     }
+    const relevantMemoryLines = relevantMemory.map(item => {
+      const confidenceLabel = `${Math.round(item.entry.confidence * 100)}%`
+      return `[${item.entry.tier}|${confidenceLabel}] ${item.entry.text}`
+    })
+    const baseMemoryLines = normalizeProfileLines(activeSettings.memoryNotes, { maxItems: 40 })
+    const mergedMemoryLines = [...new Set([...relevantMemoryLines, ...baseMemoryLines])].slice(0, 40)
+    const missionUserGoals = sessionMission.objective
+      ? [sessionMission.objective]
+      : []
+    const missionMemoryNotes = [
+      sessionMission.nextAction ? `Current next action: ${sessionMission.nextAction}` : '',
+      sessionMission.blocker ? `Known blocker: ${sessionMission.blocker}` : '',
+      sessionMission.progress ? `Progress note: ${sessionMission.progress}` : '',
+    ].filter(Boolean)
+
+    const conversationProfile = buildConversationProfileFromSettings({
+      goalsEnabled: activeSettings.goalsEnabled,
+      memoryEnabled: activeSettings.memoryEnabled,
+      userGoals: toMultilineText([...normalizeProfileLines(activeSettings.userGoals), ...missionUserGoals]),
+      assistantGoals: activeSettings.assistantGoals,
+      memoryNotes: toMultilineText([...mergedMemoryLines, ...missionMemoryNotes]),
+    })
+
+    const circuitContext = getCircuitContext()
+    const promptWordCount = prompt.trim().split(/\s+/).filter(Boolean).length
+    const adaptiveMaxTurns = effectiveContextMode === 'full'
+      ? (promptWordCount >= 90 ? 140 : promptWordCount >= 35 ? 100 : 72)
+      : (promptWordCount >= 30 ? 32 : 20)
+    const conversationBlock = effectiveContextMode === 'input'
+      ? null
+      : buildConversationContext(entries, {
+        contextMode: effectiveContextMode,
+        maxTurns: adaptiveMaxTurns,
+      })
+    const enhancedPrompt = buildEnhancedPrompt(prompt, conversationBlock, circuitContext, conversationProfile)
+    const feedbackBias = feedbackToBias(agentFeedbackProfile)
 
     const useCodeContext = codeContextActive
     const sent = sendChat(
@@ -1356,7 +1827,15 @@ export function TerminalFeed() {
       handleChunk,
       handleStatus,
       useCodeContext,
-      { rawPrompt: prompt, contextMode: effectiveContextMode },
+      {
+        rawPrompt: prompt,
+        contextMode: effectiveContextMode,
+        source: 'terminal',
+        clientRequestId: entryId,
+        conversationProfile,
+        feedbackProfile: feedbackBias,
+        agentMode: activeSettings.mistralAgentMode,
+      },
     )
 
     if (!sent) {
@@ -1376,7 +1855,29 @@ export function TerminalFeed() {
           : entry
       ))
     }
-  }, [sendChat, status.activeModel, models, entries, speakTTSUnified, autoGenerateAudio, ttsModelType, generateOrpheus, playOrpheusBlob, saveTTSBlobToBackend, setGeneratingEntryId, setAudioCacheByEntryId, setSelectedAiEntryId, codeContextActive, setActiveModel, addSystemEntry])
+  }, [
+    sendChat,
+    status.activeModel,
+    models,
+    entries,
+    speakTTSUnified,
+    autoGenerateAudio,
+    ttsModelType,
+    generateOrpheus,
+    playOrpheusBlob,
+    saveTTSBlobToBackend,
+    setGeneratingEntryId,
+    setAudioCacheByEntryId,
+    setSelectedAiEntryId,
+    codeContextActive,
+    setActiveModel,
+    addSystemEntry,
+    sessionMission.objective,
+    sessionMission.nextAction,
+    sessionMission.blocker,
+    sessionMission.progress,
+    agentFeedbackProfile,
+  ])
 
   useEffect(() => {
     handleAIRequestRef.current = handleAIRequest
@@ -1538,6 +2039,15 @@ export function TerminalFeed() {
               const summary = typeof resultData?.result?.summary === 'string'
                 ? resultData.result.summary
                 : 'QDC job completed.'
+              const assistantReply = typeof resultData?.result?.assistant_reply === 'string'
+                ? resultData.result.assistant_reply.trim()
+                : ''
+              const artifactId = typeof resultData?.result?.artifact_id === 'string'
+                ? resultData.result.artifact_id
+                : ''
+              const model = typeof resultData?.result?.model === 'string'
+                ? resultData.result.model
+                : 'qdc:micro-brain'
               setEntries(prev => [...prev, {
                 id: `qdc-result-${jobId}-${Date.now()}`,
                 type: 'system',
@@ -1545,6 +2055,33 @@ export function TerminalFeed() {
                 timestamp: Date.now(),
                 status: 'success',
               }])
+              if (assistantReply) {
+                setEntries(prev => [...prev, {
+                  id: `qdc-ai-${jobId}-${Date.now()}`,
+                  type: 'ai',
+                  content: assistantReply,
+                  timestamp: Date.now(),
+                  status: 'success',
+                  metadata: {
+                    model,
+                    route: 'qdc_job',
+                    provenance: ['qdc-cloud'],
+                    artifactId,
+                  },
+                }])
+                try {
+                  localStorage.setItem(QDC_CONTEXT_KEY, JSON.stringify({
+                    jobId,
+                    summary,
+                    assistantReply,
+                    model,
+                    artifactId,
+                    timestamp: Date.now(),
+                  }))
+                } catch {
+                  // Ignore storage errors.
+                }
+              }
             }
           } else {
             addErrorEntry(`QDC job ${jobId} ended with status: ${statusValue}`, Date.now())
@@ -1590,6 +2127,106 @@ export function TerminalFeed() {
     addSystemEntry(`📡 QDC job started: ${jobId}\nPrompt: ${cleaned}`, Date.now())
     pollQdcJob(jobId)
     return jobId
+  }, [addSystemEntry, pollQdcJob])
+
+  const createQdcPackage = useCallback(async (
+    artifactPath: string,
+    startupCommand?: string,
+    packageKind: 'application' | 'model' = 'application',
+  ) => {
+    const cleanedPath = artifactPath.trim()
+    if (!cleanedPath) {
+      throw new Error('QDC artifact path is empty')
+    }
+
+    const res = await fetch(`${API_BASE}/api/qdc/package`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: cleanedPath,
+        startup_command: (startupCommand || '').trim() || undefined,
+        package_kind: packageKind,
+      }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || !data?.package?.path) {
+      const detail = typeof data?.detail === 'string' ? data.detail : 'Failed to build QDC package'
+      throw new Error(detail)
+    }
+    return data.package as {
+      id: string
+      name: string
+      path: string
+      size_bytes: number
+      file_count: number
+      recommended_upload_type?: string
+    }
+  }, [])
+
+  const packageAndRunQdc = useCallback(async (
+    artifactPath: string,
+    prompt: string,
+    startupCommand?: string,
+    packageKind: 'application' | 'model' = 'application',
+  ) => {
+    const cleanedPath = artifactPath.trim()
+    const cleanedPrompt = prompt.trim()
+    if (!cleanedPath || !cleanedPrompt) {
+      throw new Error('QDC ship requires both a path and a prompt')
+    }
+
+    const statusRes = await fetch(`${API_BASE}/api/qdc/status`)
+    if (statusRes.ok) {
+      const statusData = await statusRes.json()
+      if (!statusData?.provider_connected) {
+        setShowProviderSetup(true)
+        throw new Error('QDC is not connected yet. Open Provider Setup and connect Qualcomm QDC token first.')
+      }
+    }
+
+    const sid = getSocketInstance()?.id || undefined
+    const res = await fetch(`${API_BASE}/api/qdc/package-and-run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: cleanedPath,
+        prompt: cleanedPrompt,
+        startup_command: (startupCommand || '').trim() || undefined,
+        package_kind: packageKind,
+        target: 'auto',
+        priority: 'normal',
+        sid,
+      }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || !data?.job?.id) {
+      const detail = typeof data?.detail === 'string' ? data.detail : 'Failed to package and run QDC job'
+      throw new Error(detail)
+    }
+
+    const packagePath = String(data?.package?.path || '')
+    const packageSize = Number(data?.package?.size_bytes || 0)
+    const uploadType = typeof data?.package?.recommended_upload_type === 'string'
+      ? data.package.recommended_upload_type
+      : ''
+    const artifactId = String(data?.artifact?.id || '')
+    const jobId = String(data?.job?.id || '')
+    addSystemEntry(
+      [
+        `📡 QDC package created: ${packagePath || '(unknown path)'}`,
+        packageSize > 0 ? `Size: ${Math.round(packageSize / 1024)} KB` : '',
+        uploadType ? `Upload Type: ${uploadType}` : '',
+        artifactId ? `Artifact: ${artifactId}` : '',
+        `Job: ${jobId}`,
+      ].filter(Boolean).join('\n'),
+      Date.now(),
+    )
+    pollQdcJob(jobId)
+    return {
+      jobId,
+      artifactId,
+      packagePath,
+    }
   }, [addSystemEntry, pollQdcJob])
 
   const handleSlashCommand = useCallback((command: string, timestamp: number) => {
@@ -1737,6 +2374,330 @@ export function TerminalFeed() {
       return
     }
 
+    if (normalizedCmd === 'mission') {
+      const action = (args[0] || 'show').toLowerCase()
+      const value = args.slice(1).join(' ').trim()
+      const currentMission = sessionMission
+
+      if (action === 'show') {
+        addSystemEntryForCommand(
+          [
+            'SESSION MISSION:',
+            `  Objective: ${currentMission.objective || '(not set)'}`,
+            `  Next: ${currentMission.nextAction || '(not set)'}`,
+            `  Blocker: ${currentMission.blocker || 'none'}`,
+            `  Progress: ${currentMission.progress || '(not set)'}`,
+            '',
+            'Usage: /mission set <objective> | /mission next <action> | /mission block <issue> | /mission progress <note> | /mission clear',
+          ].join('\n'),
+          timestamp,
+        )
+        setCommandStatus('done', 'mission status')
+        return
+      }
+
+      if (action === 'clear') {
+        const cleared: SessionMission = { objective: '', nextAction: '', blocker: '', progress: '', updatedAt: Date.now() }
+        persistSessionMission(cleared)
+        addSystemEntryForCommand('Session mission cleared.', timestamp)
+        setCommandStatus('done', 'mission cleared')
+        return
+      }
+
+      if (!value) {
+        addErrorEntryForCommand('Usage: /mission set|next|block|progress <text>', timestamp)
+        return
+      }
+
+      const updated: SessionMission = {
+        ...currentMission,
+        objective: action === 'set' ? value : currentMission.objective,
+        nextAction: action === 'next' ? value : currentMission.nextAction,
+        blocker: action === 'block' ? value : currentMission.blocker,
+        progress: action === 'progress' ? value : currentMission.progress,
+        updatedAt: Date.now(),
+      }
+      if (!['set', 'next', 'block', 'progress'].includes(action)) {
+        addErrorEntryForCommand('Usage: /mission set|next|block|progress <text> | /mission show | /mission clear', timestamp)
+        return
+      }
+      persistSessionMission(updated)
+      addSystemEntryForCommand(`Mission ${action} updated: ${value}`, timestamp)
+      setCommandStatus('done', `mission ${action}`)
+      return
+    }
+
+    if (normalizedCmd === 'goals' || normalizedCmd === 'goal' || normalizedCmd === 'memory' || normalizedCmd === 'remember' || normalizedCmd === 'forget') {
+      const current = loadSettings()
+
+      if (normalizedCmd === 'goals') {
+        const toggle = (args[0] || '').toLowerCase()
+        if (toggle === 'on' || toggle === 'off') {
+          saveSettings({ ...current, goalsEnabled: toggle === 'on' })
+          setCommandStatus('done', `goals ${toggle}`)
+          addSystemEntryForCommand(`Goals layer ${toggle.toUpperCase()}.`, timestamp)
+          return
+        }
+
+        const profile = buildConversationProfileFromSettings({
+          goalsEnabled: current.goalsEnabled,
+          memoryEnabled: current.memoryEnabled,
+          userGoals: current.userGoals,
+          assistantGoals: current.assistantGoals,
+          memoryNotes: current.memoryNotes,
+        })
+
+        const lines = [
+          `GOALS LAYER: ${profile.goalsEnabled ? 'ON' : 'OFF'}`,
+          '',
+          'User Goals:',
+          ...(profile.userGoals.length > 0 ? profile.userGoals.map((goal, index) => `  ${index + 1}. ${goal}`) : ['  (none)']),
+          '',
+          'Assistant Goals:',
+          ...(profile.assistantGoals.length > 0 ? profile.assistantGoals.map((goal, index) => `  ${index + 1}. ${goal}`) : ['  (none)']),
+          '',
+          'Commands: /goal user <text>, /goal assistant <text>, /goal clear <user|assistant|all>, /goals on|off',
+        ]
+        addSystemEntryForCommand(lines.join('\n'), timestamp)
+        setCommandStatus('done', 'show goals')
+        return
+      }
+
+      if (normalizedCmd === 'goal') {
+        const lane = (args[0] || '').toLowerCase()
+        if (lane !== 'user' && lane !== 'assistant' && lane !== 'clear') {
+          addErrorEntryForCommand('Usage: /goal user <text> | /goal assistant <text> | /goal clear <user|assistant|all>', timestamp)
+          return
+        }
+
+        if (lane === 'clear') {
+          const target = (args[1] || '').toLowerCase()
+          if (!['user', 'assistant', 'all'].includes(target)) {
+            addErrorEntryForCommand('Usage: /goal clear <user|assistant|all>', timestamp)
+            return
+          }
+          const next = { ...current }
+          if (target === 'user' || target === 'all') next.userGoals = ''
+          if (target === 'assistant' || target === 'all') next.assistantGoals = ''
+          saveSettings(next)
+          addSystemEntryForCommand(`Cleared ${target} goals.`, timestamp)
+          setCommandStatus('done', `goal clear ${target}`)
+          return
+        }
+
+        const goalText = args.slice(1).join(' ').trim()
+        if (!goalText) {
+          addErrorEntryForCommand(`Usage: /goal ${lane} <text>`, timestamp)
+          return
+        }
+
+        const sourceField = lane === 'user' ? current.userGoals : current.assistantGoals
+        const updatedLines = normalizeProfileLines(toMultilineText([...normalizeProfileLines(sourceField), goalText]))
+        const next = lane === 'user'
+          ? { ...current, userGoals: toMultilineText(updatedLines), goalsEnabled: true }
+          : { ...current, assistantGoals: toMultilineText(updatedLines), goalsEnabled: true }
+        saveSettings(next)
+        addSystemEntryForCommand(`Added ${lane} goal #${updatedLines.length}: ${goalText}`, timestamp)
+        setCommandStatus('done', `goal ${lane} updated`)
+        return
+      }
+
+      if (normalizedCmd === 'memory') {
+        const sub = (args[0] || 'show').toLowerCase()
+        if (sub === 'on' || sub === 'off') {
+          saveSettings({ ...current, memoryEnabled: sub === 'on' })
+          addSystemEntryForCommand(`Memory layer ${sub.toUpperCase()}.`, timestamp)
+          setCommandStatus('done', `memory ${sub}`)
+          return
+        }
+        if (sub === 'clear') {
+          localStorage.removeItem('loom-memory-vault-v1')
+          saveSettings({ ...current, memoryNotes: '' })
+          addSystemEntryForCommand('Cleared all memory notes.', timestamp)
+          setCommandStatus('done', 'memory cleared')
+          return
+        }
+
+        const notes = pruneMemoryVault()
+        const lines = [
+          `MEMORY LAYER: ${current.memoryEnabled ? 'ON' : 'OFF'}`,
+          '',
+          ...(notes.length > 0
+            ? notes.slice(0, 20).map((note, index) => `  ${index + 1}. [${note.tier}|${Math.round(note.confidence * 100)}%] ${note.text}`)
+            : ['  (empty)']),
+          '',
+          'Commands: /remember [session|working|long] <fact> [@0.0-1.0], /forget <index>, /memory on|off|clear',
+        ]
+        addSystemEntryForCommand(lines.join('\n'), timestamp)
+        setCommandStatus('done', 'show memory')
+        return
+      }
+
+      if (normalizedCmd === 'remember') {
+        if (args.length === 0) {
+          addErrorEntryForCommand('Usage: /remember [session|working|long] <fact> [@0.0-1.0]', timestamp)
+          return
+        }
+        const maybeTier = (args[0] || '').toLowerCase()
+        const tier: MemoryTier = (maybeTier === 'session' || maybeTier === 'working' || maybeTier === 'long')
+          ? maybeTier
+          : 'long'
+        const textArgs = tier === 'long' && maybeTier !== 'long'
+          ? args
+          : args.slice(1)
+        const raw = textArgs.join(' ').trim()
+        const confidenceMatch = raw.match(/@([01](?:\.\d{1,2})?)\s*$/)
+        const confidence = confidenceMatch ? Number(confidenceMatch[1]) : 0.72
+        const note = confidenceMatch ? raw.replace(/@([01](?:\.\d{1,2})?)\s*$/, '').trim() : raw
+        if (!note) {
+          addErrorEntryForCommand('Usage: /remember [session|working|long] <fact> [@0.0-1.0]', timestamp)
+          return
+        }
+        const added = addMemoryEntry(note, { tier, confidence, source: 'user' })
+        if (!added) {
+          addErrorEntryForCommand('Could not save memory note.', timestamp)
+          return
+        }
+        const nextVault = pruneMemoryVault()
+        saveSettings({
+          ...current,
+          memoryEnabled: true,
+          memoryNotes: buildSettingsMemoryNotesFromVault(nextVault),
+        })
+        addSystemEntryForCommand(`Saved memory [${tier}] conf ${Math.round(added.confidence * 100)}%: ${note}`, timestamp)
+        setCommandStatus('done', 'memory saved')
+        return
+      }
+
+      if (normalizedCmd === 'forget') {
+        const target = args.join(' ').trim()
+        if (!target) {
+          addErrorEntryForCommand('Usage: /forget <index>', timestamp)
+          return
+        }
+        const index = Number(target)
+        if (!Number.isInteger(index) || index < 1) {
+          addErrorEntryForCommand('Usage: /forget <index> (1-based)', timestamp)
+          return
+        }
+
+        const notes = pruneMemoryVault()
+        if (index > notes.length) {
+          addErrorEntryForCommand(`No memory entry at index ${index}.`, timestamp)
+          return
+        }
+        const removed = notes[index - 1]
+        const nextNotes = removeMemoryEntryById(removed.id)
+        saveSettings({ ...current, memoryNotes: buildSettingsMemoryNotesFromVault(nextNotes) })
+        addSystemEntryForCommand(`Removed memory #${index}: ${removed.text}`, timestamp)
+        setCommandStatus('done', 'memory removed')
+        return
+      }
+    }
+
+    if (normalizedCmd === 'improve') {
+      const sub = (args[0] || 'list').toLowerCase()
+      if (sub === 'list') {
+        const queue = loadMaintenanceQueue()
+        const open = queue.filter(task => task.status === 'open')
+        if (open.length === 0) {
+          addSystemEntryForCommand('No open maintenance tasks.', timestamp)
+          setCommandStatus('done', 'improve list empty')
+          return
+        }
+        const lines = ['MAINTENANCE QUEUE:']
+        open.slice(0, 12).forEach((task, idx) => {
+          lines.push(`  ${idx + 1}. [${task.severity.toUpperCase()}] ${task.title}`)
+          lines.push(`     ${task.detail}`)
+        })
+        addSystemEntryForCommand(lines.join('\n'), timestamp)
+        setCommandStatus('done', `improve list ${open.length}`)
+        return
+      }
+
+      if (sub === 'add') {
+        const detail = args.slice(1).join(' ').trim()
+        if (!detail) {
+          addErrorEntryForCommand('Usage: /improve add <task detail>', timestamp)
+          return
+        }
+        const task = upsertMaintenanceTask({
+          title: detail.slice(0, 64),
+          detail,
+          severity: 'medium',
+          source: 'manual',
+        })
+        setMaintenanceQueue(loadMaintenanceQueue())
+        addSystemEntryForCommand(`Queued maintenance task ${task.id}: ${task.title}`, timestamp)
+        setCommandStatus('done', 'improve add')
+        return
+      }
+
+      if (sub === 'done') {
+        const index = Number(args[1] || '')
+        const open = loadMaintenanceQueue().filter(task => task.status === 'open')
+        if (!Number.isInteger(index) || index < 1 || index > open.length) {
+          addErrorEntryForCommand('Usage: /improve done <open-task-index>', timestamp)
+          return
+        }
+        const target = open[index - 1]
+        const next = markMaintenanceTaskDone(target.id)
+        setMaintenanceQueue(next)
+        addSystemEntryForCommand(`Marked done: ${target.title}`, timestamp)
+        setCommandStatus('done', 'improve done')
+        return
+      }
+
+      if (sub === 'clear') {
+        const next = clearMaintenanceQueue('open')
+        setMaintenanceQueue(next)
+        addSystemEntryForCommand('Cleared all open maintenance tasks.', timestamp)
+        setCommandStatus('done', 'improve clear')
+        return
+      }
+
+      addErrorEntryForCommand('Usage: /improve [list|add <task>|done <index>|clear]', timestamp)
+      return
+    }
+
+    if (normalizedCmd === 'eval') {
+      const queue = loadMaintenanceQueue()
+      const openTasks = queue.filter(task => task.status === 'open').length
+      const memoryCount = pruneMemoryVault().length
+      const recent = entries.slice(-80)
+      const userCount = recent.filter(item => item.type === 'user').length
+      const aiCount = recent.filter(item => item.type === 'ai').length
+      const errorCount = recent.filter(item => item.type === 'error').length
+      const avgSignal = recent
+        .filter(item => item.type === 'ai' && typeof item.metadata?.streamCharsPerSec === 'number')
+        .reduce((sum, item) => sum + Number(item.metadata?.streamCharsPerSec || 0), 0)
+      const avgCps = aiCount > 0 ? Math.round(avgSignal / Math.max(1, aiCount)) : 0
+      const feedback = loadAgentFeedbackProfile()
+      const healthScore = Math.max(0, Math.min(100,
+        100
+        - (errorCount * 7)
+        - (openTasks * 3)
+        - (feedback.verbose * 1.2)
+        - (feedback.vague * 1.6)
+        - (feedback.robotic * 1.4)
+        + (feedback.perfect * 1.8)
+      ))
+      addSystemEntryForCommand(
+        [
+          'AGENT EVAL:',
+          `  Health Score: ${Math.round(healthScore)}/100`,
+          `  Recent turns: user ${userCount}, ai ${aiCount}, errors ${errorCount}`,
+          `  Avg stream speed: ${avgCps} chars/sec`,
+          `  Open maintenance tasks: ${openTasks}`,
+          `  Memory entries: ${memoryCount}`,
+          `  Feedback totals: verbose ${feedback.verbose}, vague ${feedback.vague}, robotic ${feedback.robotic}, perfect ${feedback.perfect}`,
+        ].join('\n'),
+        timestamp,
+      )
+      setCommandStatus('done', 'eval complete')
+      return
+    }
+
     if (normalizedCmd === 'quick' || normalizedCmd === 'fast') {
       const prompt = args.join(' ').trim()
       if (!prompt) {
@@ -1836,7 +2797,100 @@ export function TerminalFeed() {
         return
       }
 
-      addErrorEntryForCommand('Usage: /qdc [status|jobs|run <prompt>]', timestamp)
+      if (sub === 'package' || sub === 'package-model') {
+        const raw = args.slice(1).join(' ').trim()
+        if (!raw) {
+          addErrorEntryForCommand('Usage: /qdc package <path> [:: <startup command>] or /qdc package-model <path>', timestamp)
+          return
+        }
+        const [pathPart, startupPart] = raw.split('::', 2).map(part => part.trim())
+        if (!pathPart) {
+          addErrorEntryForCommand('Usage: /qdc package <path> [:: <startup command>] or /qdc package-model <path>', timestamp)
+          return
+        }
+        const packageKind = sub === 'package-model' ? 'model' : 'application'
+
+        markCommandPending('building qdc package...')
+        void createQdcPackage(pathPart, startupPart, packageKind)
+          .then(pkg => {
+            addSystemEntryForCommand(
+              [
+                'QDC PACKAGE READY:',
+                `  ID: ${pkg.id}`,
+                `  Path: ${pkg.path}`,
+                `  Files: ${pkg.file_count}`,
+                `  Size: ${Math.round((Number(pkg.size_bytes) || 0) / 1024)} KB`,
+                pkg.recommended_upload_type ? `  Upload Type: ${pkg.recommended_upload_type}` : '',
+                '  Next: Upload this .zip in qdc.qualcomm.com interactive session.',
+              ].join('\n'),
+              Date.now(),
+            )
+            setCommandStatus('done', `qdc package ${pkg.name}`)
+          })
+          .catch(err => {
+            addErrorEntryForCommand(err instanceof Error ? err.message : String(err), Date.now())
+          })
+        return
+      }
+
+      if (sub === 'ship' || sub === 'ship-model') {
+        const raw = args.slice(1).join(' ').trim()
+        if (!raw || !raw.includes('::')) {
+          addErrorEntryForCommand('Usage: /qdc ship <path> :: <remote task prompt> or /qdc ship-model <path> :: <remote task prompt>', timestamp)
+          return
+        }
+        const [pathPart, promptPart] = raw.split('::', 2).map(part => part.trim())
+        if (!pathPart || !promptPart) {
+          addErrorEntryForCommand('Usage: /qdc ship <path> :: <remote task prompt> or /qdc ship-model <path> :: <remote task prompt>', timestamp)
+          return
+        }
+        const packageKind = sub === 'ship-model' ? 'model' : 'application'
+        markCommandPending('packaging and launching qdc job...')
+        void packageAndRunQdc(pathPart, promptPart, undefined, packageKind)
+          .then(payload => {
+            setCommandStatus('done', `qdc ship job ${payload.jobId}`)
+          })
+          .catch(err => {
+            addErrorEntryForCommand(err instanceof Error ? err.message : String(err), Date.now())
+          })
+        return
+      }
+
+      if (sub === 'relay') {
+        const prompt = args.slice(1).join(' ').trim()
+        if (!prompt) {
+          addErrorEntryForCommand('Usage: /qdc relay <follow-up question>', timestamp)
+          return
+        }
+        let snapshot: { jobId?: string; summary?: string; assistantReply?: string; model?: string } | null = null
+        try {
+          const raw = localStorage.getItem(QDC_CONTEXT_KEY)
+          snapshot = raw ? JSON.parse(raw) as { jobId?: string; summary?: string; assistantReply?: string; model?: string } : null
+        } catch {
+          snapshot = null
+        }
+        if (!snapshot || (!snapshot.summary && !snapshot.assistantReply)) {
+          addErrorEntryForCommand('No recent QDC context found. Run /qdc run or /qdc ship first.', timestamp)
+          return
+        }
+
+        const relayPrompt = [
+          'Use this cloud execution context from QDC as grounding data.',
+          `QDC Job: ${snapshot.jobId || 'unknown'}`,
+          `QDC Model: ${snapshot.model || 'qdc:micro-brain'}`,
+          `QDC Summary: ${snapshot.summary || ''}`,
+          `QDC Assistant Output:\n${snapshot.assistantReply || ''}`,
+          `User Follow-up: ${prompt}`,
+          'Respond directly to the follow-up, avoid repeating raw logs, and end with a concrete next action.',
+        ].join('\n\n')
+
+        addSystemEntryForCommand(`Relaying follow-up with context from QDC job ${snapshot.jobId || 'unknown'}...`, timestamp)
+        handleAIRequest(relayPrompt, timestamp, 'input')
+        setCommandStatus('done', 'qdc relay')
+        return
+      }
+
+      addErrorEntryForCommand('Usage: /qdc [status|jobs|run <prompt>|package <path>|package-model <path>|ship <path> :: <task>|ship-model <path> :: <task>|relay <follow-up>]', timestamp)
       return
     }
 
@@ -2008,7 +3062,30 @@ export function TerminalFeed() {
 
     addErrorEntryForCommand(`Unknown command: /${normalizedCmd}`, timestamp)
     setCommandStatus('failed', `unknown command: /${normalizedCmd}`)
-  }, [addSystemEntry, addErrorEntry, handleAIRequest, fetchModels, connected, status, models, cloudModels, fetchQuickModelSuggestion, startQdcJobFromPrompt, getRequiredInputs, runCircuit, entries, setActiveModel, setVisionModel, setImageGenModel, pullModel, withFixHint])
+  }, [
+    addSystemEntry,
+    addErrorEntry,
+    handleAIRequest,
+    fetchModels,
+    connected,
+    status,
+    models,
+    cloudModels,
+    fetchQuickModelSuggestion,
+    startQdcJobFromPrompt,
+    createQdcPackage,
+    packageAndRunQdc,
+    getRequiredInputs,
+    runCircuit,
+    entries,
+    setActiveModel,
+    setVisionModel,
+    setImageGenModel,
+    pullModel,
+    withFixHint,
+    persistSessionMission,
+    sessionMission,
+  ])
 
   const handleCommand = useCallback((command: string, contextMode: 'input' | 'key' | 'full' = 'input') => {
     const timestamp = Date.now()
@@ -2193,6 +3270,7 @@ export function TerminalFeed() {
           },
           ...sessionEntries,
         ])
+        setTimeout(() => emitSessionRitualBriefing(Date.now()), 0)
         showSuccessToast(`Loaded session "${name}".`, 'Session')
       } else {
         const timestamp = Date.now()
@@ -2205,7 +3283,7 @@ export function TerminalFeed() {
         showErrorToast(`Session "${name}" was not found.`, 'Session')
       }
     })
-  }, [])
+  }, [emitSessionRitualBriefing])
 
   const handleSaveSession = useCallback((name: string) => {
     // Filter out system initialization messages
@@ -2261,8 +3339,9 @@ export function TerminalFeed() {
       content: 'Type /help for available commands.',
       timestamp: timestamp + 1,
     }])
+    setTimeout(() => emitSessionRitualBriefing(Date.now()), 0)
     showInfoToast('Started a new session.', 'Session')
-  }, [])
+  }, [emitSessionRitualBriefing])
 
   const handleNewSession = useCallback(() => {
     const hasWork = entries.some(e => e.type === 'user' || e.type === 'ai' || e.type === 'image' || e.type === 'audio')
@@ -2463,6 +3542,7 @@ export function TerminalFeed() {
     [onboardingChecklist],
   )
   const showOnboardingChecklist = !hasConversationHistory || onboardingCompleteCount < onboardingChecklist.length
+  const effectiveDownloadProgress = downloadProgress || ambientDownloadProgress
 
   const idleTelemetryTokens = useMemo(() => {
     const userCount = entries.reduce((count, entry) => count + (entry.type === 'user' ? 1 : 0), 0)
@@ -2497,14 +3577,28 @@ export function TerminalFeed() {
       `AI:${aiCount}`,
       `CRT:${loadSettings().crtIntensity.toUpperCase()}`,
     ]
-    if (downloadProgress) {
-      const pullPct = typeof downloadProgress.percent === 'number'
-        ? Math.round(downloadProgress.percent)
+    if (effectiveDownloadProgress) {
+      const pullPct = typeof effectiveDownloadProgress.percent === 'number'
+        ? Math.round(effectiveDownloadProgress.percent)
         : null
-      baseTokens.push(`PULL:${downloadProgress.model}`)
-      baseTokens.push(`PULLST:${String(downloadProgress.status || 'running').toUpperCase()}`)
+      baseTokens.push(`PULL:${effectiveDownloadProgress.model}`)
+      baseTokens.push(`PULLST:${String(effectiveDownloadProgress.status || 'running').toUpperCase()}`)
+      if ('scope' in effectiveDownloadProgress && typeof effectiveDownloadProgress.scope === 'string') {
+        baseTokens.push(`PULLSRC:${effectiveDownloadProgress.scope.toUpperCase()}`)
+      }
       if (pullPct !== null) {
         baseTokens.push(`PULLPCT:${pullPct}`)
+      }
+      if (typeof effectiveDownloadProgress.speedBps === 'number' && effectiveDownloadProgress.speedBps > 0) {
+        const speedMb = (effectiveDownloadProgress.speedBps / (1024 * 1024)).toFixed(1)
+        baseTokens.push(`PULLSPD:${speedMb}MBPS`)
+      }
+      if (
+        typeof effectiveDownloadProgress.filesCompleted === 'number'
+        && typeof effectiveDownloadProgress.filesTotal === 'number'
+        && effectiveDownloadProgress.filesTotal > 0
+      ) {
+        baseTokens.push(`PULLFILES:${effectiveDownloadProgress.filesCompleted}/${effectiveDownloadProgress.filesTotal}`)
       }
     }
     if (imageGeneration?.status === 'generating') {
@@ -2533,7 +3627,7 @@ export function TerminalFeed() {
     status.ramModelUsedGb,
     codeContextActive,
     codeContextFilesIndexed,
-    downloadProgress,
+    effectiveDownloadProgress,
     imageGeneration?.status,
     musicGeneration?.status,
   ])
@@ -2593,7 +3687,7 @@ export function TerminalFeed() {
   const matrixTelemetryMode = useMemo<'off' | 'idle' | 'active'>(() => {
     const imageBusy = imageGeneration?.status === 'generating'
     const musicBusy = musicGeneration?.status === 'generating'
-    const anyBusy = aiRuntimeTelemetry.active || codeContextIndexing || imageBusy || musicBusy || !!downloadProgress
+    const anyBusy = aiRuntimeTelemetry.active || codeContextIndexing || imageBusy || musicBusy || !!effectiveDownloadProgress
     if (!connected) return 'off'
     return anyBusy ? 'active' : 'idle'
   }, [
@@ -2602,7 +3696,7 @@ export function TerminalFeed() {
     codeContextIndexing,
     imageGeneration?.status,
     musicGeneration?.status,
-    downloadProgress,
+    effectiveDownloadProgress,
   ])
 
   const toggleHistoryType = useCallback((entryType: LogEntry['type']) => {
@@ -2638,6 +3732,12 @@ export function TerminalFeed() {
       return blob.includes(query)
     })
   }, [entries, historyModelFilters, historyQuery, historyTypeFilters, historyWindow])
+  const hasActiveHistoryFilters = Boolean(
+    historyQuery
+    || historyWindow !== 'all'
+    || historyTypeFilters.length > 0
+    || historyModelFilters.length > 0,
+  )
 
   const displayItems = useMemo<FeedDisplayItem[]>(
     () => filteredEntries.map(entry => ({ key: entry.id, entry })),
@@ -2694,6 +3794,55 @@ export function TerminalFeed() {
     showInfoToast(`Re-running with ${modelName}.`, 'Compare Models', 1200)
   }, [entries, handleAIRequest])
 
+  const handleAgentFeedback = useCallback((entry: LogEntry, kind: AgentFeedbackKind) => {
+    const nextProfile: AgentFeedbackProfile = {
+      ...agentFeedbackProfile,
+      [kind]: agentFeedbackProfile[kind] + 1,
+      updatedAt: Date.now(),
+    }
+    setAgentFeedbackProfile(nextProfile)
+
+    const feedbackLabels: Record<AgentFeedbackKind, string> = {
+      verbose: 'Too verbose',
+      vague: 'Too vague',
+      robotic: 'Too robotic',
+      perfect: 'Perfect tone',
+    }
+    addSystemEntry(`[FEEDBACK] ${feedbackLabels[kind]} captured for model ${(entry.metadata?.model as string | undefined) || 'unknown'}.`, Date.now())
+
+    if (kind !== 'perfect') {
+      upsertMaintenanceTask({
+        title: `Tone quality: ${feedbackLabels[kind]}`,
+        detail: `Recent assistant message flagged as "${feedbackLabels[kind]}". Tighten response shaping and self-check.`,
+        severity: kind === 'vague' ? 'high' : 'medium',
+        source: 'feedback',
+      })
+      setMaintenanceQueue(loadMaintenanceQueue())
+    }
+  }, [addSystemEntry, agentFeedbackProfile])
+
+  const handleConversationStarter = useCallback((prompt: string) => {
+    const starterPrompt = prompt.trim()
+    if (!starterPrompt) return
+
+    const timestamp = Date.now()
+    setAutoFollowFeed(true)
+    setPendingAssistantAction(null)
+    setHistoryQuery('')
+    setHistoryWindow('all')
+    setHistoryTypeFilters([])
+    setHistoryModelFilters([])
+
+    setEntries(prev => [...prev, {
+      id: `user-${timestamp}`,
+      type: 'user',
+      content: starterPrompt,
+      timestamp,
+    }])
+
+    handleAIRequest(starterPrompt, timestamp, 'full')
+  }, [handleAIRequest])
+
   return (
     <div className="h-full flex relative">
       {/* Floating Toolbar */}
@@ -2741,6 +3890,7 @@ export function TerminalFeed() {
       {/* Main Terminal Area */}
       <div className={`relative flex-1 flex flex-col transition-all duration-200 ${(imageGeneration || musicGeneration || avatarPanelOpen) ? 'mr-0 xl:mr-96' : ''}`}>
         <IdleTelemetryMatrix mode={matrixTelemetryMode} tokens={idleTelemetryTokens} deltaTokens={telemetryDeltaTokens} />
+        <AmbientTransferHud progress={effectiveDownloadProgress} />
 
         {/* Terminal Feed */}
         <div
@@ -2760,7 +3910,7 @@ export function TerminalFeed() {
                   onClick={() => setHistoryFiltersOpen(prev => !prev)}
                   className="text-[10px] px-2 py-1 border border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor"
                 >
-                  {historyFiltersOpen ? 'Hide Filters' : 'Filters'}
+                  {historyFiltersOpen ? 'Hide Filters' : hasActiveHistoryFilters ? 'Filters *' : 'Filters'}
                 </button>
               </div>
               {historyFiltersOpen && (
@@ -2880,6 +4030,29 @@ export function TerminalFeed() {
               </div>
             )}
 
+            {!hasConversationHistory && (
+              <div className="border border-terminal-border bg-void/40 p-3 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[10px] tracking-widest text-phosphor">CONVERSATION STARTERS</div>
+                  <div className="text-[10px] text-terminal-muted">Click one to begin</div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
+                  {CONVERSATION_STARTERS.map(starter => (
+                    <button
+                      key={starter.id}
+                      type="button"
+                      onClick={() => handleConversationStarter(starter.prompt)}
+                      className="text-left border border-terminal-border bg-void/70 px-3 py-2 hover:border-phosphor hover:text-phosphor transition-colors"
+                    >
+                      <div className="text-[11px] font-bold tracking-wide text-phosphor">{starter.title}</div>
+                      <div className="text-[9px] uppercase tracking-wider text-terminal-muted mt-0.5">{starter.capability}</div>
+                      <div className="text-[10px] text-terminal-muted mt-1 line-clamp-3">{starter.prompt}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {topSpacerHeight > 0 && (
               <div style={{ height: `${topSpacerHeight}px` }} aria-hidden />
             )}
@@ -2891,6 +4064,7 @@ export function TerminalFeed() {
                 formatTimestamp={formatTimestamp}
                 availableChatModels={chatModels}
                 onRerunWithModel={handleRerunWithModel}
+                onAgentFeedback={handleAgentFeedback}
                 onImageClick={(imageUrl, metadata, canEdit) => {
                   setSelectedImageModal({ imageUrl, metadata, canEdit })
                 }}
@@ -3096,6 +4270,11 @@ export function TerminalFeed() {
                 percent: progress.percent,
                 message: progress.message,
                 error: progress.error,
+                speedBps: progress.speed_bps,
+                etaSeconds: progress.eta_seconds,
+                fileName: progress.file_name,
+                filesCompleted: progress.files_completed,
+                filesTotal: progress.files_total,
               })
 
               // On success, refresh models and retry analysis
@@ -3205,6 +4384,11 @@ export function TerminalFeed() {
                 percent: progress.percent,
                 message: progress.message,
                 error: progress.error,
+                speedBps: progress.speed_bps,
+                etaSeconds: progress.eta_seconds,
+                fileName: progress.file_name,
+                filesCompleted: progress.files_completed,
+                filesTotal: progress.files_total,
               })
 
               // On success, refresh models and retry generation
@@ -3397,11 +4581,108 @@ export function TerminalFeed() {
   )
 }
 
+function AmbientTransferHud({
+  progress,
+}: {
+  progress: {
+    model: string
+    status: string
+    completed: number
+    total: number
+    percent?: number
+    message?: string
+    error?: string
+    scope?: string
+    speedBps?: number
+    etaSeconds?: number
+    fileName?: string
+    filesCompleted?: number
+    filesTotal?: number
+  } | null
+}) {
+  if (!progress) return null
+
+  const normalizedPercent = typeof progress.percent === 'number'
+    ? Math.max(0, Math.min(100, Math.round(progress.percent)))
+    : null
+  const status = (progress.status || 'unknown').toLowerCase()
+  const scope = (progress.scope || 'model').toUpperCase()
+  const isSuccess = status === 'success'
+  const isError = status === 'error'
+  const statusLabel = isSuccess ? 'DONE' : isError ? 'ERROR' : 'ACTIVE'
+  const statusClass = isSuccess
+    ? 'text-phosphor'
+    : isError
+      ? 'text-red-400'
+      : 'text-amber-300'
+  const speedLabel = typeof progress.speedBps === 'number' && progress.speedBps > 0
+    ? `${(progress.speedBps / (1024 * 1024)).toFixed(1)} MB/s`
+    : null
+  const etaLabel = typeof progress.etaSeconds === 'number' && progress.etaSeconds >= 0
+    ? formatDurationLabel(progress.etaSeconds)
+    : null
+  const filesLabel = typeof progress.filesCompleted === 'number' && typeof progress.filesTotal === 'number' && progress.filesTotal > 0
+    ? `${Math.max(0, progress.filesCompleted)}/${progress.filesTotal} files`
+    : null
+  const friendlyMessage = getFriendlyTransferMessage(status, progress.model)
+
+  return (
+    <div className="pointer-events-none absolute top-3 right-4 z-[12] w-[clamp(176px,16vw,268px)]">
+      <div className="border border-terminal-border/70 bg-void/55 backdrop-blur-[1px] px-2 py-1.5 font-mono">
+        <div className="flex items-center justify-between text-[9px] tracking-wider text-terminal-muted">
+          <span>XFER {scope}</span>
+          <span className={statusClass}>{statusLabel}</span>
+        </div>
+        <div className="mt-1 truncate text-[10px] text-phosphor">{progress.model}</div>
+        <div className="mt-1 text-[9px] text-terminal-muted">{friendlyMessage}</div>
+        <div className="mt-1 flex items-center justify-between gap-2 text-[9px] text-terminal-muted/90">
+          <span className="truncate">{progress.message || progress.fileName || progress.error || progress.status}</span>
+          {normalizedPercent !== null && (
+            <span className="text-phosphor">{normalizedPercent}%</span>
+          )}
+        </div>
+        {(speedLabel || etaLabel || filesLabel) && (
+          <div className="mt-1 flex items-center gap-2 text-[8px] text-terminal-muted">
+            {filesLabel && <span>{filesLabel}</span>}
+            {speedLabel && <span>{speedLabel}</span>}
+            {etaLabel && <span>ETA {etaLabel}</span>}
+          </div>
+        )}
+        {normalizedPercent !== null && (
+          <div className="mt-1 h-1 border border-terminal-border/70 bg-void">
+            <div className="h-full bg-phosphor/80 transition-all duration-300" style={{ width: `${normalizedPercent}%` }} />
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function getFriendlyTransferMessage(status: string, model: string): string {
+  if (status === 'success') return `${model} is ready to use.`
+  if (status === 'error') return `Could not finish installing ${model}.`
+  if (status === 'loading' || status === 'verifying') return `Finishing setup for ${model}...`
+  if (status === 'starting') return `Getting ${model} ready...`
+  return `Downloading ${model}. You can keep using the app.`
+}
+
+function formatDurationLabel(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '--'
+  if (seconds < 60) return `${Math.round(seconds)}s`
+  const minutes = Math.floor(seconds / 60)
+  const remainder = Math.round(seconds % 60)
+  if (minutes < 60) return `${minutes}m ${remainder}s`
+  const hours = Math.floor(minutes / 60)
+  const minutesOnly = minutes % 60
+  return `${hours}h ${minutesOnly}m`
+}
+
 interface IdleTelemetryLine {
   id: string
   text: string
   isToken: boolean
   isDelta: boolean
+  isTransfer: boolean
 }
 
 function IdleTelemetryMatrix({
@@ -3428,6 +4709,7 @@ function IdleTelemetryMatrix({
         text: next.text,
         isToken: next.isToken,
         isDelta: next.isDelta,
+        isTransfer: next.isTransfer,
       }
     })
     setLines(seed)
@@ -3442,6 +4724,7 @@ function IdleTelemetryMatrix({
             text: next.text,
             isToken: next.isToken,
             isDelta: next.isDelta,
+            isTransfer: next.isTransfer,
           },
         ]
         return appended.slice(-TELEMETRY_RAIL_MAX_LINES)
@@ -3461,7 +4744,7 @@ function IdleTelemetryMatrix({
         {lines.map((line, index) => (
           <div
             key={line.id}
-            className={`idle-telemetry-line ${line.isToken ? 'is-token' : ''} ${line.isDelta ? 'is-delta' : ''}`}
+            className={`idle-telemetry-line ${line.isToken ? 'is-token' : ''} ${line.isDelta ? 'is-delta' : ''} ${line.isTransfer ? 'is-transfer' : ''}`}
             style={{ opacity: Math.max(0.16, (index + 1) / lines.length) }}
           >
             {line.text}
@@ -3479,6 +4762,7 @@ interface LogEntryBlockProps {
   formatTimestamp: (ts: number) => string
   availableChatModels?: string[]
   onRerunWithModel?: (entry: LogEntry, modelName: string) => void
+  onAgentFeedback?: (entry: LogEntry, kind: AgentFeedbackKind) => void
   onImageClick?: (imageUrl: string, metadata: { prompt?: string; model?: string; timestamp?: number; provider?: string; analysis?: string }, canEdit: boolean) => void
 }
 
@@ -3488,6 +4772,7 @@ function LogEntryBlock({
   formatTimestamp,
   availableChatModels = [],
   onRerunWithModel,
+  onAgentFeedback,
   onImageClick,
 }: LogEntryBlockProps) {
   const typeStyles = {
@@ -3521,6 +4806,19 @@ function LogEntryBlock({
     ? entry.metadata as Record<string, unknown>
     : null
   const modelName = typeof metadataRecord?.model === 'string' ? metadataRecord.model : ''
+  const routeLabel = typeof metadataRecord?.route === 'string' ? metadataRecord.route : ''
+  const confidenceValue = typeof metadataRecord?.confidence === 'number'
+    ? Math.max(0, Math.min(1, Number(metadataRecord.confidence)))
+    : null
+  const responseContract = typeof metadataRecord?.responseContract === 'string'
+    ? metadataRecord.responseContract
+    : ''
+  const provenance = Array.isArray(metadataRecord?.provenance)
+    ? metadataRecord?.provenance.map(value => String(value)).filter(Boolean).slice(0, 4)
+    : []
+  const refinedBy = typeof metadataRecord?.refinedBy === 'string'
+    ? metadataRecord.refinedBy
+    : ''
   const streamSignalRaw = typeof metadataRecord?.streamSignal === 'number'
     ? Number(metadataRecord.streamSignal)
     : 0
@@ -3743,12 +5041,41 @@ function LogEntryBlock({
                   </button>
                 </div>
               )}
+              {onAgentFeedback && entry.type === 'ai' && (
+                <div className="message-action-grid">
+                  <button type="button" className="message-action-btn" onClick={() => onAgentFeedback(entry, 'verbose')}>Too Verbose</button>
+                  <button type="button" className="message-action-btn" onClick={() => onAgentFeedback(entry, 'vague')}>Too Vague</button>
+                  <button type="button" className="message-action-btn" onClick={() => onAgentFeedback(entry, 'robotic')}>Too Robotic</button>
+                  <button type="button" className="message-action-btn" onClick={() => onAgentFeedback(entry, 'perfect')}>Perfect Tone</button>
+                </div>
+              )}
             </aside>
           )}
         </div>
       )}
 
       {/* Content */}
+      {(routeLabel || confidenceValue !== null || responseContract || provenance.length > 0 || refinedBy) && (
+        <div className="flex flex-wrap items-center gap-2 text-[10px] text-terminal-muted mb-2">
+          {routeLabel && (
+            <span className="px-2 py-0.5 border border-terminal-border">{routeLabel}</span>
+          )}
+          {confidenceValue !== null && (
+            <span className="px-2 py-0.5 border border-terminal-border">conf {Math.round(confidenceValue * 100)}%</span>
+          )}
+          {responseContract && (
+            <span className="px-2 py-0.5 border border-terminal-border">contract {responseContract}</span>
+          )}
+          {refinedBy && (
+            <span className="px-2 py-0.5 border border-terminal-border">refined {refinedBy}</span>
+          )}
+          {provenance.map(item => (
+            <span key={`${entry.id}-${item}`} className="px-2 py-0.5 border border-terminal-border/70 text-terminal-muted/80">
+              {item}
+            </span>
+          ))}
+        </div>
+      )}
       <div className={contentClassName} style={contentStyle}>
         {entry.type === 'audio' && entry.audioUrl ? (
           <MusicPlayerCard

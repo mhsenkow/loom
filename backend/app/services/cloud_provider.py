@@ -6,7 +6,8 @@ Mistral, DeepSeek) alongside the existing local Ollama integration.
 """
 
 from abc import ABC, abstractmethod
-from typing import AsyncGenerator, Optional
+import inspect
+from typing import Any, AsyncGenerator, Optional
 
 
 class CloudProvider(ABC):
@@ -310,12 +311,27 @@ class MistralProvider(CloudProvider):
         {"name": "mistral-small-latest", "display_name": "Mistral Small", "context_window": 128000, "cost_tier": "economy"},
         {"name": "codestral-latest", "display_name": "Codestral", "context_window": 256000, "cost_tier": "economy"},
     ]
+    _TASK_AGENT_HINTS = {
+        "code": "You are handling a coding-heavy request. Prioritize actionable implementation details and concrete fixes.",
+        "research": "You are handling a research-heavy request. Focus on synthesis, open questions, and clear next actions.",
+        "planning": "You are handling a planning-heavy request. Respond with prioritized steps and risk-aware sequencing.",
+        "clarify": "You are handling an ambiguous request. Ask one concise clarifying question if required, otherwise proceed directly.",
+        "general": "You are handling a general request. Be concise, practical, and useful.",
+    }
 
     def _get_client(self):
         if self._client is None:
             from mistralai import Mistral
             self._client = Mistral(api_key=self._api_key)
         return self._client
+
+    def set_api_key(self, api_key: str):
+        super().set_api_key(api_key)
+        setattr(self, "_agent_id_cache", {})
+
+    def clear_api_key(self):
+        super().clear_api_key()
+        setattr(self, "_agent_id_cache", {})
 
     async def validate_key(self) -> bool:
         try:
@@ -358,6 +374,189 @@ class MistralProvider(CloudProvider):
                 delta = event.data.choices[0].delta
                 if delta and delta.content:
                     yield delta.content
+
+    def _build_agent_instructions(self, task: str) -> str:
+        task_hint = self._TASK_AGENT_HINTS.get(task, self._TASK_AGENT_HINTS["general"])
+        return (
+            "You are LOOM, a helpful assistant in a terminal UI.\n"
+            "Return exactly one assistant reply to the latest user request.\n"
+            "Never role-play both sides of a conversation.\n"
+            f"{task_hint}"
+        )
+
+    async def _maybe_await(self, value: Any) -> Any:
+        if inspect.isawaitable(value):
+            return await value
+        return value
+
+    def _extract_agent_id(self, payload: Any) -> str:
+        if payload is None:
+            return ""
+        if isinstance(payload, dict):
+            if isinstance(payload.get("id"), str):
+                return payload["id"]
+            if isinstance(payload.get("agent_id"), str):
+                return payload["agent_id"]
+            agent_obj = payload.get("agent")
+            if isinstance(agent_obj, dict):
+                return str(agent_obj.get("id") or agent_obj.get("agent_id") or "")
+        for attr in ("id", "agent_id"):
+            value = getattr(payload, attr, None)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        nested = getattr(payload, "agent", None)
+        if nested is not None:
+            for attr in ("id", "agent_id"):
+                value = getattr(nested, attr, None)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        return ""
+
+    def _extract_text_segments(self, payload: Any) -> list[str]:
+        segments: list[str] = []
+        seen_nodes: set[int] = set()
+
+        def walk(node: Any):
+            if node is None:
+                return
+            node_id = id(node)
+            if node_id in seen_nodes:
+                return
+            seen_nodes.add(node_id)
+
+            if isinstance(node, str):
+                text = node.strip()
+                if text:
+                    segments.append(text)
+                return
+
+            if isinstance(node, (list, tuple)):
+                for item in node:
+                    walk(item)
+                return
+
+            if isinstance(node, dict):
+                direct_text = node.get("text")
+                if isinstance(direct_text, str) and direct_text.strip():
+                    segments.append(direct_text.strip())
+                direct_content = node.get("content")
+                if isinstance(direct_content, str) and direct_content.strip():
+                    segments.append(direct_content.strip())
+                for key in ("outputs", "output", "messages", "message", "choices", "delta", "parts", "content", "data", "result"):
+                    if key in node:
+                        walk(node[key])
+                return
+
+            for attr in ("text", "content", "output_text", "outputs", "output", "messages", "message", "choices", "delta", "parts", "data", "result"):
+                if hasattr(node, attr):
+                    walk(getattr(node, attr))
+
+        walk(payload)
+        unique: list[str] = []
+        seen_text: set[str] = set()
+        for item in segments:
+            key = item.strip()
+            if not key or key in seen_text:
+                continue
+            seen_text.add(key)
+            unique.append(key)
+        return unique
+
+    async def _create_or_reuse_agent(self, client: Any, model: str, task: str) -> str:
+        cache = getattr(self, "_agent_id_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            setattr(self, "_agent_id_cache", cache)
+
+        cache_key = f"{model}::{task}"
+        cached_id = str(cache.get(cache_key) or "").strip()
+        if cached_id:
+            return cached_id
+
+        beta = getattr(client, "beta", None)
+        agents_api = getattr(beta, "agents", None) if beta is not None else None
+        if agents_api is None:
+            raise RuntimeError("Mistral beta agents API is unavailable in this SDK version.")
+
+        create_fn = getattr(agents_api, "create", None) or getattr(agents_api, "create_async", None)
+        if not callable(create_fn):
+            raise RuntimeError("Mistral beta agents.create API is unavailable.")
+
+        payload = {
+            "model": model,
+            "name": f"loom-{task}",
+            "instructions": self._build_agent_instructions(task),
+        }
+        created = await self._maybe_await(create_fn(**payload))
+        agent_id = self._extract_agent_id(created)
+        if not agent_id:
+            raise RuntimeError("Mistral agent creation succeeded but no agent id was returned.")
+
+        cache[cache_key] = agent_id
+        return agent_id
+
+    async def chat_with_agent(
+        self,
+        prompt: str,
+        model: str,
+        *,
+        task: str = "general",
+        system_prompt: Optional[str] = None,
+    ) -> str:
+        client = self._get_client()
+        agent_id = await self._create_or_reuse_agent(client, model, task)
+
+        beta = getattr(client, "beta", None)
+        conversations_api = getattr(beta, "conversations", None) if beta is not None else None
+        if conversations_api is None:
+            raise RuntimeError("Mistral beta conversations API is unavailable in this SDK version.")
+
+        start_fn = getattr(conversations_api, "start", None) or getattr(conversations_api, "create", None)
+        if not callable(start_fn):
+            raise RuntimeError("Mistral beta conversations.start API is unavailable.")
+
+        payload_prompt = prompt
+        if system_prompt:
+            payload_prompt = f"[SYSTEM]\n{system_prompt}\n\n[USER]\n{prompt}"
+
+        attempts = (
+            {"agent_id": agent_id, "inputs": [{"role": "user", "content": payload_prompt}]},
+            {"agent_id": agent_id, "input": payload_prompt},
+            {"agent_id": agent_id, "messages": [{"role": "user", "content": payload_prompt}]},
+        )
+
+        last_error: Optional[Exception] = None
+        for kwargs in attempts:
+            try:
+                response = await self._maybe_await(start_fn(**kwargs))
+                text = "\n".join(self._extract_text_segments(response)).strip()
+                if text:
+                    return text
+            except TypeError:
+                # Method signature can vary across SDK versions.
+                continue
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                break
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Mistral agent conversation returned no text.")
+
+    async def stream_chat_with_agent(
+        self,
+        prompt: str,
+        model: str,
+        *,
+        task: str = "general",
+        system_prompt: Optional[str] = None,
+    ) -> AsyncGenerator[str, None]:
+        text = await self.chat_with_agent(prompt, model, task=task, system_prompt=system_prompt)
+        if not text:
+            return
+        chunk_size = 220
+        for index in range(0, len(text), chunk_size):
+            yield text[index:index + chunk_size]
 
 
 # ---------------------------------------------------------------------------

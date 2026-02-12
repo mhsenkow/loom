@@ -2,11 +2,13 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { io, Socket } from 'socket.io-client'
 import { API_BASE_URL } from '../config/api'
 import { useSystemStore } from '../store/systemStore'
+import { dispatchDownloadTelemetry } from '../utils/downloadTelemetry'
 
 const BACKEND_URL = API_BASE_URL
 const MODELS_UPDATED_EVENT = 'loom:models_updated'
 const ORCHESTRATOR_EVENT = 'orchestrator_event'
 const QDC_JOB_EVENT = 'qdc_job_event'
+const AI_META_EVENT = 'ai_meta'
 
 interface SocketState {
   connected: boolean
@@ -15,12 +17,22 @@ interface SocketState {
 
 interface AIChunk {
   content: string
+  request_id?: string
 }
 
 interface AIStatus {
   status: 'running' | 'success' | 'error'
   message: string
   model?: string
+  request_id?: string
+  route?: string
+  confidence?: number
+  response_contract?: string
+  provenance?: string[]
+  refined_by?: string
+  requires_clarification?: boolean
+  agent_mode?: 'off' | 'auto'
+  agent_used?: boolean
 }
 
 interface ModuleStatus {
@@ -37,6 +49,11 @@ export interface PullStatus {
   total?: number
   percent?: number
   error?: string
+  speed_bps?: number
+  eta_seconds?: number
+  file_name?: string
+  files_completed?: number
+  files_total?: number
 }
 
 type AIChunkHandler = (chunk: AIChunk) => void
@@ -47,6 +64,22 @@ type PullStatusHandler = (status: PullStatus) => void
 interface SendChatOptions {
   rawPrompt?: string
   contextMode?: 'input' | 'key' | 'full'
+  source?: 'terminal' | 'circuit' | 'avatar' | 'other'
+  clientRequestId?: string
+  conversationProfile?: {
+    goalsEnabled: boolean
+    memoryEnabled: boolean
+    userGoals: string[]
+    assistantGoals: string[]
+    memoryNotes: string[]
+  }
+  feedbackProfile?: {
+    conciseBias: number
+    clarityBias: number
+    warmthBias: number
+    directnessBias: number
+  }
+  agentMode?: 'off' | 'auto'
 }
 
 interface OrchestratorModelEvent {
@@ -72,6 +105,7 @@ const stateListeners = new Set<(state: SocketState) => void>()
 // Use a Map to track active handlers per request to prevent duplicates
 const activeChunkHandlers = new Map<symbol, AIChunkHandler>()
 const activeStatusHandlers = new Map<symbol, AIStatusHandler>()
+const activeRequestIds = new Map<symbol, string | null>()
 const moduleStatusHandlers = new Set<ModuleStatusHandler>()
 
 function setSocketState(next: SocketState) {
@@ -121,7 +155,13 @@ function getOrCreateSocket(): Socket {
 
     // AI response handlers - broadcast to all active handlers
     globalSocket.on('ai_chunk', (data: AIChunk) => {
-      activeChunkHandlers.forEach(handler => handler(data))
+      activeChunkHandlers.forEach((handler, requestId) => {
+        const expectedRequestId = activeRequestIds.get(requestId) || null
+        if (expectedRequestId && data.request_id && data.request_id !== expectedRequestId) {
+          return
+        }
+        handler(data)
+      })
     })
 
     globalSocket.on('ai_status', (data: AIStatus) => {
@@ -132,6 +172,10 @@ function getOrCreateSocket(): Socket {
       const completedRequests: symbol[] = []
 
       activeStatusHandlers.forEach((handler, requestId) => {
+        const expectedRequestId = activeRequestIds.get(requestId) || null
+        if (expectedRequestId && data.request_id && data.request_id !== expectedRequestId) {
+          return
+        }
         handler(data)
         // Mark for removal when request completes
         if (data.status === 'success' || data.status === 'error') {
@@ -143,6 +187,7 @@ function getOrCreateSocket(): Socket {
       completedRequests.forEach(requestId => {
         activeStatusHandlers.delete(requestId)
         activeChunkHandlers.delete(requestId)
+        activeRequestIds.delete(requestId)
       })
     })
 
@@ -156,6 +201,42 @@ function getOrCreateSocket(): Socket {
       window.dispatchEvent(new CustomEvent(MODELS_UPDATED_EVENT, { detail: data }))
     })
 
+    globalSocket.on('pull_status', (data: PullStatus) => {
+      dispatchDownloadTelemetry({
+        scope: 'ollama',
+        model: data.model,
+        status: data.status,
+        message: data.message,
+        completed: data.completed,
+        total: data.total,
+        percent: data.percent,
+        error: data.error,
+        speedBps: data.speed_bps,
+        etaSeconds: data.eta_seconds,
+        fileName: data.file_name,
+        filesCompleted: data.files_completed,
+        filesTotal: data.files_total,
+      })
+    })
+
+    globalSocket.on('pull_image_status', (data: PullStatus) => {
+      dispatchDownloadTelemetry({
+        scope: 'image',
+        model: data.model,
+        status: data.status,
+        message: data.message,
+        completed: data.completed,
+        total: data.total,
+        percent: data.percent,
+        error: data.error,
+        speedBps: data.speed_bps,
+        etaSeconds: data.eta_seconds,
+        fileName: data.file_name,
+        filesCompleted: data.files_completed,
+        filesTotal: data.files_total,
+      })
+    })
+
     globalSocket.on(ORCHESTRATOR_EVENT, (data: unknown) => {
       const eventData = data as OrchestratorModelEvent
       if ((eventData?.type === 'model_selected' || eventData?.type === 'model_switched') && eventData.model) {
@@ -166,6 +247,10 @@ function getOrCreateSocket(): Socket {
 
     globalSocket.on(QDC_JOB_EVENT, (data: unknown) => {
       window.dispatchEvent(new CustomEvent(QDC_JOB_EVENT, { detail: data }))
+    })
+
+    globalSocket.on(AI_META_EVENT, (data: unknown) => {
+      window.dispatchEvent(new CustomEvent(AI_META_EVENT, { detail: data }))
     })
 
     // Backward-compatible global access for older command handlers.
@@ -210,6 +295,7 @@ export function useSocket() {
       if (currentRequestIdRef.current) {
         activeChunkHandlers.delete(currentRequestIdRef.current)
         activeStatusHandlers.delete(currentRequestIdRef.current)
+        activeRequestIds.delete(currentRequestIdRef.current)
         currentRequestIdRef.current = null
       }
 
@@ -240,6 +326,7 @@ export function useSocket() {
     if (currentRequestIdRef.current) {
       activeChunkHandlers.delete(currentRequestIdRef.current)
       activeStatusHandlers.delete(currentRequestIdRef.current)
+      activeRequestIds.delete(currentRequestIdRef.current)
     }
 
     // Create a unique request ID for this chat request
@@ -253,11 +340,17 @@ export function useSocket() {
     if (onStatus) {
       activeStatusHandlers.set(requestId, onStatus)
     }
+    activeRequestIds.set(requestId, options?.clientRequestId || null)
 
     socket.emit('chat', {
       prompt,
       raw_prompt: options?.rawPrompt || prompt,
       context_mode: options?.contextMode,
+      source: options?.source || 'other',
+      client_request_id: options?.clientRequestId,
+      conversation_profile: options?.conversationProfile,
+      feedback_profile: options?.feedbackProfile,
+      agent_mode: options?.agentMode,
       model,
       use_code_context: useCodeContext,
       code_context_collection: 'loom_code_context',
@@ -352,6 +445,7 @@ export function useSocket() {
       // Cleanup handlers
       activeChunkHandlers.delete(currentRequestIdRef.current)
       activeStatusHandlers.delete(currentRequestIdRef.current)
+      activeRequestIds.delete(currentRequestIdRef.current)
       currentRequestIdRef.current = null
     }
 

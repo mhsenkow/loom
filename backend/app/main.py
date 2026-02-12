@@ -4,6 +4,7 @@ Personal Intelligence OS
 """
 
 import socketio
+import asyncio
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,6 +15,7 @@ import os
 import time
 import uuid
 import logging
+import re
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -35,6 +37,7 @@ from app.routers import modules, images, files, circuits, search, remote, code_c
 from app.routers import providers as providers_router
 from app.services.ollama_client import ollama_client
 from app.services.provider_manager import provider_manager
+from app.services.cloud_provider import ALL_PROVIDERS
 from app.services.vector_store import VectorStore
 from app.services.storage import get_module as storage_get_module, init_db as storage_init_db
 from app.services.module_executor import run_module as execute_module_logic
@@ -99,6 +102,250 @@ logging.basicConfig(
 logger = logging.getLogger("loom.api")
 _web_rate_limit_state: dict[str, deque[float]] = defaultdict(deque)
 _session_auto_model: dict[str, str] = {}
+TERMINAL_CHAT_SYSTEM_PROMPT = (
+    "You are LOOM, a helpful assistant in a terminal UI.\n"
+    "Respond with exactly one assistant reply to the latest user message.\n"
+    "Do not simulate both sides of a conversation.\n"
+    "Do not prefix output with labels like 'User:', 'Assistant:', 'AI:', or persona names unless explicitly asked."
+)
+
+
+def _normalize_profile_lines(value: object, *, max_items: int = 24, max_chars: int = 180) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    lines: list[str] = []
+    seen: set[str] = set()
+    for raw in value:
+        if not isinstance(raw, str):
+            continue
+        text = re.sub(r"\s+", " ", raw).strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append(text[:max_chars])
+        if len(lines) >= max_items:
+            break
+    return lines
+
+
+def _build_conversation_profile_block(profile: object) -> str:
+    if not isinstance(profile, dict):
+        return ""
+
+    goals_enabled = bool(profile.get("goalsEnabled", True))
+    memory_enabled = bool(profile.get("memoryEnabled", True))
+    user_goals = _normalize_profile_lines(profile.get("userGoals"), max_items=12)
+    assistant_goals = _normalize_profile_lines(profile.get("assistantGoals"), max_items=12)
+    memory_notes = _normalize_profile_lines(profile.get("memoryNotes"), max_items=20, max_chars=220)
+
+    sections: list[str] = []
+    if goals_enabled:
+        goal_lines: list[str] = []
+        if user_goals:
+            goal_lines.append("User Goals:")
+            goal_lines.extend(f"- {goal}" for goal in user_goals)
+        if assistant_goals:
+            goal_lines.append("Assistant Goals:")
+            goal_lines.extend(f"- {goal}" for goal in assistant_goals)
+        if goal_lines:
+            sections.append("Goals:\n" + "\n".join(goal_lines))
+
+    if memory_enabled and memory_notes:
+        sections.append("Long-Term Memory Notes:\n" + "\n".join(f"- {note}" for note in memory_notes))
+
+    if not sections:
+        return ""
+
+    return (
+        "Conversation Profile (apply only when relevant):\n"
+        + "\n\n".join(sections)
+        + "\nNever invent goals or memory not listed above."
+    )
+
+
+def _extract_latest_user_message(text: str) -> str:
+    if not text:
+        return ""
+    latest_matches = re.findall(
+        r"(?is)Latest User Message:\s*(.+?)(?:\n\s*Assistant Reply:|\Z)",
+        text,
+    )
+    if latest_matches:
+        return latest_matches[-1].strip()
+
+    question_matches = re.findall(r"(?is)User Question:\s*(.+)$", text)
+    if question_matches:
+        return question_matches[-1].strip()
+    return text.strip()
+
+
+def _is_local_model(model_id: str) -> bool:
+    if not model_id:
+        return True
+    prefix = model_id.split(":", 1)[0].lower()
+    return prefix not in ALL_PROVIDERS
+
+
+def _parse_feedback_profile(payload: object) -> dict[str, float]:
+    if not isinstance(payload, dict):
+        return {
+            "concise_bias": 0.0,
+            "clarity_bias": 0.0,
+            "warmth_bias": 0.0,
+            "directness_bias": 0.0,
+        }
+
+    def _to_float(value: object) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return 0.0
+
+    return {
+        "concise_bias": max(-1.0, min(1.0, _to_float(payload.get("conciseBias")))),
+        "clarity_bias": max(-1.0, min(1.0, _to_float(payload.get("clarityBias")))),
+        "warmth_bias": max(-1.0, min(1.0, _to_float(payload.get("warmthBias")))),
+        "directness_bias": max(-1.0, min(1.0, _to_float(payload.get("directnessBias")))),
+    }
+
+
+def _parse_agent_mode(payload: object) -> str:
+    value = str(payload or "").strip().lower()
+    if value in {"off", "auto"}:
+        return value
+    if value == "ask":
+        # Backward-compatible normalization while the UI remains two-state.
+        return "auto"
+    return "off"
+
+
+def _infer_chat_intelligence(user_message: str) -> dict[str, object]:
+    latest = _extract_latest_user_message(user_message)
+    lower = latest.lower()
+    words = re.findall(r"\b[\w'-]+\b", latest)
+    word_count = len(words)
+
+    ambiguity_markers = (
+        "this", "that", "it", "something", "stuff", "thing", "whatever", "somehow",
+    )
+    missing_specificity_hits = sum(1 for marker in ambiguity_markers if re.search(rf"\b{re.escape(marker)}\b", lower))
+    question_style_hits = sum(1 for marker in ("how", "why", "what", "best", "should") if re.search(rf"\b{marker}\b", lower))
+    code_hits = sum(1 for marker in ("code", "bug", "error", "stack", "trace", "function", "api", "typescript", "python", "test", "refactor") if marker in lower)
+    web_hits = sum(1 for marker in ("website", "web", "crawl", "scrape", "page", "url", "site") if marker in lower)
+    planning_hits = sum(1 for marker in ("plan", "steps", "checklist", "roadmap", "strategy") if marker in lower)
+
+    uncertainty = 0.18
+    if word_count <= 8:
+        uncertainty += 0.26
+    if missing_specificity_hits > 0:
+        uncertainty += min(0.32, missing_specificity_hits * 0.12)
+    if question_style_hits > 0 and word_count < 18:
+        uncertainty += 0.07
+    if "?" not in latest and word_count <= 12:
+        uncertainty += 0.08
+    uncertainty = max(0.05, min(0.95, uncertainty))
+
+    complexity = min(
+        1.0,
+        0.14
+        + (word_count / 120.0)
+        + (0.14 if planning_hits > 0 else 0.0)
+        + (0.14 if code_hits > 0 else 0.0),
+    )
+
+    if code_hits > 0:
+        task = "code"
+    elif web_hits > 0:
+        task = "research"
+    elif planning_hits > 0:
+        task = "planning"
+    elif uncertainty >= 0.62:
+        task = "clarify"
+    else:
+        task = "general"
+
+    response_contract = "direct"
+    if task == "code":
+        response_contract = "code"
+    elif task in {"planning", "research"} or "checklist" in lower:
+        response_contract = "checklist"
+    elif "compare" in lower or "tradeoff" in lower:
+        response_contract = "analysis"
+
+    tool_first = bool(code_hits > 0 or web_hits > 0)
+    ask_clarifying_question = bool(
+        uncertainty >= 0.72
+        and missing_specificity_hits > 0
+        and word_count <= 28
+    )
+
+    confidence = max(0.08, min(0.98, 1.0 - (uncertainty * 0.72)))
+
+    return {
+        "latest_user_message": latest,
+        "task": task,
+        "word_count": word_count,
+        "uncertainty": uncertainty,
+        "complexity": complexity,
+        "response_contract": response_contract,
+        "tool_first": tool_first,
+        "ask_clarifying_question": ask_clarifying_question,
+        "confidence": confidence,
+    }
+
+
+def _build_behavior_policy(
+    intelligence: dict[str, object],
+    feedback_profile: dict[str, float],
+) -> str:
+    contract = str(intelligence.get("response_contract") or "direct")
+    tool_first = bool(intelligence.get("tool_first") or False)
+    ask_clarifying = bool(intelligence.get("ask_clarifying_question") or False)
+    concise_bias = feedback_profile.get("concise_bias", 0.0)
+    clarity_bias = feedback_profile.get("clarity_bias", 0.0)
+    warmth_bias = feedback_profile.get("warmth_bias", 0.0)
+    directness_bias = feedback_profile.get("directness_bias", 0.0)
+
+    lines = [
+        "Behavior Policy:",
+        "- Perform a silent self-check for factual consistency before finalizing the answer.",
+        "- Avoid repetitive loops and never simulate both sides of a dialogue.",
+    ]
+
+    if tool_first:
+        lines.append("- For tool-relevant tasks, start with concrete actions or checks before broad theory.")
+    if ask_clarifying:
+        lines.append("- If critical details are missing, ask one concise clarifying question and wait.")
+    if contract == "code":
+        lines.append("- Prefer implementation-first output: actionable patch/steps, then brief explanation.")
+    elif contract == "checklist":
+        lines.append("- Structure response as a concise checklist with prioritized next actions.")
+    elif contract == "analysis":
+        lines.append("- Present direct tradeoffs first, then recommendation.")
+    else:
+        lines.append("- Keep answer compact and directly useful.")
+
+    if concise_bias > 0.22:
+        lines.append("- User feedback trend: shorten replies and avoid verbose filler.")
+    if clarity_bias > 0.22:
+        lines.append("- User feedback trend: increase specificity and concrete examples.")
+    if warmth_bias > 0.22:
+        lines.append("- User feedback trend: keep tone more human and encouraging without fluff.")
+    if directness_bias > 0.22:
+        lines.append("- User feedback trend: lead with decisive recommendation.")
+    return "\n".join(lines)
+
+
+def _sanitize_assistant_output(text: str) -> str:
+    if not text:
+        return text
+    sanitized = re.sub(r"(?im)^\s*(user|assistant|ai|beep boop|boop boo)\s*:\s*", "", text)
+    sanitized = re.sub(r"\n{4,}", "\n\n\n", sanitized)
+    return sanitized
+
 logging.getLogger("httpx").setLevel(getattr(logging, HTTP_CLIENT_LOG_LEVEL, logging.WARNING))
 logging.getLogger("httpcore").setLevel(getattr(logging, HTTP_CLIENT_LOG_LEVEL, logging.WARNING))
 
@@ -681,12 +928,21 @@ async def chat(sid, data):
     context_mode = str(data.get('context_mode', 'input') or 'input').lower()
     if context_mode not in {'input', 'key', 'full'}:
         context_mode = 'input'
+    source = str(data.get('source', 'other') or 'other').lower()
+    client_request_id = str(data.get('client_request_id', '') or '').strip()
+    conversation_profile = data.get('conversation_profile')
+    conversation_profile_block = _build_conversation_profile_block(conversation_profile)
+    feedback_profile = _parse_feedback_profile(data.get('feedback_profile'))
+    agent_mode = _parse_agent_mode(data.get('agent_mode'))
+    intelligence = _infer_chat_intelligence(raw_prompt or prompt)
 
     requested_model = data.get('model', 'auto')
     requested_model_str = str(requested_model or "")
     is_auto_mode = requested_model_str.lower() == "auto"
     previous_auto_model = _session_auto_model.get(sid) if is_auto_mode else None
     orchestration_prompt = raw_prompt or prompt
+    if conversation_profile_block:
+        orchestration_prompt = f"{conversation_profile_block}\n\nLatest User Message:\n{orchestration_prompt}"
     
     # --- ORCHESTRATION LAYER ---
     try:
@@ -743,18 +999,59 @@ async def chat(sid, data):
     code_context_collection = data.get('code_context_collection', 'loom_code_context')
     
     logger.debug(
-        "chat_request sid=%s mode=%s rag=%s code_context=%s prompt_len=%s raw_len=%s prompt_preview=%s",
+        "chat_request sid=%s source=%s mode=%s rag=%s code_context=%s profile=%s agent_mode=%s contract=%s confidence=%.2f uncertainty=%.2f prompt_len=%s raw_len=%s prompt_preview=%s",
         sid,
+        source,
         context_mode,
         use_rag,
         use_code_context,
+        bool(conversation_profile_block),
+        agent_mode,
+        intelligence.get("response_contract"),
+        float(intelligence.get("confidence") or 0.0),
+        float(intelligence.get("uncertainty") or 0.0),
         len(prompt),
         len(raw_prompt),
         raw_prompt[:50] if raw_prompt else prompt[:50],
     )
     
+    route = "local" if _is_local_model(str(model)) else "cloud"
+    response_contract = str(intelligence.get("response_contract") or "direct")
+    confidence = float(intelligence.get("confidence") or 0.0)
+    ask_clarifying = bool(intelligence.get("ask_clarifying_question") or False)
+    base_provenance = ["conversation", "local_model" if route == "local" else "cloud_model"]
+    if conversation_profile_block:
+        base_provenance.append("goals_memory")
+    if use_code_context:
+        base_provenance.append("code_context")
+    if use_rag:
+        base_provenance.append("retrieval")
+
+    await sio.emit('ai_meta', {
+        'phase': 'dispatch',
+        'request_id': client_request_id or None,
+        'route': route,
+        'confidence': confidence,
+        'response_contract': response_contract,
+        'provenance': base_provenance,
+        'requires_clarification': ask_clarifying,
+        'agent_mode': agent_mode,
+        'agent_used': False,
+    }, room=sid)
+
     # Emit processing start
-    await sio.emit('ai_status', {'status': 'running', 'message': 'Processing...'}, room=sid)
+    await sio.emit('ai_status', {
+        'status': 'running',
+        'message': 'Processing...',
+        'request_id': client_request_id or None,
+        'route': route,
+        'confidence': confidence,
+        'response_contract': response_contract,
+        'provenance': base_provenance,
+        'requires_clarification': ask_clarifying,
+        'agent_mode': agent_mode,
+        'agent_used': False,
+    }, room=sid)
     
     try:
         # Retrieve relevant context if RAG or code context is enabled
@@ -817,16 +1114,190 @@ Instructions:
 - If the context doesn't contain relevant information, you can use your general knowledge, but mention that the specific information wasn't found in the project context.
 
 Answer:"""
-        
-        # Stream response — routes to Ollama or cloud provider based on model prefix
-        async for chunk in provider_manager.stream_chat(final_prompt, model):
-            await sio.emit('ai_chunk', {'content': chunk}, room=sid)
-        
+
+        system_prompt = TERMINAL_CHAT_SYSTEM_PROMPT if source == 'terminal' else None
+        if system_prompt:
+            policy_block = _build_behavior_policy(intelligence, feedback_profile)
+            system_prompt = f"{system_prompt}\n\n{policy_block}"
+            if (
+                conversation_profile_block
+                and "Conversation Profile (apply only when relevant):" not in prompt
+            ):
+                system_prompt = f"{system_prompt}\n\n{conversation_profile_block}"
+
+        # Stream primary response (with anti-loop sanitization)
+        parsed_provider, parsed_model_name = provider_manager.resolve_model_id(str(model))
+        task_label = str(intelligence.get("task") or "general")
+        use_mistral_agent = False
+        raw_stream = ""
+        emitted_len = 0
+        if agent_mode == "auto" and parsed_provider == "mistral":
+            mistral_provider = provider_manager.get_provider("mistral")
+            stream_with_agent = getattr(mistral_provider, "stream_chat_with_agent", None)
+            if callable(stream_with_agent):
+                try:
+                    await sio.emit('ai_meta', {
+                        'phase': 'agent_dispatch',
+                        'request_id': client_request_id or None,
+                        'route': route,
+                        'confidence': confidence,
+                        'response_contract': response_contract,
+                        'provenance': [*base_provenance, 'mistral_agent'],
+                        'agent_mode': agent_mode,
+                        'agent_used': True,
+                        'agent_provider': 'mistral',
+                        'agent_task': task_label,
+                    }, room=sid)
+                    await sio.emit('ai_status', {
+                        'status': 'running',
+                        'message': 'Spawning Mistral task agent...',
+                        'request_id': client_request_id or None,
+                        'route': route,
+                        'confidence': confidence,
+                        'response_contract': response_contract,
+                        'provenance': [*base_provenance, 'mistral_agent'],
+                        'requires_clarification': ask_clarifying,
+                        'agent_mode': agent_mode,
+                        'agent_used': True,
+                    }, room=sid)
+                    async for chunk in stream_with_agent(
+                        final_prompt,
+                        parsed_model_name,
+                        task=task_label,
+                        system_prompt=system_prompt,
+                    ):
+                        raw_stream += chunk
+                        sanitized = _sanitize_assistant_output(raw_stream)
+                        delta = sanitized[emitted_len:]
+                        if delta:
+                            await sio.emit('ai_chunk', {'content': delta, 'request_id': client_request_id or None}, room=sid)
+                            emitted_len = len(sanitized)
+                    use_mistral_agent = True
+                except Exception:
+                    logger.exception("mistral_agent_path_failed sid=%s model=%s task=%s", sid, model, task_label)
+                    await sio.emit('ai_meta', {
+                        'phase': 'agent_fallback',
+                        'request_id': client_request_id or None,
+                        'route': route,
+                        'confidence': confidence,
+                        'response_contract': response_contract,
+                        'provenance': base_provenance,
+                        'agent_mode': agent_mode,
+                        'agent_used': False,
+                        'agent_provider': 'mistral',
+                    }, room=sid)
+
+        if not use_mistral_agent:
+            async for chunk in provider_manager.stream_chat(final_prompt, model, system_prompt=system_prompt):
+                raw_stream += chunk
+                sanitized = _sanitize_assistant_output(raw_stream)
+                delta = sanitized[emitted_len:]
+                if delta:
+                    await sio.emit('ai_chunk', {'content': delta, 'request_id': client_request_id or None}, room=sid)
+                    emitted_len = len(sanitized)
+
+        primary_response = _sanitize_assistant_output(raw_stream)
+        refinement_model = None
+        should_refine = (
+            source == 'terminal'
+            and route == 'local'
+            and (
+                float(intelligence.get("uncertainty") or 0.0) >= 0.58
+                or float(intelligence.get("complexity") or 0.0) >= 0.68
+            )
+        )
+
+        if should_refine:
+            try:
+                refinement_pick = await provider_manager.suggest_refinement_model(
+                    active_model=str(model),
+                    task=str(intelligence.get("task") or "general"),
+                )
+                if refinement_pick and refinement_pick.get("model"):
+                    refinement_model = str(refinement_pick["model"])
+            except Exception:
+                refinement_model = None
+
+        if refinement_model:
+            try:
+                await sio.emit('ai_meta', {
+                    'phase': 'refine',
+                    'request_id': client_request_id or None,
+                    'route': 'hybrid',
+                    'confidence': confidence,
+                    'response_contract': response_contract,
+                    'provenance': [*base_provenance, 'cloud_refinement'],
+                    'refinement_model': refinement_model,
+                }, room=sid)
+                await sio.emit('ai_status', {
+                    'status': 'running',
+                    'message': f'Refining with {refinement_model}...',
+                    'request_id': client_request_id or None,
+                    'route': 'hybrid',
+                    'confidence': min(0.99, confidence + 0.08),
+                    'response_contract': response_contract,
+                    'provenance': [*base_provenance, 'cloud_refinement'],
+                    'requires_clarification': ask_clarifying,
+                }, room=sid)
+
+                refinement_prompt = (
+                    "You are improving a draft assistant response.\n"
+                    "Return exactly one improved assistant reply.\n"
+                    "Preserve factual correctness and avoid adding unsupported claims.\n"
+                    "Do not include labels like 'Draft' or 'Final'.\n\n"
+                    f"Latest user request:\n{intelligence.get('latest_user_message')}\n\n"
+                    f"Draft reply:\n{primary_response}\n\n"
+                    "Improved reply:"
+                )
+                await sio.emit('ai_chunk', {'content': "\n\n[cloud-refinement]\n", 'request_id': client_request_id or None}, room=sid)
+
+                refine_raw = ""
+                refine_emitted_len = 0
+                async for refine_chunk in provider_manager.stream_chat(refinement_prompt, refinement_model, system_prompt=system_prompt):
+                    refine_raw += refine_chunk
+                    refine_sanitized = _sanitize_assistant_output(refine_raw)
+                    refine_delta = refine_sanitized[refine_emitted_len:]
+                    if refine_delta:
+                        await sio.emit('ai_chunk', {'content': refine_delta, 'request_id': client_request_id or None}, room=sid)
+                        refine_emitted_len = len(refine_sanitized)
+            except Exception:
+                logger.exception("cloud_refinement_failed model=%s", refinement_model)
+                refinement_model = None
+
+        completion_provenance = list(base_provenance)
+        if use_mistral_agent:
+            completion_provenance.append('mistral_agent')
+        if refinement_model:
+            completion_provenance.append('cloud_refinement')
+
         # Emit completion
-        await sio.emit('ai_status', {'status': 'success', 'message': 'Complete', 'model': model}, room=sid)
-        
+        await sio.emit('ai_status', {
+            'status': 'success',
+            'message': 'Complete',
+            'model': model,
+            'request_id': client_request_id or None,
+            'route': 'hybrid' if refinement_model else route,
+            'confidence': min(0.99, confidence + (0.08 if refinement_model else 0.0)),
+            'response_contract': response_contract,
+            'provenance': completion_provenance,
+            'refined_by': refinement_model,
+            'requires_clarification': ask_clarifying,
+            'agent_mode': agent_mode,
+            'agent_used': use_mistral_agent,
+        }, room=sid)
+
     except Exception as e:
-        await sio.emit('ai_status', {'status': 'error', 'message': str(e)}, room=sid)
+        await sio.emit('ai_status', {
+            'status': 'error',
+            'message': str(e),
+            'request_id': client_request_id or None,
+            'route': route,
+            'confidence': confidence,
+            'response_contract': response_contract,
+            'provenance': base_provenance,
+            'agent_mode': agent_mode,
+            'agent_used': False,
+        }, room=sid)
 
 
 @sio.event
@@ -871,7 +1342,8 @@ async def pull_model(sid, data):
     try:
         # Stream pull progress
         error_occurred = False
-        error_message = None
+        last_completed = 0
+        last_ts = time.monotonic()
         
         async for progress in ollama_client.pull_model(model_name):
             status = progress.get('status', '')
@@ -904,16 +1376,26 @@ async def pull_model(sid, data):
             percent = None
             if total and total > 0:
                 percent = int((completed / total) * 100)
+
+            now_ts = time.monotonic()
+            elapsed = max(0.001, now_ts - last_ts)
+            speed_bps = max(0.0, (completed - last_completed) / elapsed)
+            last_completed = completed
+            last_ts = now_ts
+            eta_seconds = None
+            if total and speed_bps > 0:
+                eta_seconds = int(max(0, total - completed) / speed_bps)
             
             # Build progress message
             progress_msg = status
             if total > 0:
                 mb_completed = completed / (1024 * 1024)
                 mb_total = total / (1024 * 1024)
+                speed_mb_s = speed_bps / (1024 * 1024)
                 if percent is not None:
-                    progress_msg = f"{status}... {percent}% ({mb_completed:.1f}MB / {mb_total:.1f}MB)"
+                    progress_msg = f"{status}... {percent}% ({mb_completed:.1f}MB / {mb_total:.1f}MB @ {speed_mb_s:.1f}MB/s)"
                 else:
-                    progress_msg = f"{status}... {mb_completed:.1f}MB / {mb_total:.1f}MB"
+                    progress_msg = f"{status}... {mb_completed:.1f}MB / {mb_total:.1f}MB @ {speed_mb_s:.1f}MB/s"
             
             await sio.emit('pull_status', {
                 'status': status,
@@ -922,6 +1404,8 @@ async def pull_model(sid, data):
                 'total': total,
                 'percent': percent,
                 'message': progress_msg,
+                'speed_bps': speed_bps if speed_bps > 0 else None,
+                'eta_seconds': eta_seconds,
             }, room=sid)
         
         # Check if we completed successfully (no error occurred)
@@ -988,14 +1472,46 @@ async def pull_image_model(sid, data):
             'repo': model_info['repo'],
         }, room=sid)
         
-        # Try to load the model (this will download if needed)
-        # Note: This is a blocking operation, but diffusers handles progress internally
         try:
-            local_image_gen.load_model(model_name)
+            loop = asyncio.get_running_loop()
+            progress_queue: asyncio.Queue[dict | None] = asyncio.Queue()
+
+            def progress_callback(payload: dict):
+                loop.call_soon_threadsafe(progress_queue.put_nowait, payload)
+
+            async def emit_progress_stream():
+                while True:
+                    update = await progress_queue.get()
+                    if update is None:
+                        break
+                    emit_payload = {
+                        'status': update.get('status', 'downloading'),
+                        'model': model_name,
+                        'message': update.get('message'),
+                        'repo': model_info.get('repo'),
+                        'completed': update.get('completed'),
+                        'total': update.get('total'),
+                        'percent': update.get('percent'),
+                        'speed_bps': update.get('speed_bps'),
+                        'eta_seconds': update.get('eta_seconds'),
+                        'file_name': update.get('file_name'),
+                        'files_completed': update.get('files_completed'),
+                        'files_total': update.get('files_total'),
+                    }
+                    await sio.emit('pull_image_status', emit_payload, room=sid)
+
+            emitter_task = asyncio.create_task(emit_progress_stream())
+            try:
+                await loop.run_in_executor(None, lambda: local_image_gen.load_model(model_name, progress_callback=progress_callback))
+            finally:
+                await progress_queue.put(None)
+                await emitter_task
+
             await sio.emit('pull_image_status', {
                 'status': 'success',
                 'model': model_name,
                 'message': f'Model {model_name} is ready!',
+                'percent': 100,
             }, room=sid)
         except Exception as e:
             error_msg = str(e)
