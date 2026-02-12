@@ -144,6 +144,17 @@ function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [shortcutsOpen])
 
+  useEffect(() => {
+    const onCircuitImport = (event: Event) => {
+      const custom = event as CustomEvent<{ open?: boolean }>
+      if (custom.detail?.open === false) return
+      setViewMode('circuit')
+    }
+
+    window.addEventListener('loom:circuit-import', onCircuitImport as EventListener)
+    return () => window.removeEventListener('loom:circuit-import', onCircuitImport as EventListener)
+  }, [])
+
   // Format RAM display using backend health metrics.
   const formatRamDisplay = () => {
     if (status.ramTotalGb !== undefined) {

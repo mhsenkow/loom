@@ -21,7 +21,7 @@ import { useSocket } from '../../hooks/useSocket'
 import { useSystemStatus } from '../../hooks/useSystemStatus'
 import { useSendToTerminal } from '../../hooks/useTerminalOutput'
 import { saveCircuit, saveModelSlots, loadModelSlots, SavedCircuit } from '../../hooks/useCircuitRunner'
-import { loadModulesFromBackend, saveModuleToBackend, deleteModuleFromBackend } from '../../hooks/useModules'
+import { saveModuleToBackend, deleteModuleFromBackend } from '../../hooks/useModules'
 import { ProviderSetup } from '../terminal/ProviderSetup'
 import { DialogModal } from '../shell/DialogModal'
 import { API_BASE_URL } from '../../config/api'
@@ -55,6 +55,7 @@ const SLOT_LABELS: Record<ModelSlot, { label: string; desc: string; color: strin
 }
 
 const IMAGE_SLOT_DEFAULT = 'openai:dall-e-3'
+const CIRCUIT_IMPORT_EVENT = 'loom:circuit-import'
 
 // Register custom node types
 const nodeTypes = {
@@ -117,34 +118,8 @@ export interface CellData {
   terminalHistorySession?: string
 }
 
-// Initial demo cells with better defaults
-const initialCells: CellData[] = [
-  {
-    id: 'cell-1',
-    type: 'data_input',
-    label: 'INPUT',
-    content: 'What are the main themes in classic literature?',
-    status: 'idle',
-    inputMode: 'none',
-  },
-  {
-    id: 'cell-2',
-    type: 'ai_processor',
-    label: 'AI',
-    content: 'Analyze and summarize the following:\n\n{{input}}',
-    status: 'idle',
-    modelSlot: 'A',
-    inputMode: 'previous',
-  },
-  {
-    id: 'cell-3',
-    type: 'log_entry',
-    label: 'OUTPUT',
-    content: '',
-    status: 'idle',
-    inputMode: 'previous',
-  },
-]
+// Start with a blank board. Users can add cells or load a template/circuit.
+const initialCells: CellData[] = []
 
 const CHAT_MODEL_EXCLUDE = ['llava', 'bakllava', 'vision', 'moondream', 'flux', 'stable-diffusion', 'sdxl']
 const FAST_MODEL_HINTS = ['tiny', 'mini', '1.5b', '2b', '3b', 'q4', 'q3']
@@ -299,49 +274,33 @@ export function CircuitBoard() {
     saveModelSlots(modelSlots)
   }, [modelSlots])
 
+  useEffect(() => {
+    const onImportSnippet = (event: Event) => {
+      const custom = event as CustomEvent<{ content?: string }>
+      const content = (custom.detail?.content || '').trim()
+      if (!content) return
+
+      const newCell: CellData = {
+        id: `cell-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+        type: 'data_input',
+        label: 'FROM CHAT',
+        content,
+        status: 'idle',
+        inputMode: 'none',
+      }
+
+      setCells(prev => [...prev, newCell])
+      setShowSaveSuccess(false)
+      showInfoToast('Imported terminal snippet into circuit.', 'Circuit')
+    }
+
+    window.addEventListener(CIRCUIT_IMPORT_EVENT, onImportSnippet as EventListener)
+    return () => window.removeEventListener(CIRCUIT_IMPORT_EVENT, onImportSnippet as EventListener)
+  }, [])
+
   // React Flow state (must be declared before useEffects that use setNodes/setEdges)
   const [nodes, setNodes, onNodesChange] = useNodesState(cellsToNodes(initialCells))
   const [edges, setEdges, onEdgesChange] = useEdgesState(generateEdges(initialCells))
-
-  // Load modules from backend on mount
-  useEffect(() => {
-    let mounted = true
-    loadModulesFromBackend().then((loadedModules) => {
-      if (mounted && loadedModules.length > 0) {
-        // Only load if we have modules from backend and current cells are just initial cells
-        const isInitialState = cells.length === initialCells.length &&
-          cells.every((cell, idx) => cell.id === initialCells[idx]?.id)
-        if (isInitialState) {
-          // Extract positions and clean up temporary _position field
-          const cleanedModules = loadedModules.map((cell) => {
-            const { _position, ...cleanCell } = cell
-            return cleanCell
-          })
-          setCells(cleanedModules)
-          if (viewMode === 'canvas') {
-            // Use positions from backend modules
-            const nodesWithPositions = loadedModules.map((cell, index: number) => {
-              const pos = cell._position || getNodePosition(index, cleanedModules)
-              return {
-                id: cell.id,
-                type: 'module' as const,
-                position: pos,
-                data: {
-                  label: cell.label,
-                  moduleType: cell.type,
-                  status: cell.status,
-                  content: cell.content,
-                },
-              }
-            })
-            setNodes(nodesWithPositions)
-            setEdges(generateEdges(cleanedModules))
-          }
-        }
-      }
-    })
-    return () => { mounted = false }
-  }, []) // Only run on mount
 
   // Helper to get position for a cell (must be after nodes is initialized)
   const getCellPosition = useCallback((cellId: string): { x: number; y: number } => {
@@ -483,30 +442,7 @@ export function CircuitBoard() {
 
   // Create a new empty circuit
   const newCircuit = useCallback(() => {
-    const newCells: CellData[] = [
-      {
-        id: `cell-${Date.now()}-0`,
-        type: 'data_input',
-        label: 'INPUT',
-        content: '',
-        status: 'idle',
-      },
-      {
-        id: `cell-${Date.now()}-1`,
-        type: 'ai_processor',
-        label: 'AI',
-        content: '',
-        status: 'idle',
-        modelSlot: 'A',
-      },
-      {
-        id: `cell-${Date.now()}-2`,
-        type: 'log_entry',
-        label: 'OUTPUT',
-        content: '',
-        status: 'idle',
-      },
-    ]
+    const newCells: CellData[] = []
     setCells(newCells)
     setCircuitName('')
     setShowSaveSuccess(false)

@@ -127,6 +127,9 @@ export function FloatingToolbar({
                     <button onClick={() => onAddCell('ai_processor')} className="px-3 py-2 text-xs font-semibold text-cyan-400 border border-cyan-400/20 hover:bg-cyan-400/10 hover:border-cyan-400/40 rounded-lg transition-all">
                         + AI
                     </button>
+                    <button onClick={() => onAddCell('log_entry')} className="px-3 py-2 text-xs font-semibold text-emerald-400 border border-emerald-400/20 hover:bg-emerald-400/10 hover:border-emerald-400/40 rounded-lg transition-all">
+                        + Output
+                    </button>
                     <button onClick={() => onAddCell('image_gen')} className="px-3 py-2 text-xs font-semibold text-pink-400 border border-pink-400/20 hover:bg-pink-400/10 hover:border-pink-400/40 rounded-lg transition-all">
                         + Image
                     </button>

@@ -80,6 +80,9 @@ const CONNECTION_NOTICE_COOLDOWN_MS = 120000
 const STREAM_SIGNAL_NORMALIZER_CPS = 180
 const TELEMETRY_RAIL_MAX_LINES = 42
 const IDLE_MATRIX_CHARSET = '01ABCDEF[]{}<>/\\|*+-._:;'.split('')
+const TERMINAL_SNIPPETS_KEY = 'loom-terminal-snippets-v1'
+const TERMINAL_PINS_KEY = 'loom-terminal-pins-v1'
+const CIRCUIT_IMPORT_EVENT = 'loom:circuit-import'
 
 const CHAT_MODEL_EXCLUDE_KEYWORDS = ['flux', 'flux2', 'stable-diffusion', 'sdxl', 'llava', 'bakllava', 'moondream', 'vision']
 const QUICK_MODEL_PRIORITY_HINTS = [
@@ -155,6 +158,54 @@ function loadPersistedHistoryFilters(): PersistedHistoryFilters {
   } catch {
     return {}
   }
+}
+
+interface StoredMessageSnippet {
+  id: string
+  entryId: string
+  createdAt: number
+  model?: string
+  kind: 'note' | 'pin'
+  text: string
+  markdown: string
+}
+
+function appendSnippetToStorage(
+  storageKey: string,
+  snippet: StoredMessageSnippet,
+  maxItems = 120,
+) {
+  try {
+    const raw = localStorage.getItem(storageKey)
+    const existing = raw ? JSON.parse(raw) as StoredMessageSnippet[] : []
+    const next = [snippet, ...existing.filter(item => item.id !== snippet.id)].slice(0, maxItems)
+    localStorage.setItem(storageKey, JSON.stringify(next))
+  } catch {
+    // Ignore storage failures for optional UX actions.
+  }
+}
+
+function buildMessageMarkdown(
+  entry: LogEntry,
+  timestampLabel: string,
+  modelName?: string,
+): string {
+  const title = `## ${entry.type.toUpperCase()} • ${timestampLabel}`
+  const model = modelName ? `\nModel: ${modelName}` : ''
+  const body = (entry.content || '').trim()
+  return `${title}${model}\n\n${body}`
+}
+
+function downloadTextFile(filename: string, content: string) {
+  const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  document.body.removeChild(anchor)
+  window.setTimeout(() => URL.revokeObjectURL(url), 400)
 }
 
 function isLikelyChatModel(modelName: string): boolean {
@@ -330,20 +381,28 @@ function randomGlyphLine(minLen = 4, maxLen = 9): string {
   return out
 }
 
-function buildTelemetryRailLine(tokens: string[], mode: 'idle' | 'active'): { text: string; isToken: boolean } {
+function buildTelemetryRailLine(
+  tokens: string[],
+  deltaTokens: string[],
+  mode: 'idle' | 'active',
+): { text: string; isToken: boolean; isDelta: boolean } {
   const safeTokens = tokens.length > 0 ? tokens : ['SOCKET:DOWN', 'MODEL:NONE', 'PHASE:IDLE']
+  const safeDeltaTokens = deltaTokens.filter(Boolean)
   const tokenChance = mode === 'active' ? 0.95 : 0.88
   const useToken = Math.random() < tokenChance
   if (!useToken) {
-    return { text: randomGlyphLine(3, 7), isToken: false }
+    return { text: randomGlyphLine(3, 7), isToken: false, isDelta: false }
   }
 
-  const token = safeTokens[Math.floor(Math.random() * safeTokens.length)]
+  const useDeltaToken = safeDeltaTokens.length > 0 && Math.random() < (mode === 'active' ? 0.7 : 0.52)
+  const pool = useDeltaToken ? safeDeltaTokens : safeTokens
+  const token = pool[Math.floor(Math.random() * pool.length)]
   const noisyPrefix = randomGlyphLine(1, 2)
   const noisySuffix = randomGlyphLine(1, 2)
   return {
-    text: `${noisyPrefix} ${token} ${noisySuffix}`,
+    text: useDeltaToken ? `${noisyPrefix} ${token}` : `${noisyPrefix} ${token} ${noisySuffix}`,
     isToken: true,
+    isDelta: useDeltaToken,
   }
 }
 
@@ -422,6 +481,7 @@ export function TerminalFeed() {
   const [feedScrollTop, setFeedScrollTop] = useState(0)
   const [feedViewportHeight, setFeedViewportHeight] = useState(0)
   const [autoFollowFeed, setAutoFollowFeed] = useState(true)
+  const [telemetryDeltaTokens, setTelemetryDeltaTokens] = useState<string[]>([])
   const [musicSetupPanelOpen, setMusicSetupPanelOpen] = useState(false)
   const [musicGeneration, setMusicGeneration] = useState<{
     prompt: string
@@ -446,6 +506,10 @@ export function TerminalFeed() {
     charsPerSec: 0,
   })
   const activeQdcPollersRef = useRef<Set<string>>(new Set())
+  const lastTelemetryPhaseRef = useRef<string>('')
+  const lastTelemetryRateBucketRef = useRef<string>('')
+  const lastTelemetryModelRef = useRef<string>('')
+  const lastTelemetryRouteRef = useRef<string>('')
 
   const [avatarPanelOpen, setAvatarPanelOpen] = useState(false)
   const [voiceChatModalOpen, setVoiceChatModalOpen] = useState(false)
@@ -700,6 +764,16 @@ export function TerminalFeed() {
   const isNearFeedBottom = useCallback((el: HTMLDivElement) => {
     const distanceFromBottom = el.scrollHeight - el.clientHeight - el.scrollTop
     return distanceFromBottom <= AUTO_FOLLOW_BOTTOM_THRESHOLD_PX
+  }, [])
+
+  const pushTelemetryDelta = useCallback((raw: string) => {
+    const token = sanitizeTelemetryToken(raw)
+    if (!token) return
+    setTelemetryDeltaTokens(prev => {
+      if (prev[0] === token) return prev
+      const next = [token, ...prev.filter(item => item !== token)]
+      return next.slice(0, 18)
+    })
   }, [])
 
   // Persist panel state
@@ -2334,6 +2408,15 @@ export function TerminalFeed() {
     return [...providers]
   }, [cloudModels])
 
+  const cloudModelProviderById = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const model of cloudModels) {
+      if (!model.id) continue
+      map.set(model.id.toLowerCase(), String(model.provider || 'cloud').toUpperCase())
+    }
+    return map
+  }, [cloudModels])
+
   const chatModels = useMemo(() => models.filter(isLikelyChatModel), [models])
 
   const availableHistoryModels = useMemo(() => {
@@ -2432,11 +2515,12 @@ export function TerminalFeed() {
     }
     const modelTokens = recentModels.map(modelName => `RECENT:${modelName}`)
 
-    return [...new Set([...baseTokens, ...modelTokens])]
+    return [...new Set([...telemetryDeltaTokens, ...baseTokens, ...modelTokens])]
       .map(sanitizeTelemetryToken)
       .filter(Boolean)
-      .slice(0, 20)
+      .slice(0, 24)
   }, [
+    telemetryDeltaTokens,
     entries,
     connected,
     status.loadedModelName,
@@ -2453,6 +2537,43 @@ export function TerminalFeed() {
     imageGeneration?.status,
     musicGeneration?.status,
   ])
+
+  useEffect(() => {
+    pushTelemetryDelta(`D_SOCKET:${connected ? 'UP' : 'DOWN'}`)
+  }, [connected, pushTelemetryDelta])
+
+  useEffect(() => {
+    pushTelemetryDelta(`D_OLLAMA:${status.connected ? 'READY' : 'STANDBY'}`)
+  }, [status.connected, pushTelemetryDelta])
+
+  useEffect(() => {
+    const modelName = (status.loadedModelName || status.activeModel || '').trim()
+    if (!modelName || modelName === lastTelemetryModelRef.current) return
+    lastTelemetryModelRef.current = modelName
+    pushTelemetryDelta(`D_MODEL:${modelName}`)
+
+    const provider = cloudModelProviderById.get(modelName.toLowerCase())
+    const route = provider ? `CLOUD_${provider}` : 'LOCAL'
+    if (route !== lastTelemetryRouteRef.current) {
+      lastTelemetryRouteRef.current = route
+      pushTelemetryDelta(`D_ROUTE:${route}`)
+    }
+  }, [status.loadedModelName, status.activeModel, cloudModelProviderById, pushTelemetryDelta])
+
+  useEffect(() => {
+    const phase = (aiRuntimeTelemetry.phase || 'IDLE').trim()
+    if (!phase || phase === lastTelemetryPhaseRef.current) return
+    lastTelemetryPhaseRef.current = phase
+    pushTelemetryDelta(`D_PHASE:${phase}`)
+  }, [aiRuntimeTelemetry.phase, pushTelemetryDelta])
+
+  useEffect(() => {
+    const rate = aiRuntimeTelemetry.charsPerSec || 0
+    const nextBucket = rate >= 180 ? 'FAST' : rate >= 70 ? 'MED' : rate > 0 ? 'LOW' : 'ZERO'
+    if (nextBucket === lastTelemetryRateBucketRef.current) return
+    lastTelemetryRateBucketRef.current = nextBucket
+    pushTelemetryDelta(`D_RATE:${nextBucket}`)
+  }, [aiRuntimeTelemetry.charsPerSec, pushTelemetryDelta])
 
   const commandRuntimeTelemetry = useMemo(() => ({
     ...aiRuntimeTelemetry,
@@ -2619,7 +2740,7 @@ export function TerminalFeed() {
 
       {/* Main Terminal Area */}
       <div className={`relative flex-1 flex flex-col transition-all duration-200 ${(imageGeneration || musicGeneration || avatarPanelOpen) ? 'mr-0 xl:mr-96' : ''}`}>
-        <IdleTelemetryMatrix mode={matrixTelemetryMode} tokens={idleTelemetryTokens} />
+        <IdleTelemetryMatrix mode={matrixTelemetryMode} tokens={idleTelemetryTokens} deltaTokens={telemetryDeltaTokens} />
 
         {/* Terminal Feed */}
         <div
@@ -2628,7 +2749,7 @@ export function TerminalFeed() {
           className="relative z-10 flex-1 overflow-y-auto p-4"
           aria-live="polite"
         >
-          <div className="relative z-10 max-w-3xl mx-auto space-y-3 pb-10">
+          <div className="relative z-10 terminal-reading-lane space-y-3 pb-10">
             <div className="sticky top-0 z-20 border border-terminal-border bg-void/90 backdrop-blur px-3 py-2 space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <div className="text-[10px] text-terminal-muted tracking-widest">
@@ -2762,10 +2883,11 @@ export function TerminalFeed() {
             {topSpacerHeight > 0 && (
               <div style={{ height: `${topSpacerHeight}px` }} aria-hidden />
             )}
-            {visibleItems.map(item => (
+            {visibleItems.map((item, index) => (
               <LogEntryBlock
                 key={item.key}
                 entry={item.entry}
+                rowIndex={virtualStart + index}
                 formatTimestamp={formatTimestamp}
                 availableChatModels={chatModels}
                 onRerunWithModel={handleRerunWithModel}
@@ -2788,7 +2910,7 @@ export function TerminalFeed() {
 
         {/* Command Input */}
         <div className="relative z-10 border-t border-terminal-border px-4 pt-4 pb-[calc(env(safe-area-inset-bottom)+1rem)]">
-          <div className="max-w-3xl mx-auto">
+          <div className="terminal-reading-lane">
             <CommandInput
               onSubmit={handleCommand}
               placeholder={circuitInputState
@@ -3279,9 +3401,18 @@ interface IdleTelemetryLine {
   id: string
   text: string
   isToken: boolean
+  isDelta: boolean
 }
 
-function IdleTelemetryMatrix({ mode, tokens }: { mode: 'off' | 'idle' | 'active'; tokens: string[] }) {
+function IdleTelemetryMatrix({
+  mode,
+  tokens,
+  deltaTokens,
+}: {
+  mode: 'off' | 'idle' | 'active'
+  tokens: string[]
+  deltaTokens: string[]
+}) {
   const [lines, setLines] = useState<IdleTelemetryLine[]>([])
 
   useEffect(() => {
@@ -3291,17 +3422,18 @@ function IdleTelemetryMatrix({ mode, tokens }: { mode: 'off' | 'idle' | 'active'
     }
 
     const seed = Array.from({ length: TELEMETRY_RAIL_MAX_LINES }, (_, index) => {
-      const next = buildTelemetryRailLine(tokens, mode)
+      const next = buildTelemetryRailLine(tokens, deltaTokens, mode)
       return {
         id: `telemetry-seed-${index}-${Date.now()}`,
         text: next.text,
         isToken: next.isToken,
+        isDelta: next.isDelta,
       }
     })
     setLines(seed)
 
     const tick = () => {
-      const next = buildTelemetryRailLine(tokens, mode)
+      const next = buildTelemetryRailLine(tokens, deltaTokens, mode)
       setLines(prev => {
         const appended = [
           ...prev,
@@ -3309,6 +3441,7 @@ function IdleTelemetryMatrix({ mode, tokens }: { mode: 'off' | 'idle' | 'active'
             id: `telemetry-${Date.now()}-${Math.random()}`,
             text: next.text,
             isToken: next.isToken,
+            isDelta: next.isDelta,
           },
         ]
         return appended.slice(-TELEMETRY_RAIL_MAX_LINES)
@@ -3318,7 +3451,7 @@ function IdleTelemetryMatrix({ mode, tokens }: { mode: 'off' | 'idle' | 'active'
     const intervalMs = mode === 'active' ? 170 : 280
     const interval = window.setInterval(tick, intervalMs)
     return () => window.clearInterval(interval)
-  }, [mode, tokens])
+  }, [mode, tokens, deltaTokens])
 
   if (mode === 'off' || lines.length === 0) return null
 
@@ -3328,7 +3461,7 @@ function IdleTelemetryMatrix({ mode, tokens }: { mode: 'off' | 'idle' | 'active'
         {lines.map((line, index) => (
           <div
             key={line.id}
-            className={`idle-telemetry-line ${line.isToken ? 'is-token' : ''}`}
+            className={`idle-telemetry-line ${line.isToken ? 'is-token' : ''} ${line.isDelta ? 'is-delta' : ''}`}
             style={{ opacity: Math.max(0.16, (index + 1) / lines.length) }}
           >
             {line.text}
@@ -3342,6 +3475,7 @@ function IdleTelemetryMatrix({ mode, tokens }: { mode: 'off' | 'idle' | 'active'
 
 interface LogEntryBlockProps {
   entry: LogEntry
+  rowIndex: number
   formatTimestamp: (ts: number) => string
   availableChatModels?: string[]
   onRerunWithModel?: (entry: LogEntry, modelName: string) => void
@@ -3350,6 +3484,7 @@ interface LogEntryBlockProps {
 
 function LogEntryBlock({
   entry,
+  rowIndex,
   formatTimestamp,
   availableChatModels = [],
   onRerunWithModel,
@@ -3392,11 +3527,14 @@ function LogEntryBlock({
   const streamSignal = Number.isFinite(streamSignalRaw) ? Math.max(0, Math.min(1, streamSignalRaw)) : 0
   const isAiStreaming = entry.type === 'ai' && entry.status === 'running'
   const isCommandStatus = metadataRecord?.kind === COMMAND_STATUS_METADATA_KIND
+  const contentLength = entry.content?.length ?? 0
+  const lineCount = entry.content ? entry.content.split('\n').length : 1
+  const isLongFormContent = lineCount >= 10 || contentLength >= 680
   const entryLabel = isCommandStatus ? 'COMMAND' : typeLabels[entry.type]
   const entryTextColor = isCommandStatus ? 'text-amber-400' : textColors[entry.type]
   const contentClassName = isCommandStatus
-    ? 'text-amber-300 whitespace-pre-wrap font-mono text-xs leading-relaxed'
-    : `${entryTextColor} whitespace-pre-wrap font-mono text-sm ${isAiStreaming ? 'ai-streaming-text' : ''}`
+    ? 'log-entry-body text-amber-300 whitespace-pre-wrap font-mono text-xs leading-relaxed'
+    : `log-entry-body ${isLongFormContent ? 'log-entry-body-long' : ''} ${entryTextColor} whitespace-pre-wrap font-mono text-sm ${isAiStreaming ? 'ai-streaming-text' : ''}`
   const contentStyle: CSSProperties | undefined = isAiStreaming
     ? ({ '--stream-strength': String(Math.max(0.15, streamSignal || 0.18)) } as CSSProperties)
     : undefined
@@ -3423,9 +3561,108 @@ function LogEntryBlock({
     && !isCommandStatus
     && !!onRerunWithModel
     && rerunModelOptions.length > 0
+  const supportsMessageActions = entry.type === 'ai'
+  const hasCopyableText = supportsMessageActions && Boolean(entry.content?.trim())
+  const showMessageActions = supportsMessageActions && (Boolean(modelName) || showRerunControls || hasCopyableText)
+  const [isActionMenuOpen, setIsActionMenuOpen] = useState(false)
+  const actionMenuRef = useRef<HTMLDivElement | null>(null)
+  const markdownContent = useMemo(() => {
+    if (!hasCopyableText) return ''
+    return buildMessageMarkdown(entry, formatTimestamp(entry.timestamp), modelName || undefined)
+  }, [entry, formatTimestamp, hasCopyableText, modelName])
+
+  useEffect(() => {
+    setIsActionMenuOpen(false)
+  }, [entry.id])
+
+  useEffect(() => {
+    if (!isActionMenuOpen) return
+    const onPointerDown = (event: MouseEvent) => {
+      if (!actionMenuRef.current?.contains(event.target as Node)) {
+        setIsActionMenuOpen(false)
+      }
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsActionMenuOpen(false)
+      }
+    }
+    window.addEventListener('mousedown', onPointerDown)
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('mousedown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [isActionMenuOpen])
+
+  const handleCopyMessage = useCallback(async () => {
+    if (!hasCopyableText || !entry.content) return
+    try {
+      await navigator.clipboard.writeText(entry.content)
+      showSuccessToast('Message copied to clipboard.', 'Clipboard', 1200)
+      setIsActionMenuOpen(false)
+    } catch {
+      showErrorToast('Could not copy this message.', 'Clipboard')
+    }
+  }, [entry.content, hasCopyableText])
+
+  const handleCopyMarkdown = useCallback(async () => {
+    if (!markdownContent) return
+    try {
+      await navigator.clipboard.writeText(markdownContent)
+      showSuccessToast('Markdown copied.', 'Clipboard', 1200)
+      setIsActionMenuOpen(false)
+    } catch {
+      showErrorToast('Could not copy markdown.', 'Clipboard')
+    }
+  }, [markdownContent])
+
+  const saveSnippet = useCallback((kind: 'note' | 'pin') => {
+    if (!entry.content?.trim()) return
+    const snippet: StoredMessageSnippet = {
+      id: `${entry.id}-${kind}-${Date.now()}`,
+      entryId: entry.id,
+      createdAt: Date.now(),
+      model: modelName || undefined,
+      kind,
+      text: entry.content,
+      markdown: markdownContent || entry.content,
+    }
+    appendSnippetToStorage(kind === 'note' ? TERMINAL_SNIPPETS_KEY : TERMINAL_PINS_KEY, snippet)
+    window.dispatchEvent(new CustomEvent(kind === 'note' ? 'loom:snippet-saved' : 'loom:snippet-pinned', {
+      detail: { snippet },
+    }))
+    showSuccessToast(kind === 'note' ? 'Saved to Notes.' : 'Pinned message.', kind === 'note' ? 'Notes' : 'Pinned', 1300)
+    setIsActionMenuOpen(false)
+  }, [entry.content, entry.id, markdownContent, modelName])
+
+  const handleSendToCircuit = useCallback(() => {
+    const content = entry.content?.trim()
+    if (!content) return
+    window.dispatchEvent(new CustomEvent(CIRCUIT_IMPORT_EVENT, {
+      detail: {
+        open: true,
+        source: 'terminal-message',
+        content,
+        markdown: markdownContent || content,
+        model: modelName || undefined,
+        timestamp: entry.timestamp,
+      },
+    }))
+    showSuccessToast('Sent to Circuit.', 'Circuit', 1300)
+    setIsActionMenuOpen(false)
+  }, [entry.content, entry.timestamp, markdownContent, modelName])
+
+  const handleExportMarkdown = useCallback(() => {
+    if (!markdownContent) return
+    const stamp = new Date(entry.timestamp).toISOString().replace(/[:.]/g, '-')
+    downloadTextFile(`loom-message-${stamp}.md`, markdownContent)
+    showInfoToast('Exported markdown.', 'Export', 1200)
+    setIsActionMenuOpen(false)
+  }, [entry.timestamp, markdownContent])
 
   return (
-    <div className={`border-l-2 ${typeStyles[entry.type]} pl-4 py-2`}>
+    <div className={`log-rhythm-row ${rowIndex % 2 === 0 ? 'log-rhythm-even' : 'log-rhythm-odd'} ${showMessageActions ? 'has-message-actions' : ''} ${isActionMenuOpen ? 'is-actions-open' : ''} border-l-2 ${typeStyles[entry.type]} pl-4 py-2`}>
       {/* Header */}
       <div className="flex items-center gap-3 text-xs text-terminal-muted mb-1">
         <span className="text-terminal-gray">[{formatTimestamp(entry.timestamp)}]</span>
@@ -3444,18 +3681,72 @@ function LogEntryBlock({
         {entry.status === 'error' && (
           <span className="led led-error"></span>
         )}
-
-        {/* Model Badge */}
-        {modelName && (
-          <span
-            className="ml-auto text-[10px] font-mono opacity-50 flex items-center gap-1 bg-phosphor/10 px-1 rounded hover:opacity-100 transition-opacity"
-            title={`Generated by ${modelName}`}
-          >
-            <span>⚡</span>
-            {modelName.replace(':latest', '')}
-          </span>
-        )}
       </div>
+      {showMessageActions && (
+        <div ref={actionMenuRef} className="message-action-anchor" aria-label="Message actions">
+          <button
+            type="button"
+            className="message-action-trigger"
+            onClick={() => setIsActionMenuOpen(prev => !prev)}
+            aria-expanded={isActionMenuOpen}
+            aria-haspopup="menu"
+            title="Message actions"
+          >
+            ...
+          </button>
+          {isActionMenuOpen && (
+            <aside className="message-action-menu" role="menu">
+              <div className="message-action-title-row">
+                <span className="message-action-title">Actions</span>
+                {modelName && (
+                  <span className="message-action-model" title={`Generated by ${modelName}`}>
+                    {modelName.replace(':latest', '')}
+                  </span>
+                )}
+              </div>
+              {hasCopyableText && (
+                <div className="message-action-grid">
+                  <button type="button" className="message-action-btn" onClick={handleCopyMessage}>Copy</button>
+                  <button type="button" className="message-action-btn" onClick={handleCopyMarkdown}>Copy MD</button>
+                  <button type="button" className="message-action-btn" onClick={() => saveSnippet('note')}>Save Note</button>
+                  <button type="button" className="message-action-btn" onClick={handleSendToCircuit}>To Circuit</button>
+                  <button type="button" className="message-action-btn" onClick={() => saveSnippet('pin')}>Pin</button>
+                  <button type="button" className="message-action-btn" onClick={handleExportMarkdown}>Export</button>
+                </div>
+              )}
+              {showRerunControls && (
+                <div className="message-action-rerun">
+                  <label className="message-action-label" htmlFor={`rerun-model-${entry.id}`}>Re-run with</label>
+                  <select
+                    id={`rerun-model-${entry.id}`}
+                    value={rerunModel}
+                    onChange={(event) => setRerunModel(event.target.value)}
+                    className="message-action-select"
+                    aria-label="Select model to compare this response"
+                  >
+                    {rerunModelOptions.map(option => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!rerunModel) return
+                      onRerunWithModel?.(entry, rerunModel)
+                      setIsActionMenuOpen(false)
+                    }}
+                    className="message-action-btn message-action-btn-primary"
+                  >
+                    Re-run
+                  </button>
+                </div>
+              )}
+            </aside>
+          )}
+        </div>
+      )}
 
       {/* Content */}
       <div className={contentClassName} style={contentStyle}>
@@ -3511,30 +3802,6 @@ function LogEntryBlock({
           entry.content || (entry.status === 'running' ? '...' : '')
         )}
       </div>
-      {showRerunControls && (
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <span className="text-[10px] text-terminal-muted uppercase tracking-widest">Re-run with</span>
-          <select
-            value={rerunModel}
-            onChange={(event) => setRerunModel(event.target.value)}
-            className="bg-void border border-terminal-border px-2 py-1 text-[10px] text-phosphor focus:outline-none focus:border-phosphor"
-            aria-label="Select model to compare this response"
-          >
-            {rerunModelOptions.map(option => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            onClick={() => rerunModel && onRerunWithModel?.(entry, rerunModel)}
-            className="text-[10px] px-2 py-1 border border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor"
-          >
-            Re-run
-          </button>
-        </div>
-      )}
     </div>
   )
 }

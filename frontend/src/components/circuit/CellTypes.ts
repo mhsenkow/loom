@@ -117,7 +117,7 @@ export const CELL_TYPES: CellTypeConfig[] = [
     {
         type: 'terminal_history',
         label: 'History',
-        icon: 'clock', // phosphor icon name maybe?
+        icon: '🕘',
         description: 'Access terminal history',
         category: 'Data'
     },
@@ -134,8 +134,8 @@ export const CELL_TYPES: CellTypeConfig[] = [
     // Output
     {
         type: 'log_entry',
-        label: 'Log / Output',
-        icon: 'fax',
+        label: 'Output',
+        icon: '📤',
         description: 'Display output or log entry',
         category: 'Output'
     }
