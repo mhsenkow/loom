@@ -1,5 +1,6 @@
 import type { LogEntry } from '../types/module'
 import { buildConversationContext, buildEnhancedPrompt } from './conversationContext'
+import type { ConversationProfile } from './conversationProfile'
 
 function makeEntry(overrides: Partial<LogEntry>): LogEntry {
   return {
@@ -30,9 +31,10 @@ describe('buildConversationContext', () => {
       { contextMode: 'key' },
     )
 
-    expect(result).toContain('User: Question?')
-    expect(result).toContain(`Assistant: ${'a'.repeat(120)}...`)
-    expect(result).not.toContain(`Assistant: ${assistantText}`)
+    expect(result).toContain('[User Message]')
+    expect(result).toContain('Question?')
+    expect(result).toContain(`[Assistant Reply]\n${'a'.repeat(120)}...`)
+    expect(result).not.toContain(`[Assistant Reply]\n${assistantText}`)
   })
 
   it('includes image entries and excludes system entries by default', () => {
@@ -79,15 +81,35 @@ describe('buildConversationContext', () => {
 
 describe('buildEnhancedPrompt', () => {
   it('adds conversation block when available', () => {
-    const result = buildEnhancedPrompt('What now?', 'User: Hi\n\nAssistant: Hello')
-    expect(result).toContain('Previous conversation:')
-    expect(result).toContain('User: What now?')
+    const result = buildEnhancedPrompt('What now?', '[User Message]\nHi\n\n[Assistant Reply]\nHello')
+    expect(result).toContain('Conversation Context (oldest to newest):')
+    expect(result).toContain('Latest User Message:')
+    expect(result).toContain('What now?')
+    expect(result).toContain('Assistant Reply:')
   })
 
   it('prepends circuit context when provided', () => {
-    const result = buildEnhancedPrompt('Ship it', 'User: test', '[Circuit Context]')
+    const result = buildEnhancedPrompt('Ship it', '[User Message]\ntest', '[Circuit Context]')
     expect(result.startsWith('[Circuit Context]')).toBe(true)
     expect(result).toContain('---')
-    expect(result).toContain('Previous conversation:')
+    expect(result).toContain('Conversation Context (oldest to newest):')
+  })
+
+  it('includes goals and memory profile when present', () => {
+    const profile: ConversationProfile = {
+      goalsEnabled: true,
+      memoryEnabled: true,
+      userGoals: ['Ship quickly'],
+      assistantGoals: ['Be concise'],
+      memoryNotes: ['Project codename is Atlas'],
+    }
+    const result = buildEnhancedPrompt('What should we do next?', null, null, profile)
+    expect(result).toContain('Conversation Profile (apply only when relevant):')
+    expect(result).toContain('User Goals:')
+    expect(result).toContain('- Ship quickly')
+    expect(result).toContain('Assistant Goals:')
+    expect(result).toContain('- Be concise')
+    expect(result).toContain('Long-Term Memory Notes:')
+    expect(result).toContain('- Project codename is Atlas')
   })
 })

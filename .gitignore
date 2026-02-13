@@ -48,6 +48,7 @@ backend/data/loom.db
 backend/data/images/
 backend/data/music/
 backend/data/tts/
+backend/data/qdc_packages/
 *.sqlite3
 
 # Source maps (optional - uncomment to include)

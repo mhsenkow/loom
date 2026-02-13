@@ -146,6 +146,13 @@ class OrchestratorService:
         if question_matches:
             return question_matches[-1].strip()
 
+        latest_matches = re.findall(
+            r"(?is)Latest User Message:\s*(.+?)(?:\n\s*Assistant Reply:|\Z)",
+            user_message,
+        )
+        if latest_matches:
+            return latest_matches[-1].strip()
+
         return user_message.strip()
 
     def _infer_prompt_profile(self, user_message: str) -> Dict[str, Any]:

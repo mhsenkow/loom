@@ -1126,7 +1126,7 @@ Answer:"""
                 system_prompt = f"{system_prompt}\n\n{conversation_profile_block}"
 
         # Stream primary response (with anti-loop sanitization)
-        parsed_provider, parsed_model_name = provider_manager.resolve_model_id(str(model))
+        parsed_provider, parsed_model_name = await provider_manager.resolve_model_target(str(model))
         task_label = str(intelligence.get("task") or "general")
         use_mistral_agent = False
         raw_stream = ""

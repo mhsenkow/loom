@@ -166,6 +166,42 @@
       );
   }
 
+  .crt-bloom {
+    pointer-events: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 9995;
+    mix-blend-mode: screen;
+    opacity: var(--crt-bloom-opacity, 0.25);
+    background:
+      radial-gradient(
+        ellipse 88% 72% at 50% 46%,
+        color-mix(in srgb, var(--theme-phosphor) 28%, transparent) 0%,
+        transparent 72%
+      );
+  }
+
+  .crt-noise {
+    pointer-events: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 9996;
+    opacity: calc(var(--crt-noise-opacity, 0.22) * 0.9);
+    mix-blend-mode: soft-light;
+    background-image:
+      radial-gradient(rgba(255 255 255 / 0.11) 0.7px, transparent 0.9px),
+      radial-gradient(rgba(0 0 0 / 0.19) 0.6px, transparent 0.8px);
+    background-size: 3px 3px, 4px 4px;
+    background-position: 0 0, 1px 1px;
+    animation: crtNoiseShift 0.18s steps(2, end) infinite;
+  }
+
   .crt-overlay {
     pointer-events: none;
     position: fixed;
@@ -184,14 +220,14 @@
   }
 
   /* Theme-specific scanline animation */
-  [data-theme="phosphor"] .crt-overlay { animation: scanline-pulse 3s ease-in-out infinite; }
+  [data-theme="phosphor"] .crt-overlay { animation: scanline-pulse calc(3s / var(--crt-scan-speed, 1)) ease-in-out infinite; }
   [data-theme="ruby"] .crt-overlay {
     background-size: 100% 2px;
-    animation: scanline-roll 8s linear infinite;
+    animation: scanline-roll calc(8s / var(--crt-scan-speed, 1)) linear infinite;
   }
   [data-theme="sapphire"] .crt-overlay { animation: none; }
-  [data-theme="diamond"] .crt-overlay { animation: scanline-breathe 4s ease-in-out infinite; }
-  [data-theme="ebony"] .crt-overlay { animation: scanline-pulse 3.5s ease-in-out infinite; }
+  [data-theme="diamond"] .crt-overlay { animation: scanline-breathe calc(4s / var(--crt-scan-speed, 1)) ease-in-out infinite; }
+  [data-theme="ebony"] .crt-overlay { animation: scanline-pulse calc(3.5s / var(--crt-scan-speed, 1)) ease-in-out infinite; }
 
   /* Ruby: chamfered (cut-off) corners, Soviet cabinet feel */
   [data-theme="ruby"] .loom-app {
@@ -223,6 +259,10 @@
 
   .crt-flicker {
     animation: crtFlicker 0.1s ease-in-out;
+  }
+
+  .crt-jitter {
+    animation: crtMicroJitter 2.6s steps(1, end) infinite;
   }
 
   .crt-burst .crt-glitch {
@@ -265,6 +305,32 @@
     }
   }
 
+  @keyframes crtNoiseShift {
+    0% { transform: translate(0, 0); }
+    25% { transform: translate(-1px, 0.5px); }
+    50% { transform: translate(1px, -0.5px); }
+    75% { transform: translate(0.5px, 1px); }
+    100% { transform: translate(0, 0); }
+  }
+
+  @keyframes crtMicroJitter {
+    0%, 94%, 100% {
+      transform: translate(0, 0);
+    }
+    95% {
+      transform: translate(calc(1px * var(--crt-jitter-amplitude, 0.2)), 0);
+    }
+    96% {
+      transform: translate(calc(-1.2px * var(--crt-jitter-amplitude, 0.2)), calc(0.4px * var(--crt-jitter-amplitude, 0.2)));
+    }
+    97% {
+      transform: translate(calc(0.8px * var(--crt-jitter-amplitude, 0.2)), calc(-0.6px * var(--crt-jitter-amplitude, 0.2)));
+    }
+    98% {
+      transform: translate(0, 0);
+    }
+  }
+
   @keyframes crtBurstJitter {
     0% {
       transform: translateX(0);
@@ -301,9 +367,12 @@
 
   @media (prefers-reduced-motion: reduce) {
     .crt-glitch,
+    .crt-bloom,
+    .crt-noise,
     .crt-overlay,
     .crt-vignette,
     .crt-flicker,
+    .crt-jitter,
     .ai-streaming-text,
     .idle-telemetry-column,
     .crt-burst .crt-glitch,
@@ -691,12 +760,36 @@
       0 0 18px rgba(110, 255, 142, 0.2);
   }
 
+  .idle-telemetry-line.is-transfer {
+    color: rgba(255, 228, 132, 0.92);
+    text-shadow:
+      0 0 10px rgba(255, 208, 86, 0.54),
+      0 0 18px rgba(255, 178, 64, 0.24);
+    animation: telemetry-transfer-pulse 0.9s ease-in-out infinite alternate;
+  }
+
   .idle-telemetry-matrix[data-mode="active"] .idle-telemetry-line {
     color: rgba(86, 255, 70, 0.88);
     text-shadow:
       0 0 11px rgba(51, 255, 0, 0.44),
       0 0 20px rgba(51, 255, 0, 0.18);
     filter: blur(0.06px);
+  }
+
+  .idle-telemetry-matrix[data-mode="active"] .idle-telemetry-line.is-transfer {
+    color: rgba(255, 236, 162, 0.95);
+    text-shadow:
+      0 0 12px rgba(255, 208, 86, 0.62),
+      0 0 22px rgba(255, 186, 92, 0.32);
+  }
+
+  @keyframes telemetry-transfer-pulse {
+    from {
+      filter: blur(0.05px) brightness(0.95);
+    }
+    to {
+      filter: blur(0.16px) brightness(1.08);
+    }
   }
 
   .idle-telemetry-matrix-mask {

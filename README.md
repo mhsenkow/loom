@@ -231,6 +231,8 @@ Optional environment variables for safer/localized deployments:
 - `LOOM_GENERATED_MEDIA_RETENTION_DAYS` (backend): remove generated images/music older than N days on startup (default `14`).
 - `LOOM_QDC_MODE` (backend): QDC execution mode (currently `mock`).
 - `LOOM_QDC_MOCK_STEP_S` (backend): QDC mock progress pacing in seconds per step (default `0.35`).
+- `LOOM_QDC_PACKAGE_DIR` (backend): optional output directory for generated QDC package `.zip` files.
+- `LOOM_QDC_MAX_PACKAGE_FILES` (backend): maximum files allowed per generated QDC package (default `12000`).
 - `VITE_API_BASE_URL` (frontend): backend API base URL for the web app (default `http://localhost:8000`).
 
 ## 🖥️ Running as Electron Desktop App
@@ -266,11 +268,25 @@ Once LOOM is running, you can use these commands in the terminal:
 | `/saveas <name>` | Save current session to a named slot |
 | `/load <name>` | Load a saved session (replaces current) |
 | `/sessions` | List saved sessions |
+| `/goals` | Show active user and assistant goals |
+| `/goal user ...` | Add/update user goals |
+| `/goal assistant ...` | Add/update assistant goals |
+| `/memory` | Show long-term memory notes |
+| `/remember [tier] <fact> [@0-1]` | Add memory with optional tier/confidence |
+| `/forget <index>` | Remove one memory note by index |
+| `/mission ...` | Manage session objective / next / blocker |
+| `/improve ...` | Manage maintenance queue (`list/add/done/clear`) |
+| `/eval` | Show agent quality snapshot from live telemetry |
 | `/image` | Upload and analyze an image with vision models |
 | `/song <style>` | Open quick music generation flow |
 | `/qdc status` | Show QDC connector and remote lane status |
 | `/qdc jobs` | List recent QDC jobs |
 | `/qdc run <prompt>` | Start async QDC remote job |
+| `/qdc package <path>` | Build a QDC-ready `.zip` package from file/folder |
+| `/qdc package-model <path>` | Build a QDC `.zip` for AI Model upload type |
+| `/qdc ship <path> :: <prompt>` | Package + upload + run in one command |
+| `/qdc ship-model <path> :: <prompt>` | Package model + upload + run |
+| `/qdc relay <prompt>` | Continue chat using latest QDC cloud output as context |
 
 **Tip:** You can also type naturally. Non-command input goes to chat unless it is detected as an action request (image/music/speech/QDC), in which case LOOM asks for `yes`, `edit: ...`, or `no`.
 

@@ -2,7 +2,7 @@
 
 **Feature:** Enable "looking at a folder" for focused code project conversations  
 **Goal:** Allow users to have AI conversations about improving code projects with full context  
-**Date:** January 27, 2026
+**Date:** January 27, 2026 (updated February 13, 2026)
 
 ---
 
@@ -170,33 +170,33 @@ class DataProcessor:
 
 ## Technical Implementation Plan
 
-### Phase 1: Core Infrastructure (Week 1)
+### Phase 1: Core Infrastructure (Week 1) - Implemented
 
 **Backend:**
-1. **New Router:** `app/routers/code_context.py`
+1. **New Router:** `app/routers/code_context.py` ✅
    - `POST /api/code-context/index-folder` - Index folder
    - `GET /api/code-context/status` - Get indexing status
    - `DELETE /api/code-context/clear` - Clear indexed context
    - `GET /api/code-context/files` - List indexed files
 
-2. **Enhanced DocumentIndexer:**
+2. **Enhanced DocumentIndexer:** 🚧
    - Add code-specific chunking (function/class boundaries)
    - Support `.gitignore` patterns
    - File type detection for code files
 
-3. **Chat Integration:**
+3. **Chat Integration:** ✅
    - Modify `chat()` handler to check for active code context
    - Auto-inject code context when available
    - Add `use_code_context` flag to chat data
 
 **Frontend:**
-1. **New Component:** `CodeContextPanel.tsx`
+1. **New Component:** `CodeContextPanel.tsx` ✅
    - Folder picker (native file dialog)
    - Indexing progress indicator
    - File list with counts
    - Toggle for enabling/disabling
 
-2. **TerminalFeed Integration:**
+2. **TerminalFeed Integration:** ✅
    - Add panel state management
    - Pass `use_code_context` flag to chat handler
    - Show indicator when context is active
@@ -367,17 +367,17 @@ const sendChat = (prompt: string, model: string) => {
 ## Next Steps
 
 1. **Approve this strategy** ✅
-2. **Create implementation tickets:**
-   - [ ] Backend: Code context router
+2. **Implementation status:**
+   - [x] Backend: Code context router
    - [ ] Backend: Enhanced document indexer for code
-   - [ ] Backend: Chat integration with code context
-   - [ ] Frontend: CodeContextPanel component
-   - [ ] Frontend: TerminalFeed integration
+   - [x] Backend: Chat integration with code context
+   - [x] Frontend: CodeContextPanel component
+   - [x] Frontend: TerminalFeed integration
    - [ ] Testing: End-to-end folder indexing flow
 
-3. **Start with Phase 1** (Core Infrastructure)
-4. **Gather user feedback** after Phase 1
-5. **Iterate based on feedback** before Phase 2
+3. **Start Phase 2 focus** (AST chunking + scale improvements)
+4. **Gather user feedback** from live code-context sessions
+5. **Add e2e regression coverage** before wider rollout
 
 ---
 
@@ -397,6 +397,6 @@ const sendChat = (prompt: string, model: string) => {
 
 ---
 
-**Status:** Ready for implementation  
+**Status:** Phase 1 shipped, Phase 2 planned  
 **Priority:** High (enables core use case)  
-**Estimated Effort:** 2-3 weeks (3 phases)
+**Estimated Effort:** 1-2 weeks remaining (Phases 2-3)

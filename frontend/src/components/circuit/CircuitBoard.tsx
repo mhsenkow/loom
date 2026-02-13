@@ -124,6 +124,23 @@ const initialCells: CellData[] = []
 const CHAT_MODEL_EXCLUDE = ['llava', 'bakllava', 'vision', 'moondream', 'flux', 'stable-diffusion', 'sdxl']
 const FAST_MODEL_HINTS = ['tiny', 'mini', '1.5b', '2b', '3b', 'q4', 'q3']
 const CRITICAL_MODEL_HINTS = ['70b', '32b', '27b', '14b', 'mixtral', 'qwen2.5']
+const UNSAVED_CHANGES_EVENT = 'loom:unsaved-changes'
+
+function normalizeCircuitName(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, '-')
+}
+
+function createCircuitSnapshot(
+  circuitName: string,
+  cells: CellData[]
+): string {
+  const normalizedName = normalizeCircuitName(circuitName)
+  const sanitizedCells = cells.map(({ status, output, error, ...rest }) => rest)
+  return JSON.stringify({
+    name: normalizedName,
+    cells: sanitizedCells,
+  })
+}
 
 function isLikelyChatModel(model: string): boolean {
   const lower = model.toLowerCase()
@@ -191,6 +208,7 @@ export function CircuitBoard() {
   const [showModelConfig, setShowModelConfig] = useState(false)
   const [circuitName, setCircuitName] = useState<string>('')
   const [showSaveSuccess, setShowSaveSuccess] = useState(false)
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [infoDialog, setInfoDialog] = useState<{ title: string; message: string } | null>(null)
   const [deleteCellDialog, setDeleteCellDialog] = useState<{ id: string; label: string } | null>(null)
   const [clearBoardDialogOpen, setClearBoardDialogOpen] = useState(false)
@@ -205,6 +223,7 @@ export function CircuitBoard() {
 
   // Model slot configuration - maps slots to actual model names
   const [modelSlots, setModelSlots] = useState<ModelSlotConfig>(() => loadModelSlots())
+  const baselineSnapshotRef = useRef<string>(createCircuitSnapshot(circuitName, cells))
 
   // Fetch available image models
   const [imageModels, setImageModels] = useState<Array<{ name: string; vram?: string }>>([])
@@ -275,6 +294,25 @@ export function CircuitBoard() {
   }, [modelSlots])
 
   useEffect(() => {
+    const currentSnapshot = createCircuitSnapshot(circuitName, cells)
+    setHasUnsavedChanges(currentSnapshot !== baselineSnapshotRef.current)
+  }, [circuitName, cells])
+
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent(UNSAVED_CHANGES_EVENT, {
+      detail: { hasUnsavedChanges },
+    }))
+  }, [hasUnsavedChanges])
+
+  useEffect(() => {
+    return () => {
+      window.dispatchEvent(new CustomEvent(UNSAVED_CHANGES_EVENT, {
+        detail: { hasUnsavedChanges: false },
+      }))
+    }
+  }, [])
+
+  useEffect(() => {
     const onImportSnippet = (event: Event) => {
       const custom = event as CustomEvent<{ content?: string }>
       const content = (custom.detail?.content || '').trim()
@@ -315,7 +353,7 @@ export function CircuitBoard() {
 
   // Save the current circuit
   const handleSaveCircuit = useCallback(() => {
-    const name = circuitName.trim().toLowerCase().replace(/\s+/g, '-')
+    const name = normalizeCircuitName(circuitName)
     if (!name) {
       setInfoDialog({
         title: 'Circuit Name Required',
@@ -333,6 +371,8 @@ export function CircuitBoard() {
     }
 
     if (saveCircuit(circuit)) {
+      baselineSnapshotRef.current = createCircuitSnapshot(name, cells)
+      setHasUnsavedChanges(false)
       setShowSaveSuccess(true)
       setTimeout(() => setShowSaveSuccess(false), 2000)
       showSuccessToast(`Saved circuit "${name}".`, 'Save Circuit')
@@ -426,6 +466,8 @@ export function CircuitBoard() {
     }))
     setCells(newCells)
     setCircuitName(name)
+    baselineSnapshotRef.current = createCircuitSnapshot(name, newCells)
+    setHasUnsavedChanges(false)
     setShowSaveSuccess(false)
     // Sync to canvas if in canvas mode
     if (viewMode === 'canvas') {
@@ -445,6 +487,8 @@ export function CircuitBoard() {
     const newCells: CellData[] = []
     setCells(newCells)
     setCircuitName('')
+    baselineSnapshotRef.current = createCircuitSnapshot('', newCells)
+    setHasUnsavedChanges(false)
     setShowSaveSuccess(false)
     // Sync to canvas if in canvas mode
     if (viewMode === 'canvas') {

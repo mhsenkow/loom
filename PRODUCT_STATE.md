@@ -1,6 +1,6 @@
 # LOOM Product State & Strategic Guidance
 
-**Last Updated:** February 12, 2026  
+**Last Updated:** February 13, 2026  
 **VP of Product:** AI Advisor
 
 ---
@@ -39,6 +39,10 @@
 - Conversational action confirmation (`yes` / `edit:` / `no`) for image/music/speech/QDC
 - QDC async job APIs + terminal event stream
 - Circuit QDC nodes (`qdc_upload`, `qdc_run`, `qdc_status`, `qdc_results`)
+- QDC package-and-ship flows (`/qdc package`, `/qdc package-model`, `/qdc ship`, `/qdc ship-model`, `/qdc relay`)
+- Goal/memory/mission + maintenance command utilities in terminal UX
+- Electron unsaved-circuit close guard + full-screen/maximize state bridge
+- Expanded CRT controls (noise, bloom, jitter, scan drift)
 
 ### 🚧 In Development
 - Enhanced RAG workflows
@@ -139,6 +143,23 @@
 
 ## Product Decisions Log
 
+### February 13, 2026: QDC Packaging + Interaction Refinements
+
+**Decision:** Extend QDC from "upload/run" into a package-first workflow while tightening UX and routing reliability.
+
+**Delivered:**
+- QDC packaging endpoints and service flow (`/api/qdc/package`, `/api/qdc/package-and-run`)
+- QDC terminal packaging commands (`/qdc package`, `/qdc ship`, model variants, relay)
+- Local-first model target resolution for cloud/local name collisions
+- Structured conversation prompt context + profile memory/goals scaffolding
+- Unsaved circuit close safeguards in Electron shell
+
+**Status:** Implemented (still mock-backed for live QDC execution internals).
+
+**See:** `CLOUD_ORCHESTRATION_AND_QDC.md`, `CHANGELOG.md`.
+
+---
+
 ### February 12, 2026: Cloud Lane and QDC Integration
 
 **Decision:** Expand optional cloud capability while preserving local-first interaction defaults.
@@ -177,7 +198,7 @@
 - Flexible enough for both quick use and deep configuration
 - Enables core use case: focused conversations about code improvements
 
-**Status:** Strategic plan complete, ready for implementation (2-3 weeks)
+**Status:** Phase 1 implemented (router + panel + chat injection). Advanced indexing optimization and e2e hardening remain.
 
 **See:** `FOLDER_CONTEXT_STRATEGY.md` for full details
 

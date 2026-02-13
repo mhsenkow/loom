@@ -5,6 +5,9 @@ declare global {
     electronAPI?: {
       minimize: () => void
       maximize: () => void
+      toggleMaximize?: () => void
+      isMaximized?: () => Promise<boolean>
+      onMaximizedChange?: (callback: (maximized: boolean) => void) => (() => void) | void
       close: () => void
     }
     electron?: {

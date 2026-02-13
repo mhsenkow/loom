@@ -1,9 +1,10 @@
 /**
  * Conversation manager: builds LLM prompt context from chat history.
- * Tracks turns (user/ai/image/system), caps length, and formats "Previous conversation" for the model.
+ * Tracks turns (user/ai/image/system), caps length, and formats structured context for the model.
  */
 
 import type { LogEntry } from '../types/module'
+import type { ConversationProfile } from './conversationProfile'
 
 export type ConversationContextMode = 'input' | 'key' | 'full'
 
@@ -23,8 +24,8 @@ export interface BuildConversationContextOptions {
 }
 
 /**
- * Build the "Previous conversation" block for the LLM prompt.
- * Returns null if no history; otherwise "User: ...\n\nAssistant: ...\n\n..."
+ * Build the conversation context block for the LLM prompt.
+ * Returns null if no history; otherwise structured role-tagged blocks.
  */
 export function buildConversationContext(
   entries: LogEntry[],
@@ -42,12 +43,12 @@ export function buildConversationContext(
 
   const segments = relevant
     .map((e) => {
-      if (e.type === 'user') return `User: ${e.content}`
+      if (e.type === 'user') return `[User Message]\n${e.content}`
       if (e.type === 'image') return `[Image Context]\n${e.imageAnalysis ?? 'Image added to conversation'}`
       if (e.type === 'system') return `[System Event]: ${e.content}`
       const text = e.content ?? ''
-      if (contextMode === 'key') return `Assistant: ${text.slice(0, KEY_MODE_TRUNCATE_CHARS)}${text.length > KEY_MODE_TRUNCATE_CHARS ? '...' : ''}`
-      return `Assistant: ${text}`
+      if (contextMode === 'key') return `[Assistant Reply]\n${text.slice(0, KEY_MODE_TRUNCATE_CHARS)}${text.length > KEY_MODE_TRUNCATE_CHARS ? '...' : ''}`
+      return `[Assistant Reply]\n${text}`
     })
     .filter(Boolean)
 
@@ -77,16 +78,57 @@ export function buildConversationContext(
 }
 
 /**
- * Build the full enhanced prompt: optional circuit context + conversation + "User: {prompt}"
+ * Build the full enhanced prompt: optional circuit context + conversation + latest user message.
  */
 export function buildEnhancedPrompt(
   prompt: string,
   conversationBlock: string | null,
-  circuitContext?: string | null
+  circuitContext?: string | null,
+  conversationProfile?: ConversationProfile | null,
 ): string {
+  const profileBlock = buildConversationProfileBlock(conversationProfile)
+  const responsePolicy = [
+    'Respond to the latest user message with one direct assistant reply.',
+    'Do not simulate multi-speaker dialogue.',
+    'Do not write lines for "User:", "Assistant:", "AI:", or named personas unless explicitly requested.',
+  ].join('\n')
+
   const withHistory = conversationBlock
-    ? `Previous conversation:\n\n${conversationBlock}\n\nUser: ${prompt}`
-    : `User: ${prompt}`
+    ? `${responsePolicy}${profileBlock ? `\n\n${profileBlock}` : ''}\n\nConversation Context (oldest to newest):\n\n${conversationBlock}\n\nLatest User Message:\n${prompt}\n\nAssistant Reply:`
+    : `${responsePolicy}${profileBlock ? `\n\n${profileBlock}` : ''}\n\nLatest User Message:\n${prompt}\n\nAssistant Reply:`
   if (circuitContext?.trim()) return `${circuitContext}\n\n---\n\n${withHistory}`
   return withHistory
+}
+
+function buildConversationProfileBlock(profile?: ConversationProfile | null): string | null {
+  if (!profile) return null
+
+  const sections: string[] = []
+
+  if (profile.goalsEnabled) {
+    const goalLines: string[] = []
+    if (profile.userGoals.length > 0) {
+      goalLines.push('User Goals:')
+      goalLines.push(...profile.userGoals.map(goal => `- ${goal}`))
+    }
+    if (profile.assistantGoals.length > 0) {
+      goalLines.push('Assistant Goals:')
+      goalLines.push(...profile.assistantGoals.map(goal => `- ${goal}`))
+    }
+    if (goalLines.length > 0) {
+      sections.push(`Goals:\n${goalLines.join('\n')}`)
+    }
+  }
+
+  if (profile.memoryEnabled && profile.memoryNotes.length > 0) {
+    sections.push(`Long-Term Memory Notes:\n${profile.memoryNotes.map(note => `- ${note}`).join('\n')}`)
+  }
+
+  if (sections.length === 0) return null
+
+  return [
+    'Conversation Profile (apply only when relevant):',
+    ...sections,
+    'Never invent memory or goals not listed above.',
+  ].join('\n')
 }

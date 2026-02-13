@@ -48,7 +48,7 @@ const SLASH_COMMAND_SUGGESTIONS: SlashCommandSuggestion[] = [
   { command: 'pull', description: 'Download a model' },
   { command: 'setup-models', description: 'Install baseline model stack' },
   { command: 'quick', description: 'Low-priority question on free/cheap cloud lane' },
-  { command: 'qdc', description: 'QDC remote jobs: status|jobs|run' },
+  { command: 'qdc', description: 'QDC: status|jobs|run|package|package-model|ship|ship-model|relay' },
   { command: 'suggest', description: 'Get model suggestions' },
   { command: 'image', description: 'Open image upload' },
   { command: 'imagine', description: 'Generate image' },
@@ -404,7 +404,7 @@ export function CommandInput({
   const contextModeDescription = currentModeConfig.title
 
   return (
-    <div className={`command-input-shell flex flex-wrap sm:flex-nowrap items-start gap-2 sm:gap-3 p-3 ${
+    <div className={`command-input-shell flex flex-wrap sm:flex-nowrap items-center gap-2 sm:gap-3 p-3 ${
       isInputMode ? 'border-amber-500/50' : 'border-terminal-border'
     }`}>
       {!isInputMode && onImageUpload && (
@@ -446,11 +446,11 @@ export function CommandInput({
           </div>
         )}
         {showCommandMenu && !isInputMode && filteredCommandSuggestions.length > 0 && (
-          <div ref={commandMenuRef} className="absolute left-0 right-0 top-full mt-2 bg-slate border border-terminal-border shadow-glow z-40">
+          <div ref={commandMenuRef} className="absolute left-0 right-0 bottom-full mb-2 bg-slate border border-terminal-border shadow-glow z-40">
             <div className="px-2 py-1 text-[9px] text-terminal-muted border-b border-terminal-border">
               Commands (Tab to complete)
             </div>
-            <div className="max-h-56 overflow-y-auto">
+            <div className="max-h-[min(18rem,42vh)] overflow-y-auto">
               {filteredCommandSuggestions.map((item, idx) => (
                 <button
                   key={item.command}
@@ -473,147 +473,143 @@ export function CommandInput({
         )}
       </div>
 
-      <div className="ml-auto flex w-full sm:w-auto flex-col items-end gap-1.5">
-        <div className="flex items-center justify-end gap-2 w-full sm:w-auto">
-          {/* Exec + context dropdown */}
-          <div className="command-input-controls flex shrink-0 border border-terminal-border">
-            <button
-              onClick={handleSubmit}
-              className={`command-input-run text-xs min-h-11 px-3 py-1 border-r border-terminal-border ${
-                isInputMode
-                  ? 'border-amber-500 text-amber-400 hover:bg-amber-900/20'
-                  : 'btn-terminal'
-              }`}
-              title="Submit (Shift+Enter)"
-              aria-label={isInputMode ? 'Submit input' : 'Run command'}
-            >
-              {isInputMode ? 'Next' : 'Run'}
-            </button>
+      <div className="ml-auto flex shrink-0 items-stretch gap-2">
+        {/* Exec + context dropdown */}
+        <div className="command-input-controls flex shrink-0 border border-terminal-border">
+          <button
+            onClick={handleSubmit}
+            className={`command-input-run text-xs min-h-11 px-3 py-1 border-r border-terminal-border ${
+              isInputMode
+                ? 'border-amber-500 text-amber-400 hover:bg-amber-900/20'
+                : 'btn-terminal'
+            }`}
+            title="Submit (Shift+Enter)"
+            aria-label={isInputMode ? 'Submit input' : 'Run command'}
+          >
+            {isInputMode ? 'Next' : 'Run'}
+          </button>
 
-            {/* Context mode dropdown - only when not in circuit input mode */}
-            {!isInputMode && (
-              <div className="relative" ref={menuRef}>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setShowContextMenu(v => !v)
-                  }}
-                  className="command-input-context-dot min-h-11 px-3 py-1 text-terminal-muted hover:text-phosphor border-0 border-l border-terminal-border focus:outline-none focus:text-phosphor flex items-center justify-center"
-                  title={`Context mode: ${contextModeDescription}`}
-                  aria-label={`Context mode ${currentModeConfig.label}`}
-                  onMouseEnter={() => setShowContextTooltip(true)}
-                  onMouseLeave={() => setShowContextTooltip(false)}
-                  onFocus={() => setShowContextTooltip(true)}
-                  onBlur={() => setShowContextTooltip(false)}
-                >
-                  <span
-                    className={`text-[11px] ${contextDotTone}`}
-                    aria-hidden
-                    style={runtimeActive ? { textShadow: '0 0 6px var(--theme-phosphor)' } : undefined}
-                  >
-                    ●
-                  </span>
-                </button>
-                {showContextTooltip && (
-                  <div className="absolute right-0 bottom-full mb-2 w-56 border border-terminal-border bg-void/95 backdrop-blur px-3 py-2 text-[9px] font-mono text-terminal-muted z-50 shadow-glow">
-                    <div className="text-phosphor uppercase tracking-widest mb-1">Context</div>
-                    <div className="text-phosphor/85">{currentModeConfig.label}</div>
-                    <div className="mt-1">{contextModeDescription}</div>
-                    <div className="mt-2 text-terminal-muted/80">Click the dot to change mode.</div>
-                  </div>
-                )}
-
-                {showContextMenu && (
-                  <div className="absolute right-0 bottom-full mb-1 bg-slate border border-phosphor shadow-glow py-1 min-w-[152px] z-50">
-                    {CONTEXT_MODES.map(({ mode, label, icon, title }) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        onClick={() => {
-                          setContextMode(mode)
-                          setShowContextMenu(false)
-                        }}
-                        className={`w-full text-left px-3 py-1.5 text-[10px] flex items-center gap-2 ${
-                          contextMode === mode ? 'text-phosphor bg-void' : 'text-terminal-muted hover:text-phosphor'
-                        }`}
-                        title={title}
-                      >
-                        <span>{icon}</span>
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {!isInputMode && (
-          <div className="w-full sm:w-auto flex justify-end">
-            <div
-              className="relative"
-              onMouseEnter={() => setShowMetaTooltip(true)}
-              onMouseLeave={() => setShowMetaTooltip(false)}
-            >
+          {/* Context mode dropdown - only when not in circuit input mode */}
+          {!isInputMode && (
+            <div className="relative" ref={menuRef}>
               <button
                 type="button"
-                className="command-input-runtime text-[9px] font-mono tracking-wide text-terminal-muted hover:text-phosphor border border-terminal-border px-2 py-1 flex items-center justify-center"
-                title="Runtime + keybind help"
-                aria-label="Show runtime details and keyboard hints"
-                onFocus={() => setShowMetaTooltip(true)}
-                onBlur={() => setShowMetaTooltip(false)}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setShowContextMenu(v => !v)
+                }}
+                className="command-input-context-dot command-input-secondary min-h-11 px-3 py-1 text-terminal-muted hover:text-phosphor border-0 border-l border-terminal-border focus:outline-none focus:text-phosphor flex items-center justify-center"
+                title={`Context mode: ${contextModeDescription}`}
+                aria-label={`Context mode ${currentModeConfig.label}`}
+                onMouseEnter={() => setShowContextTooltip(true)}
+                onMouseLeave={() => setShowContextTooltip(false)}
+                onFocus={() => setShowContextTooltip(true)}
+                onBlur={() => setShowContextTooltip(false)}
               >
-                <span className={runtimeActive ? 'text-phosphor' : 'text-terminal-muted'}>◉</span>
+                <span
+                  className={`text-[11px] ${contextDotTone}`}
+                  aria-hidden
+                  style={runtimeActive ? { textShadow: '0 0 6px var(--theme-phosphor)' } : undefined}
+                >
+                  ●
+                </span>
               </button>
-              {showMetaTooltip && (
-                <div className="absolute right-0 bottom-full mb-2 w-64 border border-terminal-border bg-void/95 backdrop-blur px-3 py-2 text-[9px] font-mono text-terminal-muted z-50 shadow-glow">
-                  <div className="text-phosphor uppercase tracking-widest mb-1">Runtime</div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span>Link</span>
-                    <span className={runtimeTransportConnected ? 'text-phosphor' : 'text-terminal-muted'}>
-                      {runtimeTransportConnected ? 'UP' : 'DOWN'}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span>Engine</span>
-                    <span className={runtimeEngineReady ? 'text-phosphor' : 'text-terminal-muted'}>
-                      {runtimeEngineReady ? 'READY' : 'STANDBY'}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span>Phase</span>
-                    <span className="text-phosphor/80 truncate max-w-[10rem]" title={runtimePhase}>{runtimePhase}</span>
-                  </div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span>Rate</span>
-                    <span>{runtimeCharsPerSec > 0 ? `${runtimeCharsPerSec} c/s` : '0 c/s'}</span>
-                  </div>
-                  {runtimeModelName && (
-                    <div className="flex items-center justify-between gap-2">
-                      <span>Model</span>
-                      <span className="text-phosphor/75 truncate max-w-[10rem]" title={runtimeModelName}>
-                        {runtimeModelName}
-                      </span>
-                    </div>
-                  )}
-                  {runtimeRamUsedPercent !== null && (
-                    <div className="flex items-center justify-between gap-2">
-                      <span>RAM</span>
-                      <span>{Math.round(runtimeRamUsedPercent)}%</span>
-                    </div>
-                  )}
-                  <div className="border-t border-terminal-border/70 mt-2 pt-2">
-                    <div className="text-phosphor uppercase tracking-widest mb-1">Keys</div>
-                    <div>Shift+Enter run</div>
-                    <div>Enter newline</div>
-                    <div>Tab complete command</div>
-                    <div>Cmd/Ctrl+V paste image</div>
-                  </div>
+              {showContextTooltip && (
+                <div className="absolute right-0 bottom-full mb-2 w-56 border border-terminal-border bg-void/95 backdrop-blur px-3 py-2 text-[9px] font-mono text-terminal-muted z-50 shadow-glow">
+                  <div className="text-phosphor uppercase tracking-widest mb-1">Context</div>
+                  <div className="text-phosphor/85">{currentModeConfig.label}</div>
+                  <div className="mt-1">{contextModeDescription}</div>
+                  <div className="mt-2 text-terminal-muted/80">Click the dot to change mode.</div>
+                </div>
+              )}
+
+              {showContextMenu && (
+                <div className="absolute right-0 bottom-full mb-1 bg-slate border border-phosphor shadow-glow py-1 min-w-[152px] z-50">
+                  {CONTEXT_MODES.map(({ mode, label, icon, title }) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => {
+                        setContextMode(mode)
+                        setShowContextMenu(false)
+                      }}
+                      className={`w-full text-left px-3 py-1.5 text-[10px] flex items-center gap-2 ${
+                        contextMode === mode ? 'text-phosphor bg-void' : 'text-terminal-muted hover:text-phosphor'
+                      }`}
+                      title={title}
+                    >
+                      <span>{icon}</span>
+                      {label}
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
+          )}
+        </div>
+
+        {!isInputMode && (
+          <div
+            className="relative"
+            onMouseEnter={() => setShowMetaTooltip(true)}
+            onMouseLeave={() => setShowMetaTooltip(false)}
+          >
+            <button
+              type="button"
+              className="command-input-runtime command-input-secondary text-[9px] font-mono tracking-wide text-terminal-muted hover:text-phosphor border border-terminal-border px-2 py-1 flex items-center justify-center"
+              title="Runtime + keybind help"
+              aria-label="Show runtime details and keyboard hints"
+              onFocus={() => setShowMetaTooltip(true)}
+              onBlur={() => setShowMetaTooltip(false)}
+            >
+              <span className={runtimeActive ? 'text-phosphor' : 'text-terminal-muted'}>◉</span>
+            </button>
+            {showMetaTooltip && (
+              <div className="absolute right-0 bottom-full mb-2 w-64 border border-terminal-border bg-void/95 backdrop-blur px-3 py-2 text-[9px] font-mono text-terminal-muted z-50 shadow-glow">
+                <div className="text-phosphor uppercase tracking-widest mb-1">Runtime</div>
+                <div className="flex items-center justify-between gap-2">
+                  <span>Link</span>
+                  <span className={runtimeTransportConnected ? 'text-phosphor' : 'text-terminal-muted'}>
+                    {runtimeTransportConnected ? 'UP' : 'DOWN'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span>Engine</span>
+                  <span className={runtimeEngineReady ? 'text-phosphor' : 'text-terminal-muted'}>
+                    {runtimeEngineReady ? 'READY' : 'STANDBY'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span>Phase</span>
+                  <span className="text-phosphor/80 truncate max-w-[10rem]" title={runtimePhase}>{runtimePhase}</span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span>Rate</span>
+                  <span>{runtimeCharsPerSec > 0 ? `${runtimeCharsPerSec} c/s` : '0 c/s'}</span>
+                </div>
+                {runtimeModelName && (
+                  <div className="flex items-center justify-between gap-2">
+                    <span>Model</span>
+                    <span className="text-phosphor/75 truncate max-w-[10rem]" title={runtimeModelName}>
+                      {runtimeModelName}
+                    </span>
+                  </div>
+                )}
+                {runtimeRamUsedPercent !== null && (
+                  <div className="flex items-center justify-between gap-2">
+                    <span>RAM</span>
+                    <span>{Math.round(runtimeRamUsedPercent)}%</span>
+                  </div>
+                )}
+                <div className="border-t border-terminal-border/70 mt-2 pt-2">
+                  <div className="text-phosphor uppercase tracking-widest mb-1">Keys</div>
+                  <div>Shift+Enter run</div>
+                  <div>Enter newline</div>
+                  <div>Tab complete command</div>
+                  <div>Cmd/Ctrl+V paste image</div>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

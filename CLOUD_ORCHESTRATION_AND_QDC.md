@@ -1,6 +1,6 @@
 # Cloud Orchestration and QDC Lane
 
-**Last Updated:** February 12, 2026
+**Last Updated:** February 13, 2026
 
 This document describes the current state of model orchestration, quick cloud routing, provider integration, and the QDC async execution lane.
 
@@ -90,6 +90,8 @@ Providers now expose:
   - Socket event emission callback support
 - `backend/app/routers/qdc.py`
   - `/api/qdc/status`
+  - `/api/qdc/package`
+  - `/api/qdc/package-and-run`
   - `/api/qdc/upload`
   - `/api/qdc/jobs` (create/list)
   - `/api/qdc/jobs/{id}`
@@ -107,8 +109,17 @@ Providers now expose:
 
 - `LOOM_QDC_MODE=mock` (default/current)
 - `LOOM_QDC_MOCK_STEP_S` controls simulated progress pacing.
+- `LOOM_QDC_PACKAGE_DIR` controls where generated QDC zip packages are written.
 
 The mock lane is intentional for UX integration and orchestration testing. Live Qualcomm API calls can replace internals of `qdc_service` without changing UX contracts.
+
+### Terminal shortcuts
+
+- `/qdc package <path> [:: <startup command>]` builds a QDC-ready `.zip`.
+- `/qdc package-model <path>` builds a QDC `.zip` for **AI Model** upload type.
+- `/qdc ship <path> :: <prompt>` performs package + upload + run in one command.
+- `/qdc ship-model <path> :: <prompt>` performs model-package + upload + run.
+- `/qdc relay <follow-up>` sends a normal AI turn with the latest QDC cloud output injected as context.
 
 ## Conversational Action Assist
 

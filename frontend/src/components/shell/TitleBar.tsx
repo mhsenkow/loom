@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { ModelSelector } from '../terminal/ModelSelector'
 import type { CrtIntensityPreset } from './SettingsModal'
 
@@ -9,6 +10,7 @@ interface TitleBarProps {
   onCrtToggle: () => void
   onShortcutsClick: () => void
   onSettingsClick: () => void
+  hasUnsavedChanges: boolean
 }
 
 export function TitleBar({
@@ -19,10 +21,67 @@ export function TitleBar({
   onCrtToggle,
   onShortcutsClick,
   onSettingsClick,
+  hasUnsavedChanges,
 }: TitleBarProps) {
-  const handleMinimize = () => window.electronAPI?.minimize()
-  const handleMaximize = () => window.electronAPI?.maximize()
-  const handleClose = () => window.electronAPI?.close()
+  const electronAPI = (window as unknown as {
+    electronAPI?: {
+      minimize?: () => void
+      maximize?: () => void
+      toggleMaximize?: () => void
+      isMaximized?: () => Promise<boolean>
+      onMaximizedChange?: (callback: (maximized: boolean) => void) => (() => void) | void
+      close?: () => void
+    }
+  }).electronAPI
+
+  const hasElectronWindowControls = Boolean(
+    typeof electronAPI?.minimize === 'function' &&
+    typeof electronAPI?.maximize === 'function' &&
+    typeof electronAPI?.close === 'function'
+  )
+  const [isMaximized, setIsMaximized] = useState(false)
+
+  useEffect(() => {
+    if (
+      !hasElectronWindowControls ||
+      typeof electronAPI?.isMaximized !== 'function' ||
+      typeof electronAPI?.onMaximizedChange !== 'function'
+    ) {
+      return
+    }
+
+    let mounted = true
+    electronAPI.isMaximized()
+      .then((maximized) => {
+        if (mounted) setIsMaximized(maximized)
+      })
+      .catch(() => {})
+
+    const unsubscribe = electronAPI.onMaximizedChange((maximized) => {
+      setIsMaximized(maximized)
+    })
+
+    return () => {
+      mounted = false
+      unsubscribe?.()
+    }
+  }, [electronAPI, hasElectronWindowControls])
+
+  const handleMinimize = () => electronAPI?.minimize?.()
+  const handleMaximize = () => {
+    if (electronAPI?.toggleMaximize) {
+      electronAPI.toggleMaximize()
+      return
+    }
+    electronAPI?.maximize?.()
+  }
+  const handleClose = () => {
+    if (hasUnsavedChanges) {
+      const shouldClose = window.confirm('You have unsaved circuit changes. Close anyway?')
+      if (!shouldClose) return
+    }
+    electronAPI?.close?.()
+  }
 
   return (
     <header className="h-10 bg-slate border-b border-terminal-border flex items-center justify-between select-none">
@@ -97,18 +156,30 @@ export function TitleBar({
         </button>
       </div>
 
-      {/* Window Controls */}
-      <div className="flex items-center h-full">
-        <WindowButton onClick={handleMinimize} title="Minimize">
-          <span className="w-3 h-[2px] bg-current" />
-        </WindowButton>
-        <WindowButton onClick={handleMaximize} title="Maximize">
-          <span className="w-3 h-3 border border-current" />
-        </WindowButton>
-        <WindowButton onClick={handleClose} title="Close" danger>
-          <span className="text-sm leading-none">×</span>
-        </WindowButton>
-      </div>
+      {/* Window Controls (Electron only) */}
+      {hasElectronWindowControls && (
+        <div
+          className="flex items-center h-full"
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        >
+          <WindowButton onClick={handleMinimize} title="Minimize">
+            <span className="w-3 h-[2px] bg-current" />
+          </WindowButton>
+          <WindowButton onClick={handleMaximize} title={isMaximized ? 'Restore' : 'Full Screen'}>
+            {isMaximized ? (
+              <span className="relative block w-3 h-3">
+                <span className="absolute top-0 left-0 w-2.5 h-2.5 border border-current" />
+                <span className="absolute top-1 left-1 w-2.5 h-2.5 border border-current bg-slate" />
+              </span>
+            ) : (
+              <span className="w-3 h-3 border border-current" />
+            )}
+          </WindowButton>
+          <WindowButton onClick={handleClose} title="Close" danger>
+            <span className="text-sm leading-none">×</span>
+          </WindowButton>
+        </div>
+      )}
     </header>
   )
 }

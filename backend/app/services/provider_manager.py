@@ -325,6 +325,46 @@ class ProviderManager:
     # Routing chat to the right provider
     # ------------------------------------------------------------------
 
+    def _normalize_cloud_model_alias(self, provider: str, model_name: str) -> tuple[str, str]:
+        normalized_provider = str(provider or "").strip().lower()
+        normalized_name = str(model_name or "").strip()
+        alias = normalized_name.lower()
+
+        if normalized_provider == "mistral":
+            mistral_aliases = {
+                "": "mistral-small-latest",
+                "latest": "mistral-small-latest",
+                "mistral": "mistral-small-latest",
+                "7b": "mistral-small-latest",
+                "7b-instruct": "mistral-small-latest",
+                "small": "mistral-small-latest",
+                "mistral-small": "mistral-small-latest",
+                "medium": "mistral-medium-latest",
+                "mistral-medium": "mistral-medium-latest",
+                "large": "mistral-large-latest",
+                "mistral-large": "mistral-large-latest",
+                "codestral": "codestral-latest",
+            }
+            mapped = mistral_aliases.get(alias)
+            if mapped:
+                return normalized_provider, mapped
+
+        return normalized_provider, normalized_name
+
+    async def _is_local_ollama_model(self, model_name: str) -> bool:
+        target = str(model_name or "").strip()
+        if not target:
+            return False
+        try:
+            models = await ollama_client.list_models()
+        except Exception:
+            return False
+        for entry in models:
+            candidate = entry if isinstance(entry, str) else entry.get("name", "")
+            if str(candidate or "").strip() == target:
+                return True
+        return False
+
     def _parse_model_id(self, model_id: str) -> tuple[str, str]:
         """
         Parse a model identifier into (provider, model_name).
@@ -344,7 +384,27 @@ class ProviderManager:
 
     def resolve_model_id(self, model_id: str) -> tuple[str, str]:
         """Public model parser for callers that need provider/model split metadata."""
-        return self._parse_model_id(model_id)
+        provider, model_name = self._parse_model_id(model_id)
+        return self._normalize_cloud_model_alias(provider, model_name)
+
+    async def resolve_model_target(self, model_id: str) -> tuple[str, str]:
+        """
+        Resolve a user-selected model id into an execution target.
+
+        Preference order:
+          1) Exact local Ollama model name match (handles names like "mistral:latest")
+          2) Cloud provider prefix parsing + alias normalization
+        """
+        model_text = str(model_id or "").strip()
+        if not model_text:
+            return "ollama", "llama3.1:8b"
+
+        provider, model_name = self._parse_model_id(model_text)
+
+        if provider != "ollama" and await self._is_local_ollama_model(model_text):
+            return "ollama", model_text
+
+        return self._normalize_cloud_model_alias(provider, model_name)
 
     async def chat(
         self,
@@ -352,7 +412,7 @@ class ProviderManager:
         model_id: str,
         system_prompt: Optional[str] = None,
     ) -> str:
-        provider, model_name = self._parse_model_id(model_id)
+        provider, model_name = await self.resolve_model_target(model_id)
 
         if provider == "ollama":
             return await ollama_client.chat(prompt, model=model_name, system_prompt=system_prompt)
@@ -372,7 +432,7 @@ class ProviderManager:
         model_id: str,
         system_prompt: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
-        provider, model_name = self._parse_model_id(model_id)
+        provider, model_name = await self.resolve_model_target(model_id)
 
         if provider == "ollama":
             async for chunk in ollama_client.stream_chat(prompt, model=model_name, system_prompt=system_prompt):

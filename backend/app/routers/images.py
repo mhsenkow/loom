@@ -209,25 +209,18 @@ async def list_models():
                 "vram": "varies",
             })
         
-        # For predefined models, check if they're actually cached
-        # Only include if they exist in HuggingFace cache
+        # For predefined models, include only if they are downloaded
         from app.services.local_image_gen import MODELS
-        cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
         
         for name, info in MODELS.items():
-            repo_id = info["repo"].replace("/", "--")
-            cache_path = cache_dir / f"models--{repo_id}"
-            # Check if model files exist in cache
-            if cache_path.exists():
-                # Look for model files (safetensors, bin, etc.)
-                has_model_files = any(cache_path.rglob("*.safetensors")) or any(cache_path.rglob("*.bin"))
-                if has_model_files:
-                    local_models.append({
-                        "name": name,
-                        "repo": info["repo"],
-                        "type": info["type"],
-                        "vram": info["vram"],
-                    })
+            if local_image_gen.is_model_downloaded(name):
+                local_models.append({
+                    "name": name,
+                    "repo": info["repo"],
+                    "type": info["type"],
+                    "vram": info["vram"],
+                    "path": str(local_image_gen.get_model_local_dir(name)),
+                })
     except Exception as e:
         logger.warning("failed_to_check_local_image_models error=%s", e)
     

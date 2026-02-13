@@ -29,8 +29,14 @@ function App() {
   const [crtEnabled, setCrtEnabled] = useState<boolean>(() => loadSettings().crtEnabled)
   const [crtIntensity, setCrtIntensity] = useState<CrtIntensityPreset>(() => loadSettings().crtIntensity)
   const [crtBurstsEnabled, setCrtBurstsEnabled] = useState<boolean>(() => loadSettings().crtBurstsEnabled)
+  const [crtNoiseEnabled, setCrtNoiseEnabled] = useState<boolean>(() => loadSettings().crtNoiseEnabled)
+  const [crtNoiseLevel, setCrtNoiseLevel] = useState<number>(() => loadSettings().crtNoiseLevel)
+  const [crtBloomLevel, setCrtBloomLevel] = useState<number>(() => loadSettings().crtBloomLevel)
+  const [crtJitterLevel, setCrtJitterLevel] = useState<number>(() => loadSettings().crtJitterLevel)
+  const [crtScanDrift, setCrtScanDrift] = useState<number>(() => loadSettings().crtScanDrift)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const seenLoadedModelRef = useRef<string | null>(null)
   const seenActiveModelRef = useRef<string | null>(null)
   const initializedLoadedModelRef = useRef(false)
@@ -43,6 +49,21 @@ function App() {
     setCrtEnabled(s.crtEnabled)
     setCrtIntensity(s.crtIntensity)
     setCrtBurstsEnabled(s.crtBurstsEnabled)
+    setCrtNoiseEnabled(s.crtNoiseEnabled)
+    setCrtNoiseLevel(s.crtNoiseLevel)
+    setCrtBloomLevel(s.crtBloomLevel)
+    setCrtJitterLevel(s.crtJitterLevel)
+    setCrtScanDrift(s.crtScanDrift)
+  }, [])
+
+  useEffect(() => {
+    const onUnsavedChanges = (event: Event) => {
+      const custom = event as CustomEvent<{ hasUnsavedChanges?: boolean }>
+      setHasUnsavedChanges(Boolean(custom.detail?.hasUnsavedChanges))
+    }
+
+    window.addEventListener('loom:unsaved-changes', onUnsavedChanges as EventListener)
+    return () => window.removeEventListener('loom:unsaved-changes', onUnsavedChanges as EventListener)
   }, [])
 
   useEffect(() => {
@@ -57,6 +78,21 @@ function App() {
       }
       if (typeof custom.detail.crtBurstsEnabled === 'boolean') {
         setCrtBurstsEnabled(custom.detail.crtBurstsEnabled)
+      }
+      if (typeof custom.detail.crtNoiseEnabled === 'boolean') {
+        setCrtNoiseEnabled(custom.detail.crtNoiseEnabled)
+      }
+      if (typeof custom.detail.crtNoiseLevel === 'number') {
+        setCrtNoiseLevel(custom.detail.crtNoiseLevel)
+      }
+      if (typeof custom.detail.crtBloomLevel === 'number') {
+        setCrtBloomLevel(custom.detail.crtBloomLevel)
+      }
+      if (typeof custom.detail.crtJitterLevel === 'number') {
+        setCrtJitterLevel(custom.detail.crtJitterLevel)
+      }
+      if (typeof custom.detail.crtScanDrift === 'number') {
+        setCrtScanDrift(custom.detail.crtScanDrift)
       }
       if (custom.detail.theme) {
         applyTheme(custom.detail.theme)
@@ -180,7 +216,16 @@ function App() {
   }
 
   return (
-    <CRTContainer enabled={crtEnabled} intensity={crtIntensity} burstsEnabled={crtBurstsEnabled}>
+    <CRTContainer
+      enabled={crtEnabled}
+      intensity={crtIntensity}
+      burstsEnabled={crtBurstsEnabled}
+      noiseEnabled={crtNoiseEnabled}
+      noiseLevel={crtNoiseLevel}
+      bloomLevel={crtBloomLevel}
+      jitterLevel={crtJitterLevel}
+      scanDrift={crtScanDrift}
+    >
       <div className="loom-app h-screen w-screen flex flex-col bg-void text-phosphor font-mono overflow-hidden">
         {/* Custom Title Bar */}
         <TitleBar
@@ -188,6 +233,7 @@ function App() {
           onViewModeChange={setViewMode}
           crtEnabled={crtEnabled}
           crtIntensity={crtIntensity}
+          hasUnsavedChanges={hasUnsavedChanges}
           onCrtToggle={() => {
             const nextEnabled = !crtEnabled
             setCrtEnabled(nextEnabled)

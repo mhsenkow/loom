@@ -6,6 +6,11 @@ interface CRTContainerProps {
   enabled?: boolean
   intensity?: CrtIntensityPreset
   burstsEnabled?: boolean
+  noiseEnabled?: boolean
+  noiseLevel?: number
+  bloomLevel?: number
+  jitterLevel?: number
+  scanDrift?: number
 }
 
 const INTENSITY_VARS: Record<CrtIntensityPreset, { scanline: string; vignette: string; flicker: string }> = {
@@ -20,12 +25,21 @@ export function CRTContainer({
   enabled = true,
   intensity = 'medium',
   burstsEnabled = true,
+  noiseEnabled = true,
+  noiseLevel = 22,
+  bloomLevel = 28,
+  jitterLevel = 8,
+  scanDrift = 100,
 }: CRTContainerProps) {
   const [flicker, setFlicker] = useState(true)
   const [bursting, setBursting] = useState(false)
   const [burstStrength, setBurstStrength] = useState(1)
   const burstTimerRef = useRef<number | null>(null)
   const intensityVars = INTENSITY_VARS[intensity] || INTENSITY_VARS.medium
+  const normalizedNoise = Math.min(Math.max(noiseLevel, 0), 100) / 100
+  const normalizedBloom = Math.min(Math.max(bloomLevel, 0), 100) / 100
+  const normalizedJitter = Math.min(Math.max(jitterLevel, 0), 40) / 40
+  const normalizedScanSpeed = Math.min(Math.max(scanDrift, 50), 180) / 100
 
   // Trigger flicker animation on mount
   useEffect(() => {
@@ -78,12 +92,16 @@ export function CRTContainer({
 
   return (
     <div
-      className={`relative ${flicker && enabled ? 'crt-flicker' : ''} ${bursting && burstsEnabled && enabled ? 'crt-burst' : ''}`}
+      className={`relative ${flicker && enabled ? 'crt-flicker' : ''} ${bursting && burstsEnabled && enabled ? 'crt-burst' : ''} ${enabled && normalizedJitter > 0 ? 'crt-jitter' : ''}`}
       style={{
         ['--crt-intensity' as string]: intensityVars.scanline,
         ['--crt-vignette-intensity' as string]: intensityVars.vignette,
         ['--crt-flicker-strength' as string]: intensityVars.flicker,
         ['--crt-burst-strength' as string]: String(burstStrength),
+        ['--crt-noise-opacity' as string]: String(noiseEnabled ? normalizedNoise : 0),
+        ['--crt-bloom-opacity' as string]: String(normalizedBloom),
+        ['--crt-jitter-amplitude' as string]: String(normalizedJitter),
+        ['--crt-scan-speed' as string]: String(normalizedScanSpeed),
       }}
     >
       {children}
@@ -91,6 +109,8 @@ export function CRTContainer({
       {/* CRT: scanlines + vignette (tube feel) */}
       {enabled && (
         <>
+          <div className="crt-bloom" aria-hidden="true" />
+          <div className="crt-noise" aria-hidden="true" />
           <div className="crt-glitch" aria-hidden="true" />
           <div className="crt-overlay" aria-hidden="true" />
           <div className="crt-vignette" aria-hidden="true" />

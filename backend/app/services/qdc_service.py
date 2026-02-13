@@ -8,13 +8,16 @@ It is designed so live QDC API calls can be added behind the same interface late
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
+import zipfile
 
 logger = logging.getLogger("loom.qdc")
 
@@ -92,6 +95,7 @@ class QDCService:
             # Keep a deterministic fallback until live endpoint integration is configured.
             self.mode = "mock"
         self.mock_step_s = max(0.05, float(os.getenv("LOOM_QDC_MOCK_STEP_S", "0.35")))
+        self.max_package_files = max(10, int(os.getenv("LOOM_QDC_MAX_PACKAGE_FILES", "12000")))
 
         self._artifacts: dict[str, QDCArtifact] = {}
         self._jobs: dict[str, QDCJob] = {}
@@ -134,6 +138,151 @@ class QDCService:
                     break
         return total
 
+    def _qdc_package_root(self) -> Path:
+        raw = os.getenv("LOOM_QDC_PACKAGE_DIR", "").strip()
+        if raw:
+            path = Path(raw).expanduser()
+            if not path.is_absolute():
+                backend_root = Path(__file__).resolve().parents[2]
+                path = (backend_root / path).resolve()
+            return path
+        return Path(__file__).resolve().parents[2] / "data" / "qdc_packages"
+
+    def _slugify_name(self, value: str) -> str:
+        cleaned = re.sub(r"[^a-zA-Z0-9._-]+", "-", (value or "").strip()).strip("._-")
+        return cleaned[:80] or f"package-{uuid.uuid4().hex[:6]}"
+
+    def _build_package_file_list(self, source: Path) -> list[Path]:
+        if source.is_file():
+            return [source]
+        files = [child for child in source.rglob("*") if child.is_file()]
+        if len(files) > self.max_package_files:
+            raise ValueError(
+                f"Too many files for QDC package ({len(files)} > {self.max_package_files})."
+            )
+        return files
+
+    async def create_package(
+        self,
+        path_value: str,
+        *,
+        package_name: Optional[str] = None,
+        startup_command: Optional[str] = None,
+        package_kind: str = "application",
+    ) -> dict[str, Any]:
+        source = self._resolve_path(path_value)
+        if not source.exists():
+            raise FileNotFoundError(f"Path not found: {source}")
+
+        package_root = self._qdc_package_root()
+        package_root.mkdir(parents=True, exist_ok=True)
+
+        package_id = f"qdc-package-{uuid.uuid4().hex[:10]}"
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(_now()))
+        suggested_name = package_name or source.stem or source.name or package_id
+        archive_name = f"{stamp}-{self._slugify_name(suggested_name)}.zip"
+        archive_path = package_root / archive_name
+
+        source_files = self._build_package_file_list(source)
+        normalized_kind = (package_kind or "application").strip().lower() or "application"
+        manifest: dict[str, Any] = {
+            "package_id": package_id,
+            "created_at": _now(),
+            "source_path": str(source),
+            "source_name": source.name,
+            "source_type": "file" if source.is_file() else "directory",
+            "package_kind": normalized_kind,
+            "startup_command": (startup_command or "").strip(),
+            "file_count": len(source_files),
+            "tool": "loom-qdc-packager",
+        }
+
+        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+            for file_path in source_files:
+                if file_path.resolve() == archive_path.resolve():
+                    continue
+                if source.is_file():
+                    arcname = Path(source.name)
+                else:
+                    arcname = Path(source.name) / file_path.relative_to(source)
+                archive.write(file_path, str(arcname))
+
+            archive.writestr(
+                "loom_qdc_manifest.json",
+                json.dumps(manifest, indent=2),
+            )
+
+            command = (startup_command or "").strip()
+            if command:
+                archive.writestr(
+                    "loom_qdc_run.bat",
+                    "\r\n".join(
+                        [
+                            "@echo off",
+                            "setlocal",
+                            "cd /d %~dp0",
+                            command,
+                            "endlocal",
+                            "",
+                        ]
+                    ),
+                )
+                archive.writestr(
+                    "loom_qdc_run.sh",
+                    "\n".join(
+                        [
+                            "#!/usr/bin/env bash",
+                            "set -euo pipefail",
+                            "cd \"$(dirname \"$0\")\"",
+                            command,
+                            "",
+                        ]
+                    ),
+                )
+
+        size_bytes = int(archive_path.stat().st_size)
+        return {
+            "id": package_id,
+            "name": archive_name,
+            "path": str(archive_path),
+            "size_bytes": size_bytes,
+            "file_count": len(source_files),
+            "manifest": manifest,
+            "recommended_upload_type": "AI Model" if normalized_kind == "model" else "Application",
+        }
+
+    async def package_and_run(
+        self,
+        *,
+        path_value: str,
+        prompt: str,
+        package_name: Optional[str] = None,
+        startup_command: Optional[str] = None,
+        package_kind: str = "application",
+        target: str = "auto",
+        priority: str = "normal",
+        sid: Optional[str] = None,
+    ) -> dict[str, Any]:
+        packaged = await self.create_package(
+            path_value,
+            package_name=package_name,
+            startup_command=startup_command,
+            package_kind=package_kind,
+        )
+        artifact = await self.upload_artifact(packaged["path"])
+        job = await self.create_job(
+            prompt=prompt,
+            artifact_id=artifact["id"],
+            target=target,
+            priority=priority,
+            sid=sid,
+        )
+        return {
+            "package": packaged,
+            "artifact": artifact,
+            "job": job,
+        }
+
     async def _emit_event(self, sid: Optional[str], payload: dict[str, Any]) -> None:
         if not sid or not self._event_emitter:
             return
@@ -146,6 +295,26 @@ class QDCService:
         stamped = f"[{_iso_ts(_now())}] {line}"
         job.logs.append(stamped)
         job.updated_at = _now()
+
+    def _build_mock_assistant_reply(self, job: QDCJob) -> str:
+        objective = (job.prompt or "").strip()
+        artifact = job.artifact_id or "none"
+        focus = objective.splitlines()[0][:180] if objective else "Run remote cloud workload"
+        return "\n".join(
+            [
+                f"Cloud lane complete for: {focus}",
+                "",
+                "Findings:",
+                f"- Target profile: {job.target}",
+                f"- Priority: {job.priority}",
+                f"- Artifact attached: {artifact}",
+                "",
+                "Recommended next steps:",
+                "- Ask me to refine this into an execution checklist.",
+                "- Ask me to compare local-vs-cloud tradeoffs for this task.",
+                "- Ask me to generate the exact next command/script to run.",
+            ]
+        )
 
     async def upload_artifact(self, path_value: str) -> dict[str, Any]:
         path = self._resolve_path(path_value)
@@ -259,11 +428,16 @@ class QDCService:
                     f"Target={job.target}, Priority={job.priority}, "
                     f"Artifact={job.artifact_id or 'none'}."
                 )
+                assistant_reply = self._build_mock_assistant_reply(job)
                 job.result = {
                     "summary": summary,
                     "artifact_id": job.artifact_id,
                     "target": job.target,
                     "mode": job.mode,
+                    "assistant_reply": assistant_reply,
+                    "provider": "qdc",
+                    "route": "qdc_job",
+                    "model": "qdc:micro-brain",
                 }
                 self._append_log(job, "Job completed successfully")
 

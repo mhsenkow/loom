@@ -19,6 +19,16 @@ class UploadRequest(BaseModel):
     path: str = Field(..., description="Local file/folder path to upload as QDC artifact")
 
 
+class PackageRequest(BaseModel):
+    path: str = Field(..., description="Local file/folder path to package into a QDC-ready zip")
+    package_name: Optional[str] = Field(None, description="Optional output package name")
+    startup_command: Optional[str] = Field(
+        None,
+        description="Optional startup command written into loom_qdc_run scripts",
+    )
+    package_kind: str = Field("application", description="application or model")
+
+
 class CreateJobRequest(BaseModel):
     prompt: str = Field(..., description="Remote task prompt/instructions")
     artifact_id: Optional[str] = Field(None, description="Previously uploaded artifact id")
@@ -29,6 +39,20 @@ class CreateJobRequest(BaseModel):
 
 
 class RerunRequest(BaseModel):
+    sid: Optional[str] = Field(None, description="Optional socket session id for live progress events")
+
+
+class PackageAndRunRequest(BaseModel):
+    path: str = Field(..., description="Local file/folder path to package")
+    prompt: str = Field(..., description="Remote task prompt/instructions")
+    package_name: Optional[str] = Field(None, description="Optional output package name")
+    startup_command: Optional[str] = Field(
+        None,
+        description="Optional startup command written into loom_qdc_run scripts",
+    )
+    package_kind: str = Field("application", description="application or model")
+    target: str = Field("auto", description="Target device/profile")
+    priority: str = Field("normal", description="Job priority")
     sid: Optional[str] = Field(None, description="Optional socket session id for live progress events")
 
 
@@ -61,6 +85,22 @@ async def upload_artifact(req: UploadRequest):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.post("/package")
+async def package_artifact(req: PackageRequest):
+    try:
+        package = await qdc_service.create_package(
+            req.path,
+            package_name=req.package_name,
+            startup_command=req.startup_command,
+            package_kind=req.package_kind,
+        )
+        return {"status": "packaged", "package": package}
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.post("/jobs")
 async def create_job(req: CreateJobRequest):
     try:
@@ -73,6 +113,26 @@ async def create_job(req: CreateJobRequest):
             sid=req.sid,
         )
         return {"status": "started", "job": job}
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/package-and-run")
+async def package_and_run(req: PackageAndRunRequest):
+    try:
+        payload = await qdc_service.package_and_run(
+            path_value=req.path,
+            prompt=req.prompt,
+            package_name=req.package_name,
+            startup_command=req.startup_command,
+            package_kind=req.package_kind,
+            target=req.target,
+            priority=req.priority,
+            sid=req.sid,
+        )
+        return {"status": "started", **payload}
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
