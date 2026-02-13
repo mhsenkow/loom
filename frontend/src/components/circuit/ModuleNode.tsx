@@ -37,6 +37,12 @@ export const ModuleNode = memo(({ data, selected }: NodeProps<ModuleNodeData>) =
     qdc_run: '🚀',
     qdc_status: '🛰',
     qdc_results: '📥',
+    notification: '🔔',
+    file_write: '💾',
+    shell_exec: '💻',
+    delay: '⏳',
+    human_approval: '👍',
+    cron_trigger: '⏰',
   }
 
   const headerColors: Record<ModuleType, string> = {
@@ -57,6 +63,12 @@ export const ModuleNode = memo(({ data, selected }: NodeProps<ModuleNodeData>) =
     qdc_run: 'bg-emerald-600 text-white',
     qdc_status: 'bg-sky-700 text-white',
     qdc_results: 'bg-indigo-700 text-white',
+    notification: 'bg-yellow-600 text-white',
+    file_write: 'bg-stone-600 text-white',
+    shell_exec: 'bg-red-900 text-white',
+    delay: 'bg-stone-500 text-white',
+    human_approval: 'bg-lime-600 text-white',
+    cron_trigger: 'bg-slate-600 text-white',
   }
 
   return (

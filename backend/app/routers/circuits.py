@@ -45,6 +45,21 @@ async def save_circuit(body: CircuitSave) -> dict[str, Any]:
         body.modelSlots or {"A": "", "B": "", "C": ""},
         saved_at,
     )
+    
+    # Sync scheduler jobs for cron triggers
+    try:
+        from app.services.scheduler_service import scheduler_service
+        cron_cells = [c for c in body.cells if isinstance(c, dict) and c.get("type") == "cron_trigger"]
+        if cron_cells:
+            scheduler_service.sync_circuit_jobs(body.name, cron_cells)
+        else:
+            # Also need to clear jobs if no cron cells exist anymore!
+            # sync_circuit_jobs handles this by receiving empty list -> removing all jobs for circuit prefix
+            scheduler_service.sync_circuit_jobs(body.name, [])
+    except Exception as e:
+        # Don't fail the save if scheduler sync fails, but log it
+        print(f"Failed to sync scheduler jobs: {e}")
+
     return storage.get_circuit(body.name) or {}
 
 

@@ -8,6 +8,7 @@ import { DownloadPanel } from './DownloadPanel'
 import { ImageAnalysisPanel } from './ImageAnalysisPanel'
 import { ImageGenerationPanel } from './ImageGenerationPanel'
 import { ImageModal } from './ImageModal'
+import { SystemStatusCard } from './SystemStatusCard'
 import { FloatingToolbar } from './FloatingToolbar'
 import { CodeContextPanel } from './CodeContextPanel'
 import { MusicSetupPanel } from './MusicSetupPanel'
@@ -82,7 +83,7 @@ import {
   type CodeContextIndexOptions,
 } from '../../utils/codeContextApi'
 import { DOWNLOAD_TELEMETRY_EVENT, type DownloadTelemetryDetail } from '../../utils/downloadTelemetry'
-import { showErrorToast, showInfoToast, showSuccessToast } from '../../utils/uiNotifications'
+import { showErrorToast, showInfoToast, showSuccessToast, sendDesktopNotification } from '../../utils/uiNotifications'
 
 const BACKEND_URL = API_BASE_URL
 const STORAGE_KEY = 'loom-terminal-history'
@@ -141,79 +142,79 @@ const CONVERSATION_STARTERS: Array<{
   capability: string
   prompt: string
 }> = [
-  {
-    id: 'founder-mode',
-    title: 'Build My Next Product',
-    capability: 'Strategy + execution',
-    prompt: 'Act like my technical cofounder. Ask 3 high-signal questions, then build a 30-day product plan with milestones, risks, and what to do first this week.',
-  },
-  {
-    id: 'debug-mode',
-    title: 'Debug Something Fast',
-    capability: 'Engineering triage',
-    prompt: 'Help me debug a tricky issue quickly. Start by asking for symptoms, expected behavior, and environment, then produce a ranked root-cause checklist and first 3 tests to run.',
-  },
-  {
-    id: 'repo-audit',
-    title: 'Audit This Codebase',
-    capability: 'Code quality + architecture',
-    prompt: 'Run a practical codebase audit mindset: identify likely reliability risks, maintainability problems, and missing tests. Give me a prioritized fix plan.',
-  },
-  {
-    id: 'research-brief',
-    title: 'Research Anything',
-    capability: 'Structured research',
-    prompt: 'I need a research brief on a topic. Ask me the topic and desired depth, then produce a clear brief with key findings, open questions, and an action summary.',
-  },
-  {
-    id: 'automation-flow',
-    title: 'Automate a Workflow',
-    capability: 'Systems + automation',
-    prompt: 'Help me automate a repetitive workflow end-to-end. Ask what I do manually now, then propose a robust automation design with fallback steps and monitoring.',
-  },
-  {
-    id: 'image-creative',
-    title: 'Create Visual Concepts',
-    capability: 'Image ideation',
-    prompt: 'I want to create visuals. Help me turn my idea into 5 strong image concepts with generation-ready prompts, style directions, and a recommendation for the first one to try.',
-  },
-  {
-    id: 'music-creative',
-    title: 'Compose a Track',
-    capability: 'Music ideation',
-    prompt: 'Help me create an original music track concept. Build mood, genre, tempo, lyrics hook, and a production prompt I can use right away.',
-  },
-  {
-    id: 'learning-coach',
-    title: 'Teach Me a Skill',
-    capability: 'Adaptive tutoring',
-    prompt: 'Teach me a skill efficiently. Start by checking my current level, then create a progressive learning path with exercises, checkpoints, and a mini-project.',
-  },
-  {
-    id: 'decision-support',
-    title: 'Make a Tough Decision',
-    capability: 'Decision framework',
-    prompt: 'Help me make a hard decision. Build a weighted decision matrix, highlight blind spots, and recommend a choice with confidence and tradeoffs.',
-  },
-  {
-    id: 'career-ops',
-    title: 'Career Power Move',
-    capability: 'Career strategy',
-    prompt: 'Help me plan my next career move. Ask about goals and constraints, then give me a concrete 4-week plan with networking, portfolio, and outreach actions.',
-  },
-  {
-    id: 'business-ops',
-    title: 'Grow My Business',
-    capability: 'Business operations',
-    prompt: 'Act as an operator. Build a growth plan for my business with acquisition ideas, conversion improvements, retention tactics, and weekly KPIs to track.',
-  },
-  {
-    id: 'life-planning',
-    title: 'Design My Week',
-    capability: 'Personal planning',
-    prompt: 'Help me design a focused week. Ask for priorities and constraints, then create a realistic schedule with deep work blocks, recovery time, and success criteria.',
-  },
-]
+    {
+      id: 'founder-mode',
+      title: 'Build My Next Product',
+      capability: 'Strategy + execution',
+      prompt: 'Act like my technical cofounder. Ask 3 high-signal questions, then build a 30-day product plan with milestones, risks, and what to do first this week.',
+    },
+    {
+      id: 'debug-mode',
+      title: 'Debug Something Fast',
+      capability: 'Engineering triage',
+      prompt: 'Help me debug a tricky issue quickly. Start by asking for symptoms, expected behavior, and environment, then produce a ranked root-cause checklist and first 3 tests to run.',
+    },
+    {
+      id: 'repo-audit',
+      title: 'Audit This Codebase',
+      capability: 'Code quality + architecture',
+      prompt: 'Run a practical codebase audit mindset: identify likely reliability risks, maintainability problems, and missing tests. Give me a prioritized fix plan.',
+    },
+    {
+      id: 'research-brief',
+      title: 'Research Anything',
+      capability: 'Structured research',
+      prompt: 'I need a research brief on a topic. Ask me the topic and desired depth, then produce a clear brief with key findings, open questions, and an action summary.',
+    },
+    {
+      id: 'automation-flow',
+      title: 'Automate a Workflow',
+      capability: 'Systems + automation',
+      prompt: 'Help me automate a repetitive workflow end-to-end. Ask what I do manually now, then propose a robust automation design with fallback steps and monitoring.',
+    },
+    {
+      id: 'image-creative',
+      title: 'Create Visual Concepts',
+      capability: 'Image ideation',
+      prompt: 'I want to create visuals. Help me turn my idea into 5 strong image concepts with generation-ready prompts, style directions, and a recommendation for the first one to try.',
+    },
+    {
+      id: 'music-creative',
+      title: 'Compose a Track',
+      capability: 'Music ideation',
+      prompt: 'Help me create an original music track concept. Build mood, genre, tempo, lyrics hook, and a production prompt I can use right away.',
+    },
+    {
+      id: 'learning-coach',
+      title: 'Teach Me a Skill',
+      capability: 'Adaptive tutoring',
+      prompt: 'Teach me a skill efficiently. Start by checking my current level, then create a progressive learning path with exercises, checkpoints, and a mini-project.',
+    },
+    {
+      id: 'decision-support',
+      title: 'Make a Tough Decision',
+      capability: 'Decision framework',
+      prompt: 'Help me make a hard decision. Build a weighted decision matrix, highlight blind spots, and recommend a choice with confidence and tradeoffs.',
+    },
+    {
+      id: 'career-ops',
+      title: 'Career Power Move',
+      capability: 'Career strategy',
+      prompt: 'Help me plan my next career move. Ask about goals and constraints, then give me a concrete 4-week plan with networking, portfolio, and outreach actions.',
+    },
+    {
+      id: 'business-ops',
+      title: 'Grow My Business',
+      capability: 'Business operations',
+      prompt: 'Act as an operator. Build a growth plan for my business with acquisition ideas, conversion improvements, retention tactics, and weekly KPIs to track.',
+    },
+    {
+      id: 'life-planning',
+      title: 'Design My Week',
+      capability: 'Personal planning',
+      prompt: 'Help me design a focused week. Ask for priorities and constraints, then create a realistic schedule with deep work blocks, recovery time, and success criteria.',
+    },
+  ]
 
 type AgentFeedbackKind = 'verbose' | 'vague' | 'robotic' | 'perfect'
 
@@ -689,8 +690,9 @@ export function TerminalFeed() {
     message?: string
     seed?: number
   } | null>(null)
+  const circuitNames = useMemo(() => getCircuitNames(), [panelCollapsed])
   const [pendingAssistantAction, setPendingAssistantAction] = useState<PendingAssistantAction | null>(null)
-  const [maintenanceQueue, setMaintenanceQueue] = useState<MaintenanceTask[]>(() => loadMaintenanceQueue())
+  const [_maintenanceQueue, setMaintenanceQueue] = useState<MaintenanceTask[]>(() => loadMaintenanceQueue())
   const [agentFeedbackProfile, setAgentFeedbackProfile] = useState<AgentFeedbackProfile>(loadAgentFeedbackProfile)
   const [aiRuntimeTelemetry, setAiRuntimeTelemetry] = useState({
     active: false,
@@ -1297,23 +1299,14 @@ export function TerminalFeed() {
   }, [])
 
   const emitSessionRitualBriefing = useCallback((timestamp: number) => {
-    const missionLines = [
-      sessionMission.objective ? `Objective: ${sessionMission.objective}` : 'Objective: (not set)',
-      sessionMission.nextAction ? `Next: ${sessionMission.nextAction}` : 'Next: (not set)',
-      sessionMission.blocker ? `Blocker: ${sessionMission.blocker}` : 'Blocker: none',
-    ]
-    const queueOpen = maintenanceQueue.filter(task => task.status === 'open').length
-    const memoryCount = pruneMemoryVault().length
-    addSystemEntry(
-      [
-        '[SESSION BRIEFING]',
-        ...missionLines,
-        `Open maintenance tasks: ${queueOpen}`,
-        `Dynamic memories: ${memoryCount}`,
-      ].join('\n'),
+    setEntries(prev => [...prev, {
+      id: `system-status-${timestamp}`,
+      type: 'system',
+      content: '', // Component handles display
       timestamp,
-    )
-  }, [addSystemEntry, maintenanceQueue, sessionMission.blocker, sessionMission.nextAction, sessionMission.objective])
+      metadata: { component: 'SystemStatusCard' },
+    }])
+  }, [])
 
   useEffect(() => {
     if (initialBriefingDoneRef.current) return
@@ -1716,6 +1709,13 @@ export function TerminalFeed() {
       if (statusData.status === 'success' || statusData.status === 'error') {
         const isSuccess = statusData.status === 'success'
         emitCrtBurst(isSuccess ? 'ai-done' : 'ai-error', isSuccess ? 0.95 : 1.35, isSuccess ? 140 : 200)
+        // Desktop notification when tab is backgrounded
+        if (isSuccess) {
+          const preview = (currentAIContentRef.current || '').trim().slice(0, 120)
+          sendDesktopNotification('LOOM — Response Ready', preview || 'AI response complete')
+        } else {
+          sendDesktopNotification('LOOM — Error', statusData.message || 'AI response failed')
+        }
         setAiRuntimeTelemetry({
           active: false,
           phase: isSuccess ? 'Complete' : (statusData.message || 'Error').trim(),
@@ -2231,6 +2231,7 @@ export function TerminalFeed() {
 
   const handleSlashCommand = useCallback((command: string, timestamp: number) => {
     const { cmd: normalizedCmd, args } = parseSlashCommand(command)
+
     const commandText = args.length > 0 ? `/${normalizedCmd} ${args.join(' ')}` : `/${normalizedCmd}`
     const commandStatusId = `cmd-status-${timestamp}`
     let commandPending = false
@@ -2292,6 +2293,18 @@ export function TerminalFeed() {
           },
         ]
       })
+    }
+
+    if (normalizedCmd === 'status') {
+      setEntries(prev => [...prev, {
+        id: `system-status-${timestamp}`,
+        type: 'system',
+        content: '',
+        timestamp,
+        metadata: { component: 'SystemStatusCard' },
+      }])
+      setCommandStatus('done', 'system status')
+      return
     }
 
     const markCommandPending = (detail?: string) => {
@@ -3087,6 +3100,78 @@ export function TerminalFeed() {
     sessionMission,
   ])
 
+  const handleRunCircuitFromMenu = useCallback((circuitName: string, content: string) => {
+    // Check if we can run immediately (0 or 1 input) or need interactive mode
+    // We assume the content of the message is the primary input
+    const required = getRequiredInputs(circuitName)
+
+    // If 0 inputs, run immediately
+    if (required.length === 0) {
+      // Manually add entry since addSystemEntry isn't easily accessible here if it's local
+      // But we can use setEntries which is available
+      setEntries(prev => [...prev, {
+        id: `system-${Date.now()}`,
+        type: 'system',
+        content: `Running circuit: ${circuitName}...`,
+        timestamp: Date.now(),
+      }])
+
+      runCircuit(circuitName, {}).then(output => {
+        setEntries(prev => [...prev, {
+          id: `circuit-output-${Date.now()}`,
+          type: 'ai',
+          content: output,
+          timestamp: Date.now(),
+          status: 'success',
+        }])
+      }).catch(err => {
+        setEntries(prev => [...prev, {
+          id: `error-${Date.now()}`,
+          type: 'error',
+          content: `Circuit failed: ${err.message}`,
+          timestamp: Date.now(),
+        }])
+      })
+      return
+    }
+
+    // If 1 input, use content as that input
+    if (required.length === 1) {
+      const inputName = required[0]
+      setEntries(prev => [...prev, {
+        id: `system-${Date.now()}`,
+        type: 'system',
+        content: `Running circuit: ${circuitName} with input [${inputName}]...`,
+        timestamp: Date.now(),
+      }])
+
+      runCircuit(circuitName, { [inputName]: content }).then(output => {
+        setEntries(prev => [...prev, {
+          id: `circuit-output-${Date.now()}`,
+          type: 'ai',
+          content: output,
+          timestamp: Date.now(),
+          status: 'success',
+        }])
+      }).catch(err => {
+        setEntries(prev => [...prev, {
+          id: `error-${Date.now()}`,
+          type: 'error',
+          content: `Circuit failed: ${err.message}`,
+          timestamp: Date.now(),
+        }])
+      })
+      return
+    }
+
+    // Fallback: Use the slash command system to trigger the circuit
+    handleSlashCommand(`/run ${circuitName}`, Date.now())
+
+    // Copy content to clipboard for user convenience
+    navigator.clipboard.writeText(content).catch(() => { })
+    showInfoToast(`Running ${circuitName}... (Message copied to clipboard)`, 'Circuit')
+  }, [handleSlashCommand, getRequiredInputs, runCircuit, setEntries])
+
   const handleCommand = useCallback((command: string, contextMode: 'input' | 'key' | 'full' = 'input') => {
     const timestamp = Date.now()
     setAutoFollowFeed(true)
@@ -3750,7 +3835,7 @@ export function TerminalFeed() {
   const totalRows = displayItems.length
   const visibleRows = Math.max(1, Math.ceil((feedViewportHeight || 1) / VIRTUAL_ROW_ESTIMATE_PX))
   const virtualStart = shouldVirtualize
-    ? Math.max(0, Math.floor(feedScrollTop / VIRTUAL_ROW_ESTIMATE_PX) - VIRTUAL_OVERSCAN_ROWS)
+    ? Math.floor(feedScrollTop / VIRTUAL_ROW_ESTIMATE_PX) - VIRTUAL_OVERSCAN_ROWS
     : 0
   const virtualEnd = shouldVirtualize
     ? Math.min(totalRows, virtualStart + visibleRows + (VIRTUAL_OVERSCAN_ROWS * 2))
@@ -3758,6 +3843,10 @@ export function TerminalFeed() {
   const topSpacerHeight = shouldVirtualize ? virtualStart * VIRTUAL_ROW_ESTIMATE_PX : 0
   const bottomSpacerHeight = shouldVirtualize ? Math.max(0, (totalRows - virtualEnd) * VIRTUAL_ROW_ESTIMATE_PX) : 0
   const visibleItems = shouldVirtualize ? displayItems.slice(virtualStart, virtualEnd) : displayItems
+
+  const handleImageClick = useCallback((imageUrl: string, metadata: { prompt?: string; model?: string; timestamp?: number; provider?: string; analysis?: string; }, canEdit?: boolean) => {
+    setSelectedImageModal({ imageUrl, metadata, canEdit })
+  }, [])
 
   const handleRerunWithModel = useCallback((entry: LogEntry, modelName: string) => {
     const metadata = entry.metadata && typeof entry.metadata === 'object'
@@ -3942,11 +4031,10 @@ export function TerminalFeed() {
                           key={type}
                           type="button"
                           onClick={() => toggleHistoryType(type)}
-                          className={`px-2 py-1 text-[10px] border transition-colors ${
-                            active
-                              ? 'border-phosphor bg-phosphor/15 text-phosphor'
-                              : 'border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor'
-                          }`}
+                          className={`px-2 py-1 text-[10px] border transition-colors ${active
+                            ? 'border-phosphor bg-phosphor/15 text-phosphor'
+                            : 'border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor'
+                            }`}
                         >
                           {type.toUpperCase()}
                         </button>
@@ -3964,11 +4052,10 @@ export function TerminalFeed() {
                               key={modelName}
                               type="button"
                               onClick={() => toggleHistoryModel(modelName)}
-                              className={`px-2 py-1 text-[10px] border transition-colors ${
-                                active
-                                  ? 'border-phosphor bg-phosphor/15 text-phosphor'
-                                  : 'border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor'
-                              }`}
+                              className={`px-2 py-1 text-[10px] border transition-colors ${active
+                                ? 'border-phosphor bg-phosphor/15 text-phosphor'
+                                : 'border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor'
+                                }`}
                               title={modelName}
                             >
                               {modelName.replace(':latest', '')}
@@ -4062,12 +4149,13 @@ export function TerminalFeed() {
                 entry={item.entry}
                 rowIndex={virtualStart + index}
                 formatTimestamp={formatTimestamp}
-                availableChatModels={chatModels}
+                availableChatModels={models}
                 onRerunWithModel={handleRerunWithModel}
                 onAgentFeedback={handleAgentFeedback}
-                onImageClick={(imageUrl, metadata, canEdit) => {
-                  setSelectedImageModal({ imageUrl, metadata, canEdit })
-                }}
+                onImageClick={handleImageClick}
+                onRunCommand={(cmd) => handleSlashCommand(cmd, Date.now())}
+                circuitNames={circuitNames}
+                onRunCircuit={handleRunCircuitFromMenu}
               />
             ))}
             {bottomSpacerHeight > 0 && (
@@ -4088,7 +4176,7 @@ export function TerminalFeed() {
             <CommandInput
               onSubmit={handleCommand}
               placeholder={circuitInputState
-                ? `Enter value for [${circuitInputState.requiredInputs[circuitInputState.currentInputIndex]}]...`
+                ? `[${circuitInputState.circuitName}] Enter ${circuitInputState.requiredInputs[circuitInputState.currentInputIndex]} (or /cancel)...`
                 : undefined
               }
               onImageUpload={handleImageUpload}
@@ -4764,6 +4852,9 @@ interface LogEntryBlockProps {
   onRerunWithModel?: (entry: LogEntry, modelName: string) => void
   onAgentFeedback?: (entry: LogEntry, kind: AgentFeedbackKind) => void
   onImageClick?: (imageUrl: string, metadata: { prompt?: string; model?: string; timestamp?: number; provider?: string; analysis?: string }, canEdit: boolean) => void
+  onRunCommand?: (command: string) => void
+  circuitNames?: string[]
+  onRunCircuit?: (circuit: string, content: string) => void
 }
 
 function LogEntryBlock({
@@ -4774,7 +4865,18 @@ function LogEntryBlock({
   onRerunWithModel,
   onAgentFeedback,
   onImageClick,
+  onRunCommand,
+  circuitNames = [],
+  onRunCircuit,
 }: LogEntryBlockProps) {
+  if (entry.type === 'system' && entry.metadata?.component === 'SystemStatusCard') {
+    return (
+      <div className={`log-rhythm-row ${rowIndex % 2 === 0 ? 'log-rhythm-even' : 'log-rhythm-odd'} border-l-2 border-terminal-muted pl-4 py-2`}>
+        <SystemStatusCard timestamp={entry.timestamp} onRunCommand={onRunCommand || (() => { })} />
+      </div>
+    )
+  }
+
   const typeStyles = {
     user: 'border-phosphor',
     system: 'border-terminal-muted',
@@ -4863,6 +4965,7 @@ function LogEntryBlock({
   const hasCopyableText = supportsMessageActions && Boolean(entry.content?.trim())
   const showMessageActions = supportsMessageActions && (Boolean(modelName) || showRerunControls || hasCopyableText)
   const [isActionMenuOpen, setIsActionMenuOpen] = useState(false)
+  const [showCircuitMenu, setShowCircuitMenu] = useState(false)
   const actionMenuRef = useRef<HTMLDivElement | null>(null)
   const markdownContent = useMemo(() => {
     if (!hasCopyableText) return ''
@@ -5007,9 +5110,45 @@ function LogEntryBlock({
                   <button type="button" className="message-action-btn" onClick={handleCopyMessage}>Copy</button>
                   <button type="button" className="message-action-btn" onClick={handleCopyMarkdown}>Copy MD</button>
                   <button type="button" className="message-action-btn" onClick={() => saveSnippet('note')}>Save Note</button>
-                  <button type="button" className="message-action-btn" onClick={handleSendToCircuit}>To Circuit</button>
+                  <button
+                    type="button"
+                    className={`message-action-btn ${showCircuitMenu ? 'bg-phosphor/20 text-phosphor' : ''}`}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setShowCircuitMenu(prev => !prev)
+                    }}
+                  >
+                    Run With...
+                  </button>
                   <button type="button" className="message-action-btn" onClick={() => saveSnippet('pin')}>Pin</button>
                   <button type="button" className="message-action-btn" onClick={handleExportMarkdown}>Export</button>
+                </div>
+              )}
+
+              {showCircuitMenu && circuitNames.length > 0 && (
+                <div className="bg-void border-t border-terminal-border/50 py-1 max-h-32 overflow-y-auto">
+                  <div className="px-2 py-1 text-[10px] text-terminal-muted uppercase tracking-wider">Select Circuit</div>
+                  {circuitNames.map(name => (
+                    <button
+                      key={name}
+                      type="button"
+                      className="w-full text-left px-3 py-1 text-xs text-terminal-muted hover:text-phosphor hover:bg-phosphor/10 transition-colors truncate"
+                      onClick={() => {
+                        onRunCircuit?.(name, entry.content || '')
+                        setIsActionMenuOpen(false)
+                        setShowCircuitMenu(false)
+                      }}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-1 text-xs text-terminal-muted hover:text-phosphor hover:bg-phosphor/10 transition-colors italic border-t border-terminal-border/20 mt-1 pt-1"
+                    onClick={handleSendToCircuit}
+                  >
+                    Open in Circuit Board...
+                  </button>
                 </div>
               )}
               {showRerunControls && (

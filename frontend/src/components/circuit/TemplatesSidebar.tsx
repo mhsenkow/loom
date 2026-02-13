@@ -145,6 +145,62 @@ const terminalHistory = (
   inputMode,
 })
 
+const fileWrite = (
+  label: string,
+  content: string,
+  filePath: string,
+  mode: 'overwrite' | 'append' = 'append',
+  inputMode: InputMode = 'previous'
+): Omit<CellData, 'id' | 'status'> => ({
+  type: 'file_write',
+  label,
+  content,
+  output: '',
+  fileWritePath: filePath,
+  fileWriteMode: mode,
+  inputMode,
+})
+
+const notification = (
+  label: string,
+  title: string,
+  body: string,
+  inputMode: InputMode = 'previous'
+): Omit<CellData, 'id' | 'status'> => ({
+  type: 'notification',
+  label,
+  content: '',
+  output: '',
+  notificationTitle: title,
+  notificationBody: body,
+  inputMode,
+})
+
+const shellExec = (
+  label: string,
+  command: string,
+  inputMode: InputMode = 'previous'
+): Omit<CellData, 'id' | 'status'> => ({
+  type: 'shell_exec',
+  label,
+  content: command,
+  output: '',
+  shellExecCommand: command,
+  inputMode,
+})
+
+const humanApproval = (
+  label: string,
+  prompt: string,
+  inputMode: InputMode = 'previous'
+): Omit<CellData, 'id' | 'status'> => ({
+  type: 'human_approval',
+  label,
+  content: prompt,
+  output: '',
+  inputMode,
+})
+
 export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
   // ============================================
   // IMAGE - Visual creativity
@@ -1878,6 +1934,70 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
       output('TRANSLATION'),
     ]
   },
+  {
+    id: 'automated-news',
+    name: 'Automated News Brief',
+    description: 'Cron trigger runs daily -> Fetches news -> AI summarizes -> Writes to file',
+    icon: '🗞️',
+    category: 'hybrid',
+    cells: [
+      {
+        type: 'cron_trigger',
+        label: 'DAILY AT 8AM',
+        content: '0 8 * * *',
+      },
+      webFetch('FETCH', 'https://news.ycombinator.com', 'GET'),
+      ai('SUMMARIZE', 'Summarize the top 5 stories from this Hacker News page. what are the trends?', 'A', 'previous'),
+      fileWrite('SAVE REPORT', 'Daily Briefing for {{date}}:\n\n{{input}}', 'daily-briefs/briefing-{{timestamp}}.md'),
+      notification('NOTIFY', 'News Brief Ready', 'Check your daily briefing file.'),
+    ]
+  },
+  {
+    id: 'safe-execution',
+    name: 'Safe Command Execution',
+    description: 'AI generates command -> Human Approves -> Shell Executes',
+    icon: '🛡️',
+    category: 'scripts',
+    cells: [
+      input('GOAL', 'Delete all .tmp files in the current directory recursively'),
+      ai('GENERATE', 'Write a cautious shell command to achieve the goal. Use specific flags to avoid accidents.', 'A'),
+      humanApproval('APPROVE', 'Review this command carefully. Is it safe to run?\n\nCommand: {{input}}'),
+      shellExec('EXECUTE', '{{input}}'),
+    ]
+  },
+  {
+    id: 'smart-alert',
+    name: 'Smart Alert',
+    description: 'Ask a question → AI answers → Desktop notification with the result',
+    icon: '🔔',
+    category: 'scripts',
+    cells: [
+      input('QUESTION', 'What is the current status of the Mars Perseverance rover?'),
+      ai('ANSWER', 'Answer the question concisely in 1-2 sentences. Be factual and direct.', 'A'),
+      notification('ALERT', 'LOOM — Answer Ready', '{{input}}'),
+    ]
+  },
+  {
+    id: 'weekly-creative',
+    name: 'Weekly Creative Nudge',
+    description: 'Cron (Sunday 9am) → AI writes a one-sentence creative thought → Desktop notification. Run now: /run weekly-creative in terminal. Save circuit to schedule weekly.',
+    icon: '✨',
+    category: 'hybrid',
+    cells: [
+      {
+        type: 'cron_trigger',
+        label: 'EVERY SUNDAY 9AM',
+        content: '0 9 * * 0',
+      },
+      ai(
+        'THOUGHT',
+        'Write a single surprising, vivid sentence—a micro-story or one-line thought for the week ahead. No input needed; invent something fresh and slightly odd. One sentence only.',
+        'A',
+        'none'
+      ),
+      notification('NOTIFY', 'LOOM — Weekly thought', '{{input}}'),
+    ]
+  },
 ]
 
 
@@ -1990,13 +2110,13 @@ export function TemplatesSidebar({ onSelectTemplate, onNewCircuit, currentCircui
 
   return (
     <div
-      className={`h-full bg-slate border-r border-terminal-border transition-all duration-200 flex flex-col ${isCollapsed ? 'w-10' : 'w-64'
+      className={`h-full bg-slate border-r border-terminal-border transition-all duration-200 flex flex-col ${isCollapsed ? 'w-10' : 'w-80'
         }`}
     >
       {/* Header */}
-      <div className="p-2 border-b border-terminal-border flex items-center justify-between">
+      <div className="p-3 border-b border-terminal-border flex items-center justify-between">
         {!isCollapsed && (
-          <span className="text-[10px] text-terminal-muted tracking-widest">TEMPLATES</span>
+          <span className="text-[10px] text-terminal-muted tracking-widest font-bold">TEMPLATES</span>
         )}
         <button
           onClick={onToggleCollapse}

@@ -8,7 +8,7 @@ import json
 import csv
 import logging
 from pathlib import Path
-from typing import Optional, Literal
+from typing import Optional, Literal, Any
 import base64
 import mimetypes
 
@@ -287,6 +287,44 @@ class FileLoaderService:
         if mime_type:
             return f"data:{mime_type};base64,{b64}"
         return b64
+
+    def _validate_path(self, file_path: str, must_exist: bool = False, must_be_file: bool = False) -> Path:
+        """Validate and resolve a file path within the data folder."""
+        if not self.data_folder:
+            raise ValueError("Data folder not configured")
+        
+        full_path = self.data_folder / file_path
+        
+        # Security: ensure path is within data folder
+        try:
+            full_path.resolve().relative_to(self.data_folder.resolve())
+        except ValueError:
+            raise ValueError("Access denied: path outside data folder")
+        
+        if must_exist and not full_path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
+        
+        if must_be_file and not full_path.is_file():
+            raise ValueError(f"Not a file: {file_path}")
+            
+        return full_path
+
+    def write_file(self, file_path: str, content: str, mode: str = "overwrite") -> dict[str, Any]:
+        """Write content to a file"""
+        full_path = self._validate_path(file_path)
+        
+        # Ensure parent directory exists
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        file_mode = "w" if mode == "overwrite" else "a"
+        with open(full_path, file_mode, encoding="utf-8") as f:
+            f.write(content)
+            
+        return {
+            "path": str(full_path),
+            "size": full_path.stat().st_size,
+            "status": "success"
+        }
 
 
 # Singleton instance

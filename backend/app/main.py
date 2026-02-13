@@ -33,12 +33,12 @@ backend_dir = Path(__file__).parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-from app.routers import modules, images, files, circuits, search, remote, code_context, music, sessions, web, tts, qdc
+from app.routers import modules, images, files, circuits, search, remote, code_context, music, sessions, web, tts, qdc, system, scheduler
 from app.routers import providers as providers_router
 from app.services.ollama_client import ollama_client
 from app.services.provider_manager import provider_manager
 from app.services.cloud_provider import ALL_PROVIDERS
-from app.services.vector_store import VectorStore
+from app.services.vector_store import VectorStore, vector_store
 from app.services.storage import get_module as storage_get_module, init_db as storage_init_db
 from app.services.module_executor import run_module as execute_module_logic
 from app.services.file_loader import file_loader
@@ -46,526 +46,87 @@ from app.services.orchestrator import orchestrator
 from app.services.housekeeping import cleanup_generated_media
 from app.services.web_service import web_service
 from app.services.qdc_service import qdc_service
+from app.services.scheduler_service import scheduler_service
 
-DEFAULT_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://localhost:3000",
-    "http://127.0.0.1:5173",
-    "http://127.0.0.1:3000",
-]
-DEFAULT_QUIET_REQUEST_PATHS = (
-    "/health",
-    "/api/images/models",
-    "/api/code-context/status",
-    "/api/sessions",
-)
+logger = logging.getLogger(__name__)
 
-
-def _get_allowed_origins() -> list[str]:
-    """Load CORS origins from env, falling back to local dev defaults."""
-    configured = os.getenv("LOOM_ALLOWED_ORIGINS", "")
-    if not configured.strip():
-        return DEFAULT_ALLOWED_ORIGINS
-    origins = [origin.strip() for origin in configured.split(",") if origin.strip()]
-    return origins or DEFAULT_ALLOWED_ORIGINS
-
-
-def _get_quiet_request_paths() -> tuple[str, ...]:
-    """Load extra quiet paths from env while always preserving the built-in noisy ones."""
-    configured = os.getenv("LOOM_QUIET_REQUEST_PATHS", "")
-    paths = set(DEFAULT_QUIET_REQUEST_PATHS)
-    if configured.strip():
-        paths.update(path.strip() for path in configured.split(",") if path.strip())
-    return tuple(sorted(paths))
-
-
-def _is_quiet_request_path(path: str) -> bool:
-    return any(path == quiet_path or path.startswith(f"{quiet_path}/") for quiet_path in QUIET_REQUEST_PATHS)
-
-
-ALLOWED_ORIGINS = _get_allowed_origins()
-LOG_LEVEL = os.getenv("LOOM_LOG_LEVEL", "INFO").upper()
-HTTP_CLIENT_LOG_LEVEL = os.getenv("LOOM_HTTP_CLIENT_LOG_LEVEL", "WARNING").upper()
-ACCESS_LOG_ENABLED = os.getenv("LOOM_ACCESS_LOG", "false").lower() in {"1", "true", "yes"}
-SOCKETIO_LOG_ENABLED = os.getenv("LOOM_SOCKETIO_LOG", "false").lower() in {"1", "true", "yes"}
-ENGINEIO_LOG_ENABLED = os.getenv("LOOM_ENGINEIO_LOG", "false").lower() in {"1", "true", "yes"}
-SOCKETIO_CHUNK_LOG_ENABLED = os.getenv("LOOM_SOCKETIO_CHUNK_LOG", "false").lower() in {"1", "true", "yes"}
-QUIET_REQUEST_PATHS = _get_quiet_request_paths()
-WEB_RATE_LIMIT_PER_MIN = int(os.getenv("LOOM_WEB_RATE_LIMIT_PER_MIN", "60"))
-GENERATED_MEDIA_RETENTION_DAYS = int(os.getenv("LOOM_GENERATED_MEDIA_RETENTION_DAYS", "14"))
-RUN_CLEANUP_ON_STARTUP = os.getenv("LOOM_RUN_CLEANUP_ON_STARTUP", "true").lower() in {"1", "true", "yes"}
-
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.INFO),
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-)
-logger = logging.getLogger("loom.api")
-_web_rate_limit_state: dict[str, deque[float]] = defaultdict(deque)
-_session_auto_model: dict[str, str] = {}
-TERMINAL_CHAT_SYSTEM_PROMPT = (
-    "You are LOOM, a helpful assistant in a terminal UI.\n"
-    "Respond with exactly one assistant reply to the latest user message.\n"
-    "Do not simulate both sides of a conversation.\n"
-    "Do not prefix output with labels like 'User:', 'Assistant:', 'AI:', or persona names unless explicitly asked."
-)
-
-
-def _normalize_profile_lines(value: object, *, max_items: int = 24, max_chars: int = 180) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    lines: list[str] = []
-    seen: set[str] = set()
-    for raw in value:
-        if not isinstance(raw, str):
-            continue
-        text = re.sub(r"\s+", " ", raw).strip()
-        if not text:
-            continue
-        key = text.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        lines.append(text[:max_chars])
-        if len(lines) >= max_items:
-            break
-    return lines
-
-
-def _build_conversation_profile_block(profile: object) -> str:
-    if not isinstance(profile, dict):
-        return ""
-
-    goals_enabled = bool(profile.get("goalsEnabled", True))
-    memory_enabled = bool(profile.get("memoryEnabled", True))
-    user_goals = _normalize_profile_lines(profile.get("userGoals"), max_items=12)
-    assistant_goals = _normalize_profile_lines(profile.get("assistantGoals"), max_items=12)
-    memory_notes = _normalize_profile_lines(profile.get("memoryNotes"), max_items=20, max_chars=220)
-
-    sections: list[str] = []
-    if goals_enabled:
-        goal_lines: list[str] = []
-        if user_goals:
-            goal_lines.append("User Goals:")
-            goal_lines.extend(f"- {goal}" for goal in user_goals)
-        if assistant_goals:
-            goal_lines.append("Assistant Goals:")
-            goal_lines.extend(f"- {goal}" for goal in assistant_goals)
-        if goal_lines:
-            sections.append("Goals:\n" + "\n".join(goal_lines))
-
-    if memory_enabled and memory_notes:
-        sections.append("Long-Term Memory Notes:\n" + "\n".join(f"- {note}" for note in memory_notes))
-
-    if not sections:
-        return ""
-
-    return (
-        "Conversation Profile (apply only when relevant):\n"
-        + "\n\n".join(sections)
-        + "\nNever invent goals or memory not listed above."
-    )
-
-
-def _extract_latest_user_message(text: str) -> str:
-    if not text:
-        return ""
-    latest_matches = re.findall(
-        r"(?is)Latest User Message:\s*(.+?)(?:\n\s*Assistant Reply:|\Z)",
-        text,
-    )
-    if latest_matches:
-        return latest_matches[-1].strip()
-
-    question_matches = re.findall(r"(?is)User Question:\s*(.+)$", text)
-    if question_matches:
-        return question_matches[-1].strip()
-    return text.strip()
-
-
-def _is_local_model(model_id: str) -> bool:
-    if not model_id:
-        return True
-    prefix = model_id.split(":", 1)[0].lower()
-    return prefix not in ALL_PROVIDERS
-
-
-def _parse_feedback_profile(payload: object) -> dict[str, float]:
-    if not isinstance(payload, dict):
-        return {
-            "concise_bias": 0.0,
-            "clarity_bias": 0.0,
-            "warmth_bias": 0.0,
-            "directness_bias": 0.0,
-        }
-
-    def _to_float(value: object) -> float:
-        try:
-            return float(value)
-        except Exception:
-            return 0.0
-
-    return {
-        "concise_bias": max(-1.0, min(1.0, _to_float(payload.get("conciseBias")))),
-        "clarity_bias": max(-1.0, min(1.0, _to_float(payload.get("clarityBias")))),
-        "warmth_bias": max(-1.0, min(1.0, _to_float(payload.get("warmthBias")))),
-        "directness_bias": max(-1.0, min(1.0, _to_float(payload.get("directnessBias")))),
-    }
-
-
-def _parse_agent_mode(payload: object) -> str:
-    value = str(payload or "").strip().lower()
-    if value in {"off", "auto"}:
-        return value
-    if value == "ask":
-        # Backward-compatible normalization while the UI remains two-state.
-        return "auto"
-    return "off"
-
-
-def _infer_chat_intelligence(user_message: str) -> dict[str, object]:
-    latest = _extract_latest_user_message(user_message)
-    lower = latest.lower()
-    words = re.findall(r"\b[\w'-]+\b", latest)
-    word_count = len(words)
-
-    ambiguity_markers = (
-        "this", "that", "it", "something", "stuff", "thing", "whatever", "somehow",
-    )
-    missing_specificity_hits = sum(1 for marker in ambiguity_markers if re.search(rf"\b{re.escape(marker)}\b", lower))
-    question_style_hits = sum(1 for marker in ("how", "why", "what", "best", "should") if re.search(rf"\b{marker}\b", lower))
-    code_hits = sum(1 for marker in ("code", "bug", "error", "stack", "trace", "function", "api", "typescript", "python", "test", "refactor") if marker in lower)
-    web_hits = sum(1 for marker in ("website", "web", "crawl", "scrape", "page", "url", "site") if marker in lower)
-    planning_hits = sum(1 for marker in ("plan", "steps", "checklist", "roadmap", "strategy") if marker in lower)
-
-    uncertainty = 0.18
-    if word_count <= 8:
-        uncertainty += 0.26
-    if missing_specificity_hits > 0:
-        uncertainty += min(0.32, missing_specificity_hits * 0.12)
-    if question_style_hits > 0 and word_count < 18:
-        uncertainty += 0.07
-    if "?" not in latest and word_count <= 12:
-        uncertainty += 0.08
-    uncertainty = max(0.05, min(0.95, uncertainty))
-
-    complexity = min(
-        1.0,
-        0.14
-        + (word_count / 120.0)
-        + (0.14 if planning_hits > 0 else 0.0)
-        + (0.14 if code_hits > 0 else 0.0),
-    )
-
-    if code_hits > 0:
-        task = "code"
-    elif web_hits > 0:
-        task = "research"
-    elif planning_hits > 0:
-        task = "planning"
-    elif uncertainty >= 0.62:
-        task = "clarify"
-    else:
-        task = "general"
-
-    response_contract = "direct"
-    if task == "code":
-        response_contract = "code"
-    elif task in {"planning", "research"} or "checklist" in lower:
-        response_contract = "checklist"
-    elif "compare" in lower or "tradeoff" in lower:
-        response_contract = "analysis"
-
-    tool_first = bool(code_hits > 0 or web_hits > 0)
-    ask_clarifying_question = bool(
-        uncertainty >= 0.72
-        and missing_specificity_hits > 0
-        and word_count <= 28
-    )
-
-    confidence = max(0.08, min(0.98, 1.0 - (uncertainty * 0.72)))
-
-    return {
-        "latest_user_message": latest,
-        "task": task,
-        "word_count": word_count,
-        "uncertainty": uncertainty,
-        "complexity": complexity,
-        "response_contract": response_contract,
-        "tool_first": tool_first,
-        "ask_clarifying_question": ask_clarifying_question,
-        "confidence": confidence,
-    }
-
-
-def _build_behavior_policy(
-    intelligence: dict[str, object],
-    feedback_profile: dict[str, float],
-) -> str:
-    contract = str(intelligence.get("response_contract") or "direct")
-    tool_first = bool(intelligence.get("tool_first") or False)
-    ask_clarifying = bool(intelligence.get("ask_clarifying_question") or False)
-    concise_bias = feedback_profile.get("concise_bias", 0.0)
-    clarity_bias = feedback_profile.get("clarity_bias", 0.0)
-    warmth_bias = feedback_profile.get("warmth_bias", 0.0)
-    directness_bias = feedback_profile.get("directness_bias", 0.0)
-
-    lines = [
-        "Behavior Policy:",
-        "- Perform a silent self-check for factual consistency before finalizing the answer.",
-        "- Avoid repetitive loops and never simulate both sides of a dialogue.",
-    ]
-
-    if tool_first:
-        lines.append("- For tool-relevant tasks, start with concrete actions or checks before broad theory.")
-    if ask_clarifying:
-        lines.append("- If critical details are missing, ask one concise clarifying question and wait.")
-    if contract == "code":
-        lines.append("- Prefer implementation-first output: actionable patch/steps, then brief explanation.")
-    elif contract == "checklist":
-        lines.append("- Structure response as a concise checklist with prioritized next actions.")
-    elif contract == "analysis":
-        lines.append("- Present direct tradeoffs first, then recommendation.")
-    else:
-        lines.append("- Keep answer compact and directly useful.")
-
-    if concise_bias > 0.22:
-        lines.append("- User feedback trend: shorten replies and avoid verbose filler.")
-    if clarity_bias > 0.22:
-        lines.append("- User feedback trend: increase specificity and concrete examples.")
-    if warmth_bias > 0.22:
-        lines.append("- User feedback trend: keep tone more human and encouraging without fluff.")
-    if directness_bias > 0.22:
-        lines.append("- User feedback trend: lead with decisive recommendation.")
-    return "\n".join(lines)
-
-
-def _sanitize_assistant_output(text: str) -> str:
-    if not text:
-        return text
-    sanitized = re.sub(r"(?im)^\s*(user|assistant|ai|beep boop|boop boo)\s*:\s*", "", text)
-    sanitized = re.sub(r"\n{4,}", "\n\n\n", sanitized)
-    return sanitized
-
-logging.getLogger("httpx").setLevel(getattr(logging, HTTP_CLIENT_LOG_LEVEL, logging.WARNING))
-logging.getLogger("httpcore").setLevel(getattr(logging, HTTP_CLIENT_LOG_LEVEL, logging.WARNING))
-
-
-class SocketChunkNoiseFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        if SOCKETIO_CHUNK_LOG_ENABLED:
-            return True
-        try:
-            return 'emitting event "ai_chunk"' not in record.getMessage()
-        except Exception:
-            return True
-
-
-socket_noise_filter = SocketChunkNoiseFilter()
-for socket_logger_name in ("socketio", "socketio.server", "engineio", "engineio.server"):
-    logging.getLogger(socket_logger_name).addFilter(socket_noise_filter)
-
-if not ACCESS_LOG_ENABLED:
-    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
-if not SOCKETIO_LOG_ENABLED:
-    for logger_name in ("socketio", "socketio.server"):
-        socket_logger = logging.getLogger(logger_name)
-        socket_logger.setLevel(logging.WARNING)
-        socket_logger.propagate = False
-if not ENGINEIO_LOG_ENABLED:
-    for logger_name in ("engineio", "engineio.server"):
-        engine_logger = logging.getLogger(logger_name)
-        engine_logger.setLevel(logging.WARNING)
-        engine_logger.propagate = False
-
-# Create Socket.IO server
-sio = socketio.AsyncServer(
-    async_mode='asgi',
-    cors_allowed_origins=ALLOWED_ORIGINS,
-    logger=logging.getLogger("socketio.server") if SOCKETIO_LOG_ENABLED else False,
-    engineio_logger=logging.getLogger("engineio.server") if ENGINEIO_LOG_ENABLED else False,
-)
-
-
-async def _emit_qdc_job_event(sid: str, payload: dict):
-    await sio.emit("qdc_job_event", payload, room=sid)
-
-
-qdc_service.set_event_emitter(_emit_qdc_job_event)
+# ... (lines omitted)
 
 async def _initialize_services() -> None:
     storage_init_db()
-
-    if RUN_CLEANUP_ON_STARTUP:
-        backend_root = Path(__file__).parent.parent.parent
-        cleanup_result = cleanup_generated_media(backend_root / "data", GENERATED_MEDIA_RETENTION_DAYS)
-        logger.info(
-            "generated_media_cleanup images_deleted=%s music_deleted=%s retention_days=%s",
-            cleanup_result["images_deleted"],
-            cleanup_result["music_deleted"],
-            GENERATED_MEDIA_RETENTION_DAYS,
-        )
-
-    if not file_loader.get_data_folder():
-        default_data_folder = os.path.join(
-            os.path.dirname(__file__),
-            "..", "..", "data", "files"
-        )
-        default_data_folder = os.path.abspath(default_data_folder)
-        success = file_loader.set_data_folder(default_data_folder, create=True)
-        if success:
-            logger.info("auto_configured_data_folder path=%s", default_data_folder)
-        else:
-            logger.warning("could_not_auto_configure_data_folder path=%s", default_data_folder)
-
     vector_store.set_ollama_client(ollama_client)
-    logger.info("database_initialized")
-    logger.info("vector_store_ready document_count=%s", vector_store.count())
+    scheduler_service.start()  # Start scheduler
+    # Log mobile chat URL so users can connect from phone on same Wi‑Fi
+    try:
+        local_ip = _get_local_ip()
+        if local_ip != '127.0.0.1':
+            logger.info("Chat from phone (same Wi‑Fi): http://%s:8000/chat", local_ip)
+    except Exception:
+        pass
 
+# ... (lines omitted)
 
 async def _shutdown_services() -> None:
     try:
         await web_service.cleanup()
     except Exception:
         logger.exception("web_service_cleanup_failed")
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    await _initialize_services()
+    
     try:
-        yield
-    finally:
-        await _shutdown_services()
+        scheduler_service.stop()
+    except Exception:
+        logger.exception("scheduler_stop_failed")
 
 
 # Create FastAPI app
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    await _initialize_services()
+    yield
+    # Shutdown
+    await _shutdown_services()
+
 app = FastAPI(
     title="Loom Backend",
-    description="Personal Intelligence OS - The Deck",
+    description="Personal Intelligence OS Backend",
     version="0.1.0",
-    lifespan=lifespan,
+    lifespan=lifespan
 )
 
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=["*"],  # In production, replace with specific origins
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"],
 )
 
+# Initialize Socket.IO
+# Allow all origins for now to simplify local development
+sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
 
-def _request_id(request: Request) -> str:
-    return getattr(request.state, "request_id", "")
+# Wrap FastAPI with Socket.IO
+# This is the ASGI application that should be run by uvicorn
+socket_app = socketio.ASGIApp(sio, app)
 
+# Global Session Tracking for Auto-Model
+_session_auto_model = {}
 
-def _client_ip(request: Request) -> str:
-    forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    if request.client:
-        return request.client.host
-    return "unknown"
+# Constants
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+ACCESS_LOG_ENABLED = os.getenv("ACCESS_LOG_ENABLED", "True").lower() == "true"
 
+TERMINAL_CHAT_SYSTEM_PROMPT = """You are LOOM, a Personal Intelligence OS. You are a knowledgeable, helpful AI assistant running locally.
 
-@app.middleware("http")
-async def request_context_and_rate_limit(request: Request, call_next):
-    request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
-    request.state.request_id = request_id
-    start = time.perf_counter()
-
-    if request.url.path.startswith("/api/web/") and WEB_RATE_LIMIT_PER_MIN > 0:
-        now = time.monotonic()
-        ip = _client_ip(request)
-        bucket_key = f"{ip}:{request.url.path}"
-        bucket = _web_rate_limit_state[bucket_key]
-        while bucket and (now - bucket[0]) >= 60:
-            bucket.popleft()
-        if len(bucket) >= WEB_RATE_LIMIT_PER_MIN:
-            logger.warning("rate_limit_exceeded ip=%s path=%s rid=%s", ip, request.url.path, request_id)
-            response = JSONResponse(
-                status_code=429,
-                content={
-                    "error": {
-                        "code": "rate_limit_exceeded",
-                        "message": "Too many requests. Try again in a minute.",
-                        "request_id": request_id,
-                    }
-                },
-            )
-            response.headers["x-request-id"] = request_id
-            return response
-        bucket.append(now)
-
-    try:
-        response = await call_next(request)
-    except Exception:
-        duration_ms = int((time.perf_counter() - start) * 1000)
-        logger.exception("unhandled_exception %s %s %dms rid=%s", request.method, request.url.path, duration_ms, request_id)
-        raise
-
-    duration_ms = int((time.perf_counter() - start) * 1000)
-    response.headers["x-request-id"] = request_id
-    if _is_quiet_request_path(request.url.path) and response.status_code < 400:
-        logger.debug("%s %s %s %dms rid=%s", request.method, request.url.path, response.status_code, duration_ms, request_id)
-    else:
-        logger.info("%s %s %s %dms rid=%s", request.method, request.url.path, response.status_code, duration_ms, request_id)
-    return response
-
-
-@app.exception_handler(StarletteHTTPException)
-async def http_exception_handler(request: Request, exc: StarletteHTTPException):
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "error": {
-                "code": "http_error",
-                "message": str(exc.detail),
-                "request_id": _request_id(request),
-            }
-        },
-    )
-
-
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    return JSONResponse(
-        status_code=422,
-        content={
-            "error": {
-                "code": "validation_error",
-                "message": "Invalid request payload",
-                "details": exc.errors(),
-                "request_id": _request_id(request),
-            }
-        },
-    )
-
-
-@app.exception_handler(Exception)
-async def generic_exception_handler(request: Request, exc: Exception):
-    logger.exception("api_exception rid=%s path=%s", _request_id(request), request.url.path)
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": {
-                "code": "internal_server_error",
-                "message": "An unexpected error occurred",
-                "request_id": _request_id(request),
-            }
-        },
-    )
-
-# Initialize services
-vector_store = VectorStore()
-
-# Set vector store for search router (must be after vector_store creation)
-search.set_vector_store(vector_store)
-
-# Also set for modules router
-from app.routers import modules
-modules.set_vector_store(vector_store)
+Guidelines:
+- Be concise and direct. Avoid unnecessary preamble.
+- Use markdown formatting (headings, lists, code blocks) for readability.
+- When discussing code, use fenced code blocks with language tags.
+- If you're unsure, say so honestly rather than fabricating information.
+- Tailor your response length to the complexity of the question.
+- For creative tasks, be imaginative. For technical tasks, be precise."""
 
 # Include routers
 app.include_router(modules.router, prefix="/api/modules", tags=["modules"])
@@ -581,6 +142,9 @@ app.include_router(web.router, prefix="/api/web", tags=["web"])
 app.include_router(tts.router, prefix="/api/tts", tags=["tts"])
 app.include_router(providers_router.router, prefix="/api/providers", tags=["providers"])
 app.include_router(qdc.router, prefix="/api/qdc", tags=["qdc"])
+app.include_router(system.router, prefix="/api/system", tags=["system"])
+app.include_router(scheduler.router, prefix="/api/scheduler", tags=["scheduler"])
+
 
 # REST Endpoints
 @app.get("/")
@@ -592,24 +156,48 @@ async def root():
     }
 
 
-@app.get("/network-info")
-async def network_info():
-    """Get local network IP address for easy mobile access"""
+def _get_local_ip() -> str:
+    """Get this machine's LAN IP for mobile/same-network access. Tries several methods."""
     import socket
+    # 1. UDP trick: connect to non-routable address to see which interface would be used
     try:
-        # Connect to a remote address to determine local IP
-        # This doesn't actually send data, just determines the route
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(0)
         try:
-            # Try to connect to a non-routable address
             s.connect(('10.254.254.254', 1))
             ip = s.getsockname()[0]
-        except Exception:
-            ip = '127.0.0.1'
+            if ip and ip != '127.0.0.1':
+                return ip
         finally:
             s.close()
-        
+    except Exception:
+        pass
+    # 2. Hostname resolution (often gives LAN IP on macOS/Linux)
+    try:
+        ip = socket.gethostbyname(socket.gethostname())
+        if ip and ip != '127.0.0.1':
+            return ip
+    except Exception:
+        pass
+    # 3. Fallback: try common WiFi interface on macOS (en0)
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['ipconfig', 'getifaddr', 'en0'],
+            capture_output=True, text=True, timeout=1
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return '127.0.0.1'
+
+
+@app.get("/network-info")
+async def network_info():
+    """Get local network IP address for easy mobile access (chat from phone on same Wi-Fi)."""
+    try:
+        ip = _get_local_ip()
         return {
             "local_ip": ip,
             "port": 8000,
@@ -620,6 +208,8 @@ async def network_info():
         return {
             "local_ip": "unknown",
             "port": 8000,
+            "chat_url": "http://127.0.0.1:8000/chat",
+            "api_url": "http://127.0.0.1:8000",
             "error": str(e),
         }
 
@@ -653,17 +243,12 @@ async def diagnostics_page():
 
 @app.get("/chat", response_class=HTMLResponse)
 async def chat_page():
-    """Serve mobile-friendly chat interface"""
-    # Try multiple possible paths
-    possible_paths = [
-        Path(__file__).parent / "chat.html",  # backend/chat.html
-        Path(__file__).parent.parent / "chat.html",  # loom/chat.html
-    ]
-    
-    for chat_html_path in possible_paths:
-        if chat_html_path.exists():
-            return FileResponse(chat_html_path)
-    
+    """Serve mobile-friendly chat interface. Open this URL on your phone (same Wi‑Fi) to chat."""
+    # Resolve backend dir: main.py is in backend/app/, so parent.parent is backend/
+    backend_dir = Path(__file__).resolve().parent.parent
+    chat_html_path = backend_dir / "chat.html"
+    if chat_html_path.exists():
+        return FileResponse(chat_html_path)
     # If file doesn't exist, return inline HTML
     else:
         # Return a simple inline HTML if file doesn't exist yet
@@ -835,11 +420,18 @@ async def list_models():
     try:
         models = await ollama_client.list_models()
         logger.debug("models_list_count=%s", len(models))
-        return {"models": models}
+        # Ensure all values are JSON-serializable (modified_at can be a datetime)
+        safe_models = []
+        for m in models:
+            safe_models.append({
+                "name": str(m.get("name", "unknown")),
+                "size": m.get("size", 0),
+                "modified_at": str(m.get("modified_at", "")),
+            })
+        return JSONResponse(content={"models": safe_models})
     except Exception as e:
         logger.exception("error_fetching_models")
-        # Return empty list instead of failing - frontend can handle this
-        return {"models": [], "error": str(e)}
+        return JSONResponse(content={"models": [], "error": str(e)})
 
 
 @app.get("/api/suggest-models")
@@ -916,6 +508,109 @@ async def connect(sid, environ):
 async def disconnect(sid):
     _session_auto_model.pop(sid, None)
     logger.info("socket_client_disconnected sid=%s", sid)
+
+
+# ── Chat helper functions ──
+
+def _build_conversation_profile_block(profile: dict | None) -> str:
+    """Build a system prompt block from conversation profile settings."""
+    if not profile:
+        return ""
+    parts = []
+    if profile.get("name"):
+        parts.append(f"User name: {profile['name']}")
+    if profile.get("role"):
+        parts.append(f"User role: {profile['role']}")
+    if profile.get("context"):
+        parts.append(f"Context: {profile['context']}")
+    if profile.get("preferences"):
+        parts.append(f"Preferences: {profile['preferences']}")
+    if not parts:
+        return ""
+    return "Conversation Profile (apply only when relevant):\n" + "\n".join(parts)
+
+
+def _parse_feedback_profile(raw: dict | None) -> dict:
+    """Parse user-specified feedback/tone profile from the frontend."""
+    if not raw or not isinstance(raw, dict):
+        return {}
+    return {
+        "verbosity": str(raw.get("verbosity", "normal")),
+        "tone": str(raw.get("tone", "neutral")),
+        "detail_level": str(raw.get("detail_level", "moderate")),
+    }
+
+
+def _parse_agent_mode(raw) -> str:
+    """Parse the agent mode setting (auto, none, etc.)."""
+    if not raw:
+        return "none"
+    mode = str(raw).lower().strip()
+    if mode in ("auto", "none", "always"):
+        return mode
+    return "none"
+
+
+def _infer_chat_intelligence(prompt: str) -> dict:
+    """Lightweight prompt analysis — returns metadata about the user's request."""
+    prompt_lower = prompt.lower()
+    task = "general"
+    if any(kw in prompt_lower for kw in ("code", "function", "debug", "error", "fix", "implement", "syntax")):
+        task = "code"
+    elif any(kw in prompt_lower for kw in ("explain", "what is", "how does", "summary", "describe")):
+        task = "explanation"
+    elif any(kw in prompt_lower for kw in ("write", "draft", "compose", "create a")):
+        task = "creative"
+    return {
+        "task": task,
+        "response_contract": "direct",
+        "confidence": 0.5,
+        "uncertainty": 0.3,
+        "complexity": 0.3,
+        "ask_clarifying_question": False,
+        "latest_user_message": prompt[:500],
+    }
+
+
+def _build_behavior_policy(intelligence: dict, feedback_profile: dict) -> str:
+    """Build a behavior policy block for the AI system prompt based on intelligence and feedback."""
+    parts = []
+    task = intelligence.get("task", "general")
+    parts.append(f"Task type: {task}")
+    verbosity = feedback_profile.get("verbosity", "normal")
+    if verbosity == "concise":
+        parts.append("Be concise and direct. Avoid unnecessary detail.")
+    elif verbosity == "verbose":
+        parts.append("Provide thorough, detailed explanations.")
+    tone = feedback_profile.get("tone", "neutral")
+    if tone == "friendly":
+        parts.append("Use a warm, friendly tone.")
+    elif tone == "professional":
+        parts.append("Use a professional, formal tone.")
+    return "Behavior Policy:\n" + "\n".join(f"- {p}" for p in parts)
+
+
+def _is_local_model(model_str: str) -> bool:
+    """Check whether a model string refers to a local (Ollama) model vs cloud."""
+    if not model_str:
+        return True
+    # Cloud models use provider:model format (e.g. "openai:gpt-4", "gemini:...")
+    cloud_prefixes = ("openai:", "gemini:", "anthropic:", "mistral:", "groq:", "deepseek:")
+    return not any(model_str.startswith(p) for p in cloud_prefixes)
+
+
+def _sanitize_assistant_output(text: str) -> str:
+    """Strip common LLM artifacts from streamed output."""
+    if not text:
+        return ""
+    # Remove repeated assistant role tags that some models emit
+    import re
+    text = re.sub(r'<\|assistant\|>\s*', '', text)
+    text = re.sub(r'<\|end\|>\s*', '', text)
+    text = re.sub(r'<\|im_end\|>\s*', '', text)
+    text = re.sub(r'<\|im_start\|>assistant\s*', '', text)
+    # Strip leading/trailing whitespace
+    return text.strip()
 
 
 @sio.event

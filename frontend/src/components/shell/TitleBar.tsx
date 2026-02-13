@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { ModelSelector } from '../terminal/ModelSelector'
 import type { CrtIntensityPreset } from './SettingsModal'
+import { API_BASE_URL } from '../../config/api'
+import { showInfoToast, showErrorToast } from '../../utils/uiNotifications'
 
 interface TitleBarProps {
   viewMode: 'terminal' | 'circuit'
@@ -55,7 +57,7 @@ export function TitleBar({
       .then((maximized) => {
         if (mounted) setIsMaximized(maximized)
       })
-      .catch(() => {})
+      .catch(() => { })
 
     const unsubscribe = electronAPI.onMaximizedChange((maximized) => {
       setIsMaximized(maximized)
@@ -81,6 +83,40 @@ export function TitleBar({
       if (!shouldClose) return
     }
     electronAPI?.close?.()
+  }
+
+  // Desktop notification permission state + handler
+  const hasNotifApi = typeof Notification !== 'undefined'
+  const [notifPerm, setNotifPerm] = useState(hasNotifApi ? Notification.permission : 'denied')
+
+  const handleNotificationClick = () => {
+    if (!hasNotifApi) return
+    if (Notification.permission === 'default') {
+      Notification.requestPermission().then((result) => {
+        setNotifPerm(result)
+        if (result === 'granted') {
+          try { new Notification('LOOM — Alerts Enabled', { body: 'You will receive notifications when AI responses complete.' }) } catch { /* noop */ }
+        }
+      })
+    } else if (Notification.permission === 'granted') {
+      try { new Notification('LOOM — Test Alert', { body: 'Desktop notifications are working!' }) } catch { /* noop */ }
+    }
+  }
+
+  const handleMobileChatClick = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/network-info`)
+      const data = await res.json().catch(() => ({}))
+      const url = data.chat_url || (data.local_ip && data.local_ip !== '127.0.0.1' ? `http://${data.local_ip}:8000/chat` : null)
+      if (url) {
+        await navigator.clipboard.writeText(url)
+        showInfoToast('Chat URL copied. Open it on your phone (same Wi‑Fi).', 'Chat from phone', 3500)
+      } else {
+        showInfoToast('Backend on this machine only. Run backend with host 0.0.0.0 for LAN access.', 'Chat from phone', 4000)
+      }
+    } catch (e) {
+      showErrorToast('Could not get chat URL. Is the backend running?', 'Chat from phone')
+    }
   }
 
   return (
@@ -144,6 +180,42 @@ export function TitleBar({
         >
           ⌨ SHORTCUTS
         </button>
+
+        {/* Chat from phone (same Wi‑Fi) */}
+        <button
+          type="button"
+          onClick={handleMobileChatClick}
+          className="text-xs px-2 py-1 border border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor transition-none"
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          title="Copy URL to open chat on your phone (same Wi‑Fi)"
+        >
+          📱 CHAT
+        </button>
+
+        {/* Desktop Notifications Toggle */}
+        {hasNotifApi && (
+          <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+            <button
+              type="button"
+              onClick={handleNotificationClick}
+              className={`text-xs px-2 py-1 border transition-none ${notifPerm === 'granted'
+                ? 'border-phosphor text-phosphor'
+                : notifPerm === 'denied'
+                  ? 'border-red-500/50 text-red-400 cursor-not-allowed'
+                  : 'border-yellow-500/50 text-yellow-400 hover:text-yellow-300 hover:border-yellow-400'
+                }`}
+              title={
+                notifPerm === 'granted'
+                  ? 'Desktop notifications enabled (click to test)'
+                  : notifPerm === 'denied'
+                    ? 'Notifications blocked — enable in browser settings'
+                    : 'Click to enable desktop notifications'
+              }
+            >
+              {notifPerm === 'granted' ? '🔔' : notifPerm === 'denied' ? '🔕' : '🔔 ALERTS'}
+            </button>
+          </div>
+        )}
 
         {/* Settings */}
         <button

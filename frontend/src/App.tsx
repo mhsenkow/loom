@@ -13,6 +13,7 @@ import {
 } from './components/shell/SettingsModal'
 import { ShortcutCheatSheet } from './components/shell/ShortcutCheatSheet'
 import { ToastHost } from './components/shell/ToastHost'
+import { requestDesktopNotificationPermission } from './utils/uiNotifications'
 import { useSocket } from './hooks/useSocket'
 import { useSystemStatus } from './hooks/useSystemStatus'
 
@@ -54,6 +55,8 @@ function App() {
     setCrtBloomLevel(s.crtBloomLevel)
     setCrtJitterLevel(s.crtJitterLevel)
     setCrtScanDrift(s.crtScanDrift)
+    // Prompt user for desktop notification permission on first visit
+    requestDesktopNotificationPermission()
   }, [])
 
   useEffect(() => {

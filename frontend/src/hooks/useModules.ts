@@ -130,20 +130,6 @@ function getDefaultLabel(type: string): string {
   return labels[type] || 'MODULE'
 }
 
-async function moduleExists(moduleId: string): Promise<boolean> {
-  try {
-    await requestJson<BackendModule>(`${API_BASE}/api/modules/${moduleId}`, {
-      method: 'GET',
-      timeoutMs: 5000,
-    })
-    return true
-  } catch (error) {
-    if (error instanceof ApiClientError && error.status === 404) {
-      return false
-    }
-    return false
-  }
-}
 
 // Load all modules from backend
 export async function loadModulesFromBackend(): Promise<CellWithPosition[]> {
@@ -158,7 +144,7 @@ export async function loadModulesFromBackend(): Promise<CellWithPosition[]> {
   }
 }
 
-// Save a module to backend (create or update)
+// Save a module to backend (upsert: try create, fall back to update)
 export async function saveModuleToBackend(
   cell: CellData,
   position: Position,
@@ -167,48 +153,40 @@ export async function saveModuleToBackend(
 
   try {
     const moduleData = cellToBackendModule(cell, position)
-    const exists = await moduleExists(moduleId)
 
-    if (exists) {
-      const updatePayload: UpdateModuleRequest = {
+    // Try to create first — backend POST handles create-or-update
+    try {
+      const createPayload: CreateModuleRequest = {
+        id: moduleId,
+        type: moduleData.type,
         content: moduleData.content,
         position: moduleData.position,
-        status: cell.status,
-        metadata: moduleData.metadata,
       }
-
-      await requestJson(`${API_BASE}/api/modules/${moduleId}?${Date.now()}`, {
-        method: 'PATCH',
+      await requestJson(`${API_BASE}/api/modules/`, {
+        method: 'POST',
         timeoutMs: MODULE_TIMEOUT_MS,
-        body: updatePayload,
+        body: createPayload,
       })
-      return true
+    } catch (error) {
+      // If create fails (e.g. 409 conflict), fall through to PATCH
+      if (!(error instanceof ApiClientError && (error.status === 409 || error.status === 500))) {
+        throw error
+      }
     }
 
-    const createPayload: CreateModuleRequest = {
-      id: moduleId,
-      type: moduleData.type,
+    // Always PATCH metadata + content + position (covers both create and update)
+    const updatePayload: UpdateModuleRequest = {
       content: moduleData.content,
       position: moduleData.position,
+      status: cell.status,
+      metadata: moduleData.metadata,
     }
 
-    await requestJson(`${API_BASE}/api/modules/`, {
-      method: 'POST',
+    await requestJson(`${API_BASE}/api/modules/${moduleId}?${Date.now()}`, {
+      method: 'PATCH',
       timeoutMs: MODULE_TIMEOUT_MS,
-      body: createPayload,
+      body: updatePayload,
     })
-
-    if (Object.keys(moduleData.metadata).length > 0) {
-      try {
-        await requestJson(`${API_BASE}/api/modules/${moduleId}?${Date.now()}`, {
-          method: 'PATCH',
-          timeoutMs: MODULE_TIMEOUT_MS,
-          body: { metadata: moduleData.metadata } satisfies UpdateModuleRequest,
-        })
-      } catch {
-        // Metadata patch is best-effort for newly created modules.
-      }
-    }
 
     return true
   } catch (error) {

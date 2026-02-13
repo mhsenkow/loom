@@ -50,6 +50,8 @@ backend/data/music/
 backend/data/tts/
 backend/data/qdc_packages/
 *.sqlite3
+backend/jobs.sqlite
+backend/models/
 
 # Source maps (optional - uncomment to include)
 # *.map

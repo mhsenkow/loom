@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { CellData, ModelSlot, ModelSlotConfig, InputMode } from './CircuitBoard'
 import { FilePicker, ReadMode } from './FilePicker'
 import { MusicPlayerCard } from '../terminal/MusicPlayerCard'
+import { CronCell } from './cell/CronCell'
 import type { ModuleType } from '../../types/module'
 import { API_BASE_URL } from '../../config/api'
 import { fetchImageModels, IMAGE_MODELS_UPDATED_EVENT } from '../../utils/imageModelsApi'
@@ -261,6 +262,48 @@ export function NotebookCell({
       bodyTintClass: 'bg-[#0a0d1a]',
       description: 'Fetches final result for a QDC job id.',
     },
+    notification: {
+      icon: '🔔',
+      color: 'text-yellow-400',
+      bgColor: 'bg-yellow-700',
+      bodyTintClass: 'bg-[#1a150a]',
+      description: 'Sends a desktop notification.',
+    },
+    file_write: {
+      icon: '💾',
+      color: 'text-blue-300',
+      bgColor: 'bg-blue-800',
+      bodyTintClass: 'bg-[#0a0e1a]',
+      description: 'Writes content to a file in the data folder.',
+    },
+    shell_exec: {
+      icon: '💻',
+      color: 'text-red-300',
+      bgColor: 'bg-red-900',
+      bodyTintClass: 'bg-[#1a0a0a]',
+      description: 'Executes a shell command (local system).',
+    },
+    delay: {
+      icon: '⏳',
+      color: 'text-gray-300',
+      bgColor: 'bg-gray-700',
+      bodyTintClass: 'bg-[#1a1a1a]',
+      description: 'Pauses execution for a set duration.',
+    },
+    human_approval: {
+      icon: '🛑',
+      color: 'text-red-400',
+      bgColor: 'bg-red-900',
+      bodyTintClass: 'bg-[#1a0a0a]',
+      description: 'Pauses execution until user approves. Define context for review.',
+    },
+    cron_trigger: {
+      icon: '⏰',
+      color: 'text-yellow-400',
+      bgColor: 'bg-yellow-900',
+      bodyTintClass: 'bg-[#1a150a]',
+      description: 'Trigger circuit on schedule (e.g. daily, hourly).',
+    },
   }
 
   const config = typeConfig[cell.type]
@@ -322,6 +365,14 @@ export function NotebookCell({
       case 'qdc_status':
       case 'qdc_results':
         return 'QDC job id (e.g., qdc-job-1234abcd)'
+      case 'human_approval':
+        return 'Context for approval (e.g., "Please review the generated email:\n\n{{input}}")'
+      case 'human_approval':
+        return 'Context for approval (e.g., "Please review the generated email:\n\n{{input}}")'
+      case 'cron_trigger':
+        return '* * * * *'
+      case 'notification':
+        return 'Title and body (use {{input}} for previous output)'
       default:
         return 'Enter content...'
     }
@@ -505,81 +556,75 @@ export function NotebookCell({
             </button>
           )}
 
-          {/* Content Area - Special handling for data_loader */}
-          {cell.type === 'data_loader' && (
-            <>
-              {/* File selector UI */}
-              <div className="flex items-center gap-2 mb-2">
-                <button
-                  onClick={() => setShowFilePicker(true)}
-                  className="btn-terminal text-xs flex items-center gap-2"
-                  style={{ borderColor: '#00bfff', color: '#00bfff' }}
-                >
-                  📁 Browse Files
-                </button>
-                {cell.content && (
-                  <span className="text-xs text-phosphor font-mono truncate flex-1">
-                    {cell.content}
-                  </span>
-                )}
-              </div>
 
-              {/* Manual path input */}
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={editContent}
-                  onChange={(e) => {
-                    setEditContent(e.target.value)
-                    onUpdate({ content: e.target.value })
-                  }}
-                  onFocus={onExpand}
-                  placeholder="Or type path: data.csv, reports/summary.pdf"
-                  className="flex-1 bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-cyan-500"
-                />
-              </div>
-
-              {/* Read mode selector */}
-              <div className="mt-3 pt-3 border-t border-terminal-border">
-                <div className="text-[10px] text-terminal-muted mb-2">Read Mode:</div>
-                <div className="flex flex-wrap gap-1">
-                  {(['raw', 'preview', 'summarize', 'structure', 'stats', 'extract'] as ReadMode[]).map((mode) => (
-                    <button
-                      key={mode}
-                      onClick={() => onUpdate({ readMode: mode })}
-                      className={`px-2 py-1 text-[10px] border ${cell.readMode === mode
-                        ? 'border-cyan-500 bg-cyan-900/30 text-cyan-400'
-                        : 'border-terminal-border text-terminal-muted hover:border-cyan-500/50'
-                        }`}
-                    >
-                      {READ_MODE_LABELS[mode]}
-                    </button>
-                  ))}
-                </div>
-                <div className="text-[9px] text-terminal-muted mt-1">
-                  {cell.readMode === 'summarize' && 'AI will summarize the document'}
-                  {cell.readMode === 'structure' && 'AI will analyze the data structure'}
-                  {cell.readMode === 'stats' && 'AI will compute statistics (best for CSV)'}
-                  {cell.readMode === 'extract' && 'AI will extract key data points'}
-                  {cell.readMode === 'preview' && 'First 50 lines only'}
-                  {(!cell.readMode || cell.readMode === 'raw') && 'Full file content as-is'}
-                </div>
-              </div>
-
-              {/* File Picker Modal */}
-              <FilePicker
-                isOpen={showFilePicker}
-                onClose={() => setShowFilePicker(false)}
-                onSelect={(path, mode) => {
-                  setEditContent(path)
-                  onUpdate({ content: path, readMode: mode })
-                }}
-              />
-            </>
+          {cell.content && (
+            <span className="text-xs text-phosphor font-mono truncate flex-1">
+              {cell.content}
+            </span>
           )}
+        </div>
 
-          {/* Content Area - Conditional cell */}
-          {cell.type === 'conditional' && (
+        {/* Content Area - Data Loader */}
+        {cell.type === 'data_loader' && (
+          <>
+            {/* Manual path input */}
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={editContent}
+                onChange={(e) => {
+                  setEditContent(e.target.value)
+                  onUpdate({ content: e.target.value })
+                }}
+                onFocus={onExpand}
+                placeholder="Or type path: data.csv, reports/summary.pdf"
+                className="flex-1 bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-cyan-500"
+              />
+            </div>
+
+            {/* Read mode selector */}
+            <div className="mt-3 pt-3 border-t border-terminal-border">
+              <div className="text-[10px] text-terminal-muted mb-2">Read Mode:</div>
+              <div className="flex flex-wrap gap-1">
+                {(['raw', 'preview', 'summarize', 'structure', 'stats', 'extract'] as ReadMode[]).map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => onUpdate({ readMode: mode })}
+                    className={`px-2 py-1 text-[10px] border ${cell.readMode === mode
+                      ? 'border-cyan-500 bg-cyan-900/30 text-cyan-400'
+                      : 'border-terminal-border text-terminal-muted hover:border-cyan-500/50'
+                      }`}
+                  >
+                    {READ_MODE_LABELS[mode]}
+                  </button>
+                ))}
+              </div>
+              <div className="text-[9px] text-terminal-muted mt-1">
+                {cell.readMode === 'summarize' && 'AI will summarize the document'}
+                {cell.readMode === 'structure' && 'AI will analyze the data structure'}
+                {cell.readMode === 'stats' && 'AI will compute statistics (best for CSV)'}
+                {cell.readMode === 'extract' && 'AI will extract key data points'}
+                {cell.readMode === 'preview' && 'First 50 lines only'}
+                {(!cell.readMode || cell.readMode === 'raw') && 'Full file content as-is'}
+              </div>
+            </div>
+
+            {/* File Picker Modal */}
+            <FilePicker
+              isOpen={showFilePicker}
+              onClose={() => setShowFilePicker(false)}
+              onSelect={(path, mode) => {
+                setEditContent(path)
+                onUpdate({ content: path, readMode: mode })
+              }}
+            />
+          </>
+        )
+        }
+
+        {/* Content Area - Conditional cell */}
+        {
+          cell.type === 'conditional' && (
             <>
               <div className="mb-3">
                 <div className="text-[10px] text-terminal-muted mb-2">Condition Type:</div>
@@ -696,10 +741,12 @@ export function NotebookCell({
                 />
               </div>
             </>
-          )}
+          )
+        }
 
-          {/* Content Area - Web Fetch cell */}
-          {cell.type === 'web_fetch' && (
+        {/* Content Area - Web Fetch cell */}
+        {
+          cell.type === 'web_fetch' && (
             <>
               <div className="mb-3">
                 <div className="text-[10px] text-terminal-muted mb-2">HTTP Method:</div>
@@ -826,12 +873,74 @@ export function NotebookCell({
                 </div>
               </div>
             </>
-          )}
+          )
+        }
 
+        {/* Content Area - Human Approval cell */}
+        {
+          cell.type === 'human_approval' && (
+            <div className="space-y-4">
+              {cell.status === 'running' ? (
+                // Active Approval State
+                <div className="bg-red-900/20 border border-red-500/50 rounded-lg p-4 animate-pulse">
+                  <div className="flex items-center gap-2 text-red-400 font-bold mb-2 uppercase tracking-wider text-xs">
+                    <span className="text-lg">✋</span> Approval Required
+                  </div>
+                  <div className="text-sm text-terminal-text mb-4 whitespace-pre-wrap font-mono bg-black/50 p-3 rounded border border-red-500/20">
+                    {/* We need to get the context message from the execution state via bus, but NotebookCell doesn't sub to bus directly. 
+                          Ideally we'd read from cell.output or a prop, but for now we'll show a generic message or rely on parent component if we can.
+                          Actually, let's just show instruction since the context is usually in {{input}}.
+                          Better yet, the LinearView approach was to use the bus. 
+                          Since we are in NotebookCell, we can maybe just show controls.
+                      */}
+                    Review the input/context above or in separate view.
+                  </div>
+                  <div className="flex justify-end gap-3">
+                    {/* 
+                         NOTE: NotebookCell doesn't have direct access to 'approve/reject' functions unless passed down 
+                         or imported from hooks. We can import circuitExecutionBus here.
+                       */}
+                    <button
+                      onClick={() => import('../../hooks/useCircuitRunner').then(m => m.circuitExecutionBus.reject())}
+                      className="px-4 py-2 bg-red-950 border border-red-600 text-red-400 rounded hover:bg-red-900 transition-colors uppercase text-xs font-bold"
+                    >
+                      Reject
+                    </button>
+                    <button
+                      onClick={() => import('../../hooks/useCircuitRunner').then(m => m.circuitExecutionBus.approve('Approved from UI'))}
+                      className="px-4 py-2 bg-green-900/30 border border-green-500 text-green-400 rounded hover:bg-green-900/50 transition-colors uppercase text-xs font-bold shadow-glow"
+                    >
+                      Approve
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                // Config State
+                <div>
+                  <label className="text-[10px] text-terminal-muted block mb-1">Approval Context/Message (use {'{{input}}'}):</label>
+                  <textarea
+                    value={editContent}
+                    onChange={(e) => {
+                      setEditContent(e.target.value)
+                    }}
+                    onBlur={() => {
+                      onUpdate({ content: editContent })
+                      setIsEditing(false)
+                    }}
+                    onKeyDown={handleKeyDown}
+                    onFocus={onExpand}
+                    placeholder={getPlaceholder()}
+                    className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-xs focus:outline-none focus:border-red-500 min-h-[80px]"
+                  />
+                </div>
+              )}
+            </div>
+          )
+        }
 
-
-          {/* Content Area - Music Gen cell */}
-          {cell.type === 'music_gen' && (
+        {/* Content Area - Music Gen cell */}
+        {
+          cell.type === 'music_gen' && (
             <div className="mb-4 space-y-4">
               {/* Mode Toggle & Knobs */}
               <div className="grid grid-cols-2 gap-4 p-3 bg-black/20 rounded border border-terminal-border">
@@ -1012,10 +1121,12 @@ export function NotebookCell({
 
               <div className="text-[10px] text-terminal-muted">Music Style / Prompt:</div>
             </div>
-          )}
+          )
+        }
 
-          {/* Content Area - Vector Search cell */}
-          {cell.type === 'vector_search' && (
+        {/* Content Area - Vector Search cell */}
+        {
+          cell.type === 'vector_search' && (
             <>
               <div className="mb-3">
                 <label className="text-[10px] text-terminal-muted block mb-1">Search Query (or use {'{{input}}'}):</label>
@@ -1065,10 +1176,12 @@ export function NotebookCell({
                 </div>
               </div>
             </>
-          )}
+          )
+        }
 
-          {/* Content Area - Vector Index cell */}
-          {cell.type === 'vector_index' && (
+        {/* Content Area - Vector Index cell */}
+        {
+          cell.type === 'vector_index' && (
             <>
               <div className="mb-3">
                 <div className="text-[10px] text-terminal-muted mb-2">File to Index:</div>
@@ -1109,10 +1222,92 @@ export function NotebookCell({
                 />
               </div>
             </>
-          )}
+          )
+        }
 
-          {/* Content Area - Regular cells */}
-          {cell.type !== 'log_entry' && cell.type !== 'data_loader' && cell.type !== 'conditional' && cell.type !== 'web_fetch' && cell.type !== 'vector_search' && cell.type !== 'vector_index' && (
+        {/* Content Area - Cron Cell */}
+        {
+          cell.type === 'cron_trigger' && (
+            <CronCell
+              module={cell}
+              updateModule={(_: string, updates: Partial<CellData>) => onUpdate(updates)}
+              isReadOnly={false}
+            />
+          )
+        }
+
+        {/* Content Area - Notification Cell */}
+        {
+          cell.type === 'notification' && (() => {
+            const perm = typeof Notification !== 'undefined' ? Notification.permission : null
+            const handleTestNotification = async () => {
+              if (typeof Notification === 'undefined') return
+              if (Notification.permission === 'denied') return
+              if (Notification.permission !== 'granted') {
+                const p = await Notification.requestPermission()
+                if (p !== 'granted') return
+              }
+              const title = (cell.notificationTitle || 'Loom Alert').trim() || 'Loom Alert'
+              new Notification(title, { body: 'If you see this, desktop notifications are working.' })
+            }
+            return (
+              <div className="flex flex-col gap-3 p-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-[10px] text-terminal-muted uppercase tracking-widest">
+                    Permission: {perm === 'granted' ? <span className="text-green-400">Granted</span> : perm === 'denied' ? <span className="text-red-400">Denied</span> : perm === 'default' ? <span className="text-amber-400">Not set</span> : 'N/A'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleTestNotification}
+                    disabled={perm === 'denied'}
+                    className="text-[10px] uppercase tracking-wider px-2 py-1 bg-void border border-terminal-border text-phosphor hover:border-phosphor disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {perm === 'denied' ? 'Blocked' : 'Test notification'}
+                  </button>
+                </div>
+                {perm === 'denied' && (
+                  <p className="text-[10px] text-red-400">Allow notifications for this site in Chrome (lock icon in address bar) or System Settings → Notifications → Chrome.</p>
+                )}
+                {perm === 'granted' && (
+                  <p className="text-[10px] text-terminal-muted">To get pop-up banners over other apps: System Settings → Notifications → Google Chrome → set to &quot;Alert&quot;. Otherwise alerts may only appear in Notification Center (top-right).</p>
+                )}
+                <div>
+                  <label className="text-[10px] text-terminal-muted uppercase tracking-widest block mb-1">Title</label>
+                <input
+                  type="text"
+                  value={cell.notificationTitle ?? 'Loom Alert'}
+                  onChange={(e) => onUpdate({ notificationTitle: e.target.value })}
+                  placeholder="Loom Alert"
+                  className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-sm focus:outline-none focus:border-phosphor"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] text-terminal-muted uppercase tracking-widest block mb-1">Message body</label>
+                <textarea
+                  value={cell.notificationBody ?? '{{input}}'}
+                  onChange={(e) => onUpdate({ notificationBody: e.target.value })}
+                  placeholder="Use {{input}} for previous cell output"
+                  rows={3}
+                  className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-sm resize-none focus:outline-none focus:border-phosphor"
+                />
+                <div className="text-[10px] text-terminal-muted mt-1">Use <code className="bg-void px-1">{'{{input}}'}</code> to insert the previous cell&apos;s output.</div>
+              </div>
+            </div>
+            )
+          })()
+        }
+
+        {/* Fallback for standard text inputs */}
+        {
+          cell.type !== 'data_loader' &&
+          cell.type !== 'conditional' &&
+          cell.type !== 'web_fetch' &&
+          cell.type !== 'cron_trigger' &&
+          cell.type !== 'human_approval' &&
+          cell.type !== 'music_gen' &&
+          cell.type !== 'vector_search' &&
+          cell.type !== 'vector_index' &&
+          cell.type !== 'notification' && (
             <>
               {isEditing ? (
                 <textarea
@@ -1137,10 +1332,12 @@ export function NotebookCell({
                 </div>
               )}
             </>
-          )}
+          )
+        }
 
-          {/* Output Section */}
-          {(cell.output || cell.status === 'running' || cell.error) && (
+        {/* Output Section */}
+        {
+          (cell.output || cell.status === 'running' || cell.error) && (
             <div className={`mt-3 p-3 border ${cell.error ? 'bg-red-900/20 border-red-500' : 'bg-void/50 border-phosphor-dim'}`}>
               <div className={`text-[10px] uppercase tracking-widest mb-2 ${cell.error ? 'text-red-400' : 'text-phosphor-dim'}`}>
                 {cell.error ? 'ERROR' : 'OUTPUT'}
@@ -1177,50 +1374,49 @@ export function NotebookCell({
                 </div>
               )}
             </div>
-          )}
-
-        </div>
-
-        {
-          isExpanded && onCollapse && (
-            <button
-              type="button"
-              onClick={onCollapse}
-              className="fixed right-6 top-1/2 -translate-y-1/2 z-[100] p-2 border border-phosphor bg-void text-phosphor text-xs hover:bg-phosphor hover:text-void transition-colors"
-              title="Collapse to max height"
-            >
-              ◫
-            </button>
           )
         }
+      </div>
 
-        {/* Footer */}
-        <div className="mt-4 pt-3 border-t border-terminal-border flex items-center justify-between">
-          <div className="text-[10px] text-terminal-muted">
-            STATUS:{' '}
-            <span className={
-              cell.status === 'error' ? 'text-red-400' :
-                cell.status === 'running' ? 'text-amber-500' :
-                  cell.status === 'success' ? 'text-phosphor' :
-                    'text-terminal-muted'
-            }>
-              {cell.status.toUpperCase()}
-            </span>
-            {cell.status === 'running' && (
-              <span className="ml-2 text-amber-500 animate-pulse">●●●</span>
-            )}
-          </div>
-
+      {
+        isExpanded && onCollapse && (
           <button
-            onClick={onRun}
-            disabled={cell.status === 'running' || !!validationError}
-            className="btn-terminal text-xs disabled:opacity-50"
-            title={validationError || 'Run this cell'}
+            type="button"
+            onClick={onCollapse}
+            className="fixed right-6 top-1/2 -translate-y-1/2 z-[100] p-2 border border-phosphor bg-void text-phosphor text-xs hover:bg-phosphor hover:text-void transition-colors"
+            title="Collapse to max height"
           >
-            {cell.status === 'running' ? 'Running...' : validationError ? 'Fix to Run' : 'Run'}
+            ◫
           </button>
+        )
+      }
+
+      {/* Footer */}
+      <div className="mt-4 pt-3 border-t border-terminal-border flex items-center justify-between">
+        <div className="text-[10px] text-terminal-muted">
+          STATUS:{' '}
+          <span className={
+            cell.status === 'error' ? 'text-red-400' :
+              cell.status === 'running' ? 'text-amber-500' :
+                cell.status === 'success' ? 'text-phosphor' :
+                  'text-terminal-muted'
+          }>
+            {cell.status.toUpperCase()}
+          </span>
+          {cell.status === 'running' && (
+            <span className="ml-2 text-amber-500 animate-pulse">●●●</span>
+          )}
         </div>
-      </div >
-    </div >
+
+        <button
+          onClick={onRun}
+          disabled={cell.status === 'running' || !!validationError}
+          className="btn-terminal text-xs disabled:opacity-50"
+          title={validationError || 'Run this cell'}
+        >
+          {cell.status === 'running' ? 'Running...' : validationError ? 'Fix to Run' : 'Run'}
+        </button>
+      </div>
+    </div>
   )
 }

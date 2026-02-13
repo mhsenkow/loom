@@ -76,6 +76,7 @@ export interface CellData {
   label: string
   content: string
   status: ModuleStatus
+  position?: { x: number; y: number }
   output?: string
   error?: string
   model?: string       // Direct model override (legacy)
@@ -116,6 +117,17 @@ export interface CellData {
   terminalHistorySince?: number
   terminalHistoryBefore?: number
   terminalHistorySession?: string
+  // Notification cell parameters
+  notificationTitle?: string
+  notificationBody?: string
+  // File Write cell parameters
+  fileWritePath?: string
+  fileWriteMode?: 'overwrite' | 'append'
+  // Shell Exec cell parameters
+  shellExecCommand?: string
+  shellExecCwd?: string
+  // Delay cell parameters
+  delaySeconds?: number
 }
 
 // Start with a blank board. Users can add cells or load a template/circuit.
@@ -194,6 +206,16 @@ function validateCell(cell: CellData, index: number): string | null {
     case 'qdc_results':
       if (!expectsInlineContent) return null
       return content ? null : 'Provide a QDC job id.'
+    case 'notification':
+      return (cell.notificationTitle || '').trim() ? null : 'Notification needs a title.'
+    case 'file_write':
+      return (cell.fileWritePath || '').trim() ? null : 'File Write needs a path.'
+    case 'shell_exec':
+      return (cell.shellExecCommand || cell.content || '').trim() ? null : 'Shell Exec needs a command.'
+    case 'delay':
+      return (cell.delaySeconds || 0) > 0 ? null : 'Delay needs a duration > 0.'
+    case 'human_approval':
+      return (cell.content || '').trim() ? null : 'Approval needs instructions.'
     default:
       return null
   }
@@ -523,6 +545,12 @@ export function CircuitBoard() {
       qdc_run: 'QDC RUN',
       qdc_status: 'QDC STATUS',
       qdc_results: 'QDC RESULT',
+      notification: 'NOTIFY',
+      file_write: 'WRITE FILE',
+      shell_exec: 'SHELL',
+      delay: 'DELAY',
+      human_approval: 'APPROVAL',
+      cron_trigger: 'CRON',
     }
 
     // Default content based on cell type - using real public data sources
@@ -544,6 +572,12 @@ export function CircuitBoard() {
       qdc_run: 'Run this workload on QDC and summarize key outputs.',
       qdc_status: 'qdc-job-xxxxxxxxxx',
       qdc_results: 'qdc-job-xxxxxxxxxx',
+      notification: 'System Alert',
+      file_write: 'Log entry: {{input}}',
+      shell_exec: 'echo "Hello from Loom"',
+      delay: '',
+      human_approval: 'Please review the input below and click Approve to continue.',
+      cron_trigger: '0 8 * * *',
     }
 
     // Default configurations for specific cell types
@@ -627,6 +661,37 @@ export function CircuitBoard() {
           return {
             content: '# Documentation\n\nDescribe what this circuit does...',
             inputMode: 'none',
+          }
+        case 'notification':
+          return {
+            content: 'Task Completed',
+            notificationTitle: 'Loom Alert',
+            notificationBody: '{{input}}',
+            inputMode: 'previous',
+          }
+        case 'file_write':
+          return {
+            content: '{{input}}',
+            fileWritePath: 'output.txt',
+            fileWriteMode: 'append',
+            inputMode: 'previous',
+          }
+        case 'shell_exec':
+          return {
+            content: 'echo "Processing: {{input}}"',
+            shellExecCommand: 'echo "Processing: {{input}}"',
+            inputMode: 'previous',
+          }
+        case 'delay':
+          return {
+            content: 'Wait for 5 seconds',
+            delaySeconds: 5,
+            inputMode: 'none',
+          }
+        case 'human_approval':
+          return {
+            content: 'Please approve this step to proceed.\n\nContext:\n{{input}}',
+            inputMode: 'previous',
           }
         default:
           return {
@@ -1113,7 +1178,7 @@ export function CircuitBoard() {
         }
 
       case 'web_fetch':
-        // Fetch from URL
+        // Fetch from URL via backend proxy to avoid CORS
         let url = cell.content.trim()
         if (url.includes('{{input}}')) {
           url = url.replace(/\{\{input\}\}/g, input)
@@ -1123,7 +1188,7 @@ export function CircuitBoard() {
         }
 
         const method = cell.fetchMethod || 'GET'
-        const timeout = (cell.fetchTimeout || 30) * 1000
+        const timeout = (cell.fetchTimeout || 30)
         const maxSize = cell.fetchMaxSize ?? 8388608
 
         updateCell(cell.id, { output: `Fetching ${method} ${url}...` })
@@ -1135,7 +1200,6 @@ export function CircuitBoard() {
             try {
               headers = JSON.parse(cell.fetchHeaders)
             } catch {
-              // Try key:value format
               const lines = cell.fetchHeaders.split('\n')
               for (const line of lines) {
                 const [key, ...valueParts] = line.split(':')
@@ -1153,7 +1217,6 @@ export function CircuitBoard() {
               ? cell.fetchBody.replace(/\{\{input\}\}/g, input)
               : cell.fetchBody
 
-            // Try to parse as JSON, otherwise use as-is
             try {
               JSON.parse(bodyTemplate)
               body = bodyTemplate
@@ -1162,42 +1225,39 @@ export function CircuitBoard() {
             }
           }
 
-          // Create abort controller for timeout
-          const controller = new AbortController()
-          const timeoutId = setTimeout(() => controller.abort(), timeout)
-
-          const response = await fetch(url, {
-            method,
+          // Call backend proxy
+          const response = await fetch(`${API_BASE_URL}/api/web/fetch`, {
+            method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              ...headers,
             },
-            body: body,
-            signal: controller.signal,
+            body: JSON.stringify({
+              url,
+              method,
+              headers,
+              body,
+              timeout,
+            }),
           })
 
-          clearTimeout(timeoutId)
-
           if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+            const err = await response.json().catch(() => ({}))
+            throw new Error(err.detail || `Proxy Error: ${response.status}`)
           }
 
-          // Check content length
-          const contentLength = response.headers.get('content-length')
-          if (contentLength && parseInt(contentLength) > maxSize) {
-            throw new Error(`Response too large: ${contentLength} bytes (max: ${maxSize})`)
+          const result = await response.json()
+
+          if (result.status >= 400) {
+            throw new Error(`HTTP ${result.status}: ${result.text?.slice(0, 200)}`)
           }
 
-          const text = await response.text()
+          const text = result.text || ''
           if (text.length > maxSize) {
             throw new Error(`Response too large: ${text.length} bytes (max: ${maxSize})`)
           }
 
           return text
         } catch (e) {
-          if (e instanceof Error && e.name === 'AbortError') {
-            throw new Error(`Request timeout after ${timeout / 1000}s`)
-          }
           throw new Error(`Fetch error: ${e instanceof Error ? e.message : e}`)
         }
 
@@ -1566,8 +1626,8 @@ export function CircuitBoard() {
                 >
                   <option value="">Default</option>
                   <optgroup label="── LOCAL ──">
-                    {imageModels.map((m) => (
-                      <option key={m.name} value={m.name}>
+                    {imageModels.map((m, idx) => (
+                      <option key={`${m.name}-${idx}`} value={m.name}>
                         {m.name} {m.vram ? `(${m.vram})` : ''}
                         {currentImageModel === m.name ? ' ✓' : ''}
                       </option>

@@ -848,3 +848,7 @@ class VectorStore:
             )
         
         return "\n---\n".join(context_parts)
+
+
+# Singleton instance
+vector_store = VectorStore()

@@ -102,12 +102,12 @@ export function CommandInput({
   const commandMenuRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const didInitialFocusRef = useRef(false)
-  
+
   // Terminal history
   const [history, setHistory] = useState<string[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
   const currentInputRef = useRef<string>('')
-  
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -222,7 +222,7 @@ export function CommandInput({
 
   const handleSubmit = useCallback(() => {
     if (!editor) return
-    
+
     const content = editor.getText().trim()
     if (content) {
       // Add to history (avoid duplicates, keep last 100)
@@ -234,11 +234,13 @@ export function CommandInput({
       currentInputRef.current = ''
       setShowCommandMenu(false)
       setSelectedCommandIndex(0)
-      
+
       onSubmit(content, contextMode)
       editor.commands.clearContent()
     }
   }, [editor, onSubmit, contextMode])
+
+  const lastEnterTimeRef = useRef<number>(0)
 
   useEffect(() => {
     if (!editor) return
@@ -270,19 +272,21 @@ export function CommandInput({
       // Handle history navigation
       if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
         if (history.length === 0) return
-        
+
+        // Only navigate history if cursor is at start/end or single line?
+        // For now keep simple: simple up/down navigates history
         event.preventDefault()
-        
+
         let newIndex = historyIndex
-        
+
         if (event.key === 'ArrowUp') {
           // Save current input if we're at the bottom
           if (historyIndex === -1) {
             currentInputRef.current = editor.getText()
           }
           // Move up in history
-          newIndex = historyIndex === -1 
-            ? 0 
+          newIndex = historyIndex === -1
+            ? 0
             : Math.min(historyIndex + 1, history.length - 1)
         } else if (event.key === 'ArrowDown') {
           // Move down in history
@@ -296,30 +300,38 @@ export function CommandInput({
             return
           }
         }
-        
+
         setHistoryIndex(newIndex)
         if (newIndex >= 0) {
           editor.commands.setContent(history[newIndex])
         }
         return
       }
-      
+
       // Reset history index when user types (but not for navigation keys)
-      if (!['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].includes(event.key)) {
+      if (!['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape', 'Shift'].includes(event.key)) {
         if (historyIndex !== -1) {
           setHistoryIndex(-1)
           currentInputRef.current = editor.getText()
         }
       }
-      
-      // Submit on Shift+Enter; plain Enter inserts a newline
-      if (event.key === 'Enter' && event.shiftKey) {
-        event.preventDefault()
-        handleSubmit()
+
+      // Submit handling:
+      // 1. Enter (no shift) -> Submit
+      // 2. Shift+Enter -> Newline (default behavior, no preventDefault)
+      if (event.key === 'Enter') {
+        const now = Date.now()
+        lastEnterTimeRef.current = now
+
+        if (!event.shiftKey) {
+          // Normal Enter: Submit
+          event.preventDefault()
+          handleSubmit()
+        }
       }
     }
 
-    // Capture phase ensures Shift+Enter is handled before TipTap/ProseMirror keymaps consume it.
+    // Capture phase ensures we handle before TipTap
     const listenerOptions: AddEventListenerOptions = { capture: true }
     editor.view.dom.addEventListener('keydown', handleKeyDown, listenerOptions)
     return () => {
@@ -404,9 +416,8 @@ export function CommandInput({
   const contextModeDescription = currentModeConfig.title
 
   return (
-    <div className={`command-input-shell flex flex-wrap sm:flex-nowrap items-center gap-2 sm:gap-3 p-3 ${
-      isInputMode ? 'border-amber-500/50' : 'border-terminal-border'
-    }`}>
+    <div className={`command-input-shell flex flex-wrap sm:flex-nowrap items-center gap-2 sm:gap-3 p-3 ${isInputMode ? 'border-amber-500/50' : 'border-terminal-border'
+      }`}>
       {!isInputMode && onImageUpload && (
         <>
           <input
@@ -428,16 +439,15 @@ export function CommandInput({
         </>
       )}
 
-      <div className={`flex items-center gap-1 font-bold shrink-0 pt-[2px] ${
-        isInputMode ? 'text-amber-400' : 'text-phosphor'
-      }`}>
+      <div className={`flex items-center gap-1 font-bold shrink-0 pt-[2px] ${isInputMode ? 'text-amber-400' : 'text-phosphor'
+        }`}>
         <span className={!isInputMode ? 'prompt-char' : undefined}>{isInputMode ? '?' : ''}</span>
         <span className={`terminal-cursor ${isEditorFocused ? 'is-active' : 'is-idle'}`}></span>
       </div>
-      
+
       <div className="command-input-editor-pane flex-1 min-w-0 relative">
-        <EditorContent 
-          editor={editor} 
+        <EditorContent
+          editor={editor}
           className={isInputMode ? 'text-amber-400' : 'text-phosphor'}
         />
         {codeContextActive && !isInputMode && (
@@ -456,11 +466,10 @@ export function CommandInput({
                   key={item.command}
                   type="button"
                   onClick={() => applyCommandSuggestion(item)}
-                  className={`w-full text-left px-2 py-1.5 font-mono text-[10px] transition-colors ${
-                    idx === selectedCommandIndex
-                      ? 'bg-phosphor/15 text-phosphor'
-                      : 'text-terminal-muted hover:text-phosphor hover:bg-void/60'
-                  }`}
+                  className={`w-full text-left px-2 py-1.5 font-mono text-[10px] transition-colors ${idx === selectedCommandIndex
+                    ? 'bg-phosphor/15 text-phosphor'
+                    : 'text-terminal-muted hover:text-phosphor hover:bg-void/60'
+                    }`}
                 >
                   <div className="flex items-center gap-2">
                     <span className="text-phosphor">/{item.command}</span>
@@ -478,11 +487,10 @@ export function CommandInput({
         <div className="command-input-controls flex shrink-0 border border-terminal-border">
           <button
             onClick={handleSubmit}
-            className={`command-input-run text-xs min-h-11 px-3 py-1 border-r border-terminal-border ${
-              isInputMode
-                ? 'border-amber-500 text-amber-400 hover:bg-amber-900/20'
-                : 'btn-terminal'
-            }`}
+            className={`command-input-run text-xs min-h-11 px-3 py-1 border-r border-terminal-border ${isInputMode
+              ? 'border-amber-500 text-amber-400 hover:bg-amber-900/20'
+              : 'btn-terminal'
+              }`}
             title="Submit (Shift+Enter)"
             aria-label={isInputMode ? 'Submit input' : 'Run command'}
           >
@@ -533,9 +541,8 @@ export function CommandInput({
                         setContextMode(mode)
                         setShowContextMenu(false)
                       }}
-                      className={`w-full text-left px-3 py-1.5 text-[10px] flex items-center gap-2 ${
-                        contextMode === mode ? 'text-phosphor bg-void' : 'text-terminal-muted hover:text-phosphor'
-                      }`}
+                      className={`w-full text-left px-3 py-1.5 text-[10px] flex items-center gap-2 ${contextMode === mode ? 'text-phosphor bg-void' : 'text-terminal-muted hover:text-phosphor'
+                        }`}
                       title={title}
                     >
                       <span>{icon}</span>

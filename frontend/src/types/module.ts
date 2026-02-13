@@ -16,6 +16,12 @@ export type ModuleType =
   | 'qdc_run'
   | 'qdc_status'
   | 'qdc_results'
+  | 'notification'
+  | 'file_write'
+  | 'shell_exec'
+  | 'delay'
+  | 'human_approval'
+  | 'cron_trigger'
 
 export type ModuleStatus = 'idle' | 'running' | 'success' | 'error'
 

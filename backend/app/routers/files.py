@@ -100,3 +100,23 @@ async def preview_file(file_path: str, lines: int = 20):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+class WriteFileRequest(BaseModel):
+    path: str
+    content: str
+    mode: Literal["overwrite", "append"] = "overwrite"
+
+
+@router.post("/write")
+async def write_file(request: WriteFileRequest):
+    """Write content to a file"""
+    try:
+        result = file_loader.write_file(
+            request.path,
+            request.content,
+            request.mode,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

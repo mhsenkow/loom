@@ -136,7 +136,7 @@ export function handleCircuitCommand(options: HandleCircuitCommandOptions): bool
       }).join('\n')
       : '  (none yet)'
 
-    const categories = ['thinking', 'writing', 'music', 'data', 'code', 'scripts'] as const
+    const categories = ['thinking', 'writing', 'music', 'data', 'code', 'scripts', 'hybrid'] as const
     const categoryLabels: Record<string, string> = {
       thinking: 'THINK',
       writing: 'WRITE',
@@ -144,6 +144,7 @@ export function handleCircuitCommand(options: HandleCircuitCommandOptions): bool
       data: 'DATA',
       code: 'CODE',
       scripts: 'SCRIPTS',
+      hybrid: 'HYBRID',
     }
 
     const templatesByCategory = categories.map(cat => {
@@ -162,7 +163,8 @@ export function handleCircuitCommand(options: HandleCircuitCommandOptions): bool
       `CIRCUITS:\n\n` +
       `YOUR SAVED:\n${savedList}\n\n` +
       `TEMPLATES:\n${templatesByCategory}\n\n` +
-      `Run with: /<name>`,
+      `Run now: /<name> or /run <name>\n` +
+      `Schedule: save a circuit that has a Cron cell (e.g. weekly-creative) — backend runs it on the cron schedule.`,
       timestamp,
     )
     return true

@@ -277,5 +277,111 @@ async def run_module(
             f"{summary}"
         )
 
+    if module_type == "notification":
+        # Send a system notification (macOS specific for now)
+        message = (inp or content or "Notification").strip()
+        try:
+            import subprocess
+            subprocess.run([
+                "osascript", "-e", 
+                f'display notification "{message}" with title "Loom"'
+            ], check=False)
+            logger.info(f"Notification sent: {message}")
+            return f"🔔 Notification sent: {message}"
+        except Exception as e:
+            logger.error(f"Failed to send notification: {e}")
+            return f"🔔 (Log only) {message}"
+
+    if module_type == "file_write":
+        # Write content to a file in the data directory
+        # Input: content to write
+        # Content (Cell): File path
+        file_path = (content or "").strip()
+        file_content = inp
+        
+        if not file_path:
+            raise ValueError("No file path specified")
+
+        # Security check: ensure path is within allowed data directory
+        from app.services.file_loader import file_loader
+        data_root = file_loader.get_data_folder()
+        if not data_root:
+             raise RuntimeError("Data folder not configured")
+             
+        import os
+        from pathlib import Path
+        
+        # Resolve target path
+        target_path = (Path(data_root) / file_path).resolve()
+        
+        # Ensure it's inside data root
+        if not str(target_path).startswith(str(Path(data_root).resolve())):
+             raise ValueError(f"Security violation: Cannot write outside data directory ({target_path})")
+
+        try:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(target_path, "w", encoding="utf-8") as f:
+                f.write(file_content)
+            return f"💾 File written: {file_path} ({len(file_content)} chars)"
+        except Exception as e:
+            raise RuntimeError(f"File write failed: {e}")
+
+    if module_type == "shell_exec":
+        # Execute a shell command
+        # Content: Command to run
+        # Input: detailed input or args (optional, concatenated)
+        command = (content or "").strip()
+        if inp:
+             command = f"{command} {inp}".strip()
+             
+        if not command:
+            raise ValueError("No command specified")
+
+        # Security warning: This allows arbitrary code execution!
+        # We assume the user is the owner and the backend is running locally.
+        
+        try:
+            import subprocess
+            # Use a timeout to prevent hanging
+            result = subprocess.run(
+                command, 
+                shell=True, 
+                capture_output=True, 
+                text=True, 
+                timeout=30
+            )
+            
+            output = result.stdout
+            if result.stderr:
+                output += f"\n[stderr]\n{result.stderr}"
+                
+            if result.returncode != 0:
+                 return f"⚠️ Command failed (exit {result.returncode}):\n{output}"
+            
+            return output.strip()
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("Command timed out")
+        except Exception as e:
+            raise RuntimeError(f"Command execution failed: {e}")
+
+    if module_type == "delay":
+        # Sleep for N seconds
+        try:
+            seconds = float(inp or content or "1")
+        except ValueError:
+            seconds = 1.0
+            
+        import asyncio
+        await asyncio.sleep(seconds)
+        return f"⏳ Waited {seconds} seconds"
+
+    if module_type == "human_approval":
+        # In backend execution, we can't easily wait for UI interaction yet.
+        # For now, we'll log it and auto-approve if configured, or fail/pause.
+        # Implementation TODO: Persistent pause state.
+        # Current behavior: Pass through with warning log.
+        logger.warning("Human approval cell encountered in backend execution - auto-passing for now.")
+        return f"✅ Human Approval (Auto-passed in backend): {inp or 'Approved'}"
+
     # markdown, conditional, web_fetch, etc. – pass-through
     return inp

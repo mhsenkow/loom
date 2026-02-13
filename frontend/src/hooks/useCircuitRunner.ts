@@ -40,6 +40,13 @@ export interface CircuitExecution {
   requiredInputs: string[]        // labels of INPUT cells that need values
   steps: CircuitExecutionStep[]
   finalOutput?: string
+  pendingApproval?: {
+    cellId: string
+    cellLabel: string
+    message: string
+    resolve: (value: string) => void
+    reject: (reason: Error) => void
+  }
 }
 
 // Event bus for circuit execution updates
@@ -59,19 +66,115 @@ export const circuitExecutionBus = {
     listeners.forEach(l => l(execution))
   },
   getCurrent: () => currentExecution,
+  approve: (response: string) => {
+    if (currentExecution?.pendingApproval) {
+      currentExecution.pendingApproval.resolve(response)
+      // Clear pending state
+      currentExecution = { ...currentExecution, pendingApproval: undefined }
+      listeners.forEach(l => l(currentExecution))
+    }
+  },
+  reject: () => {
+    if (currentExecution?.pendingApproval) {
+      currentExecution.pendingApproval.reject(new Error('User rejected approval'))
+      currentExecution = { ...currentExecution, pendingApproval: undefined }
+      listeners.forEach(l => l(currentExecution))
+    }
+  }
+}
+
+const DEFAULT_CIRCUITS: Record<string, SavedCircuit> = {
+  'DebugAssistant': {
+    name: 'DebugAssistant',
+    description: 'Analyzes input logs/errors and suggests fixes.',
+    savedAt: 1700000000000,
+    cells: [
+      {
+        id: 'default-debug-1',
+        type: 'data_input',
+        label: 'Input',
+        content: '',
+        position: { x: 50, y: 50 },
+        inputMode: 'none',
+      },
+      {
+        id: 'default-debug-2',
+        type: 'ai_processor',
+        label: 'Analysis',
+        content: 'You are a senior debugger. Analyze the following input (which may be a log entry, error message, or code snippet). 1. Identify the core issue. 2. Explain it likely root cause. 3. Suggest a concrete fix.\n\nBe concise and technical.',
+        position: { x: 50, y: 200 },
+        inputMode: 'previous',
+        modelSlot: 'B',
+      }
+    ],
+    modelSlots: { A: '', B: '', C: '', IMAGE: '' },
+  },
+  'DailyBriefing': {
+    name: 'DailyBriefing',
+    description: 'Generates a system status and objective summary.',
+    savedAt: 1700000000000,
+    cells: [
+      {
+        id: 'default-daily-1',
+        type: 'data_input',
+        label: 'Context',
+        content: 'System startup',
+        position: { x: 50, y: 50 },
+        inputMode: 'none',
+      },
+      {
+        id: 'default-daily-2',
+        type: 'ai_processor',
+        label: 'Briefing',
+        content: 'Generate a creative, sci-fi style "Daily Morning Report" for the user. Include a motivational quote, a cryptic observation about the digital ether, and a reminder to stay focused on the mission. Keep it under 100 words.',
+        position: { x: 50, y: 200 },
+        inputMode: 'previous',
+        modelSlot: 'A',
+      }
+    ],
+    modelSlots: { A: '', B: '', C: '', IMAGE: '' },
+  },
+  'CreativeStorm': {
+    name: 'CreativeStorm',
+    description: 'Rapid-fire brainstorming on a topic.',
+    savedAt: 1700000000000,
+    cells: [
+      {
+        id: 'default-storm-1',
+        type: 'data_input',
+        label: 'Topic',
+        content: 'Future Interfaces',
+        position: { x: 50, y: 50 },
+        inputMode: 'none',
+      },
+      {
+        id: 'default-storm-2',
+        type: 'ai_processor',
+        label: 'Brainstorm',
+        content: 'Generate 5 radical, out-of-the-box ideas related to the input topic. Focus on "blue sky" thinking, sci-fi concepts, and novel user experiences. Format as a bulleted list.',
+        position: { x: 50, y: 200 },
+        inputMode: 'previous',
+        modelSlot: 'A',
+      }
+    ],
+    modelSlots: { A: '', B: '', C: '', IMAGE: '' },
+  }
 }
 
 // Load saved circuits (from localStorage; call refreshCircuitsFromBackend to sync from API)
 export function loadSavedCircuits(): Record<string, SavedCircuit> {
   try {
     const stored = localStorage.getItem(CIRCUITS_KEY)
+    let circuits: Record<string, SavedCircuit> = {}
     if (stored) {
-      return JSON.parse(stored)
+      circuits = JSON.parse(stored)
     }
+    // Merge defaults if they don't exist
+    return { ...DEFAULT_CIRCUITS, ...circuits }
   } catch (e) {
     console.warn('[LOOM] Failed to load circuits:', e)
   }
-  return {}
+  return DEFAULT_CIRCUITS
 }
 
 // Fetch circuits from backend and merge into localStorage. Call on app/sidebar mount.
@@ -393,7 +496,7 @@ export function useCircuitRunner() {
         }
 
       case 'web_fetch':
-        // Fetch from URL
+        // Fetch from URL via backend proxy to avoid CORS
         let url = cell.content.trim()
         if (url.includes('{{input}}')) {
           url = url.replace(/\{\{input\}\}/g, input)
@@ -403,7 +506,7 @@ export function useCircuitRunner() {
         }
 
         const method = cell.fetchMethod || 'GET'
-        const timeout = (cell.fetchTimeout || 30) * 1000
+        const timeout = (cell.fetchTimeout || 30)
         const maxSize = cell.fetchMaxSize ?? 8388608
 
         try {
@@ -413,7 +516,6 @@ export function useCircuitRunner() {
             try {
               headers = JSON.parse(cell.fetchHeaders)
             } catch {
-              // Try key:value format
               const lines = cell.fetchHeaders.split('\n')
               for (const line of lines) {
                 const [key, ...valueParts] = line.split(':')
@@ -431,8 +533,8 @@ export function useCircuitRunner() {
               ? cell.fetchBody.replace(/\{\{input\}\}/g, input)
               : cell.fetchBody
 
-            // Try to parse as JSON, otherwise use as-is
             try {
+              // Validate JSON if possible, but send as string
               JSON.parse(bodyTemplate)
               body = bodyTemplate
             } catch {
@@ -440,42 +542,39 @@ export function useCircuitRunner() {
             }
           }
 
-          // Create abort controller for timeout
-          const controller = new AbortController()
-          const timeoutId = setTimeout(() => controller.abort(), timeout)
-
-          const response = await fetch(url, {
-            method,
+          // Call backend proxy
+          const response = await fetch(`${API_BASE}/api/web/fetch`, {
+            method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              ...headers,
             },
-            body: body,
-            signal: controller.signal,
+            body: JSON.stringify({
+              url,
+              method,
+              headers,
+              body,
+              timeout,
+            }),
           })
 
-          clearTimeout(timeoutId)
-
           if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+            const err = await response.json().catch(() => ({}))
+            throw new Error(err.detail || `Proxy Error: ${response.status}`)
           }
 
-          // Check content length
-          const contentLength = response.headers.get('content-length')
-          if (contentLength && parseInt(contentLength) > maxSize) {
-            throw new Error(`Response too large: ${contentLength} bytes (max: ${maxSize})`)
+          const result = await response.json()
+
+          if (result.status >= 400) {
+            throw new Error(`HTTP ${result.status}: ${result.text?.slice(0, 200)}`)
           }
 
-          const text = await response.text()
+          const text = result.text || ''
           if (text.length > maxSize) {
             throw new Error(`Response too large: ${text.length} bytes (max: ${maxSize})`)
           }
 
           return text
         } catch (e) {
-          if (e instanceof Error && e.name === 'AbortError') {
-            throw new Error(`Request timeout after ${timeout / 1000}s`)
-          }
           throw new Error(`Fetch error: ${e instanceof Error ? e.message : e}`)
         }
 
@@ -706,6 +805,110 @@ export function useCircuitRunner() {
         }
         const summary = String(data?.result?.summary || '')
         return summary ? `QDC ${jobId}: ${summary}` : `QDC ${jobId}: result pending`
+      }
+
+      case 'notification': {
+        const title = cell.notificationTitle || 'Loom Alert'
+        const bodyTemplate = cell.notificationBody || '{{input}}'
+        const body = bodyTemplate.replace(/\{\{input\}\}/g, input)
+
+        if (typeof Notification === 'undefined') {
+          return `Notification skipped (not available in this context). Result: ${body.slice(0, 100)}${body.length > 100 ? '…' : ''}`
+        }
+        if (Notification.permission === 'granted') {
+          new Notification(title, { body })
+          return `Notification sent: ${title}`
+        }
+        if (Notification.permission === 'denied') {
+          return `Notification blocked (permission denied). Result: ${body.slice(0, 80)}${body.length > 80 ? '…' : ''}`
+        }
+        const permission = await Notification.requestPermission()
+        if (permission === 'granted') {
+          new Notification(title, { body })
+          return `Notification sent: ${title}`
+        }
+        return `Notification skipped (permission ${permission}). Result: ${body.slice(0, 80)}${body.length > 80 ? '…' : ''}`
+      }
+
+      case 'file_write': {
+        const path = (cell.fileWritePath || '').trim()
+        if (!path) throw new Error('No file path specified')
+
+        const template = cell.content || '{{input}}'
+        const content = template.replace(/\{\{input\}\}/g, input)
+        const mode = cell.fileWriteMode || 'overwrite'
+
+        const response = await fetch(`${API_BASE}/api/files/write`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path, content, mode }),
+        })
+
+        if (!response.ok) {
+          const err = await response.json()
+          throw new Error(err.detail || 'File write failed')
+        }
+
+        return `Written to ${path} (${mode})`
+      }
+
+      case 'shell_exec': {
+        const cmdTemplate = cell.shellExecCommand || cell.content || ''
+        const command = cmdTemplate.replace(/\{\{input\}\}/g, input)
+
+        if (!command.trim()) throw new Error('No command specified')
+
+        const response = await fetch(`${API_BASE}/api/system/exec`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command }),
+        })
+
+        if (!response.ok) {
+          const err = await response.json()
+          throw new Error(err.detail || 'Shell execution failed')
+        }
+
+        const result = await response.json()
+        if (result.exit_code !== 0) {
+          throw new Error(`Command failed (code ${result.exit_code}):\n${result.stderr}`)
+        }
+
+        return result.stdout || result.stderr || '(No output)'
+      }
+
+      case 'delay': {
+        const seconds = cell.delaySeconds || 1
+        await new Promise(resolve => setTimeout(resolve, seconds * 1000))
+        return `Waited ${seconds} seconds`
+      }
+
+      case 'human_approval': {
+        const message = cell.content || 'Approval required'
+        const context = message.includes('{{input}}')
+          ? message.replace(/\{\{input\}\}/g, input)
+          : `${message}\n\nContext:\n${input}`
+
+        return new Promise((resolve, reject) => {
+          // Update global state with pending approval
+          if (currentExecution) {
+            currentExecution = {
+              ...currentExecution,
+              pendingApproval: {
+                cellId: cell.id,
+                cellLabel: cell.label,
+                message: context,
+                resolve: (val) => resolve(val), // Bus will call this
+                reject: (err) => reject(err),   // Bus will call this
+              }
+            }
+            // Emit update so UI shows approval buttons
+            circuitExecutionBus.emit(currentExecution)
+          } else {
+            // Fallback if somehow running without execution context (shouldn't happen)
+            reject(new Error('No execution context for approval'))
+          }
+        })
       }
 
       default:

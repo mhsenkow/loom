@@ -5,10 +5,63 @@ export interface CellTypeConfig {
     label: string
     icon: string
     description: string
-    category: 'Code' | 'Text' | 'Input' | 'Output' | 'Logic' | 'Data'
+    category: 'Code' | 'Text' | 'Input' | 'Output' | 'Logic' | 'Data' | 'System'
 }
 
 export const CELL_TYPES: CellTypeConfig[] = [
+    // Logic & Flow
+    {
+        type: 'conditional',
+        label: 'Gate / Condition',
+        icon: '⚖️',
+        description: 'Logic gate and conditional routing',
+        category: 'Logic'
+    },
+    {
+        type: 'delay',
+        label: 'Delay',
+        icon: '⏳',
+        description: 'Pause execution for N seconds',
+        category: 'Logic'
+    },
+    {
+        type: 'human_approval',
+        label: 'Human Approval',
+        icon: '🛑',
+        description: 'Wait for user approval',
+        category: 'Logic'
+    },
+
+    // System / Agent
+    {
+        type: 'shell_exec',
+        label: 'Shell Command',
+        icon: '💻',
+        description: 'Execute local shell command',
+        category: 'System'
+    },
+    {
+        type: 'file_write',
+        label: 'File Write',
+        icon: '💾',
+        description: 'Write text to file',
+        category: 'System'
+    },
+    {
+        type: 'notification',
+        label: 'Notification',
+        icon: '🔔',
+        description: 'Send desktop notification',
+        category: 'System'
+    },
+    {
+        type: 'cron_trigger',
+        label: 'Cron Schedule',
+        icon: '⏰',
+        description: 'Trigger circuit on schedule',
+        category: 'System'
+    },
+
     // Input
     {
         type: 'data_input',
@@ -38,7 +91,7 @@ export const CELL_TYPES: CellTypeConfig[] = [
         label: 'AI Processor',
         icon: '🤖',
         description: 'Process text with LLMs',
-        category: 'Code' // or Logic? User screenshot had AI under ??? maybe Logic
+        category: 'Code'
     },
     {
         type: 'script_execution',
@@ -47,13 +100,6 @@ export const CELL_TYPES: CellTypeConfig[] = [
         description: 'Execute Python or JavaScript',
         category: 'Code'
     },
-    {
-        type: 'conditional',
-        label: 'Gate / Condition',
-        icon: '⚖️',
-        description: 'Logic gate and conditional routing',
-        category: 'Logic'
-    },
 
     // Data / Visual
     {
@@ -61,7 +107,7 @@ export const CELL_TYPES: CellTypeConfig[] = [
         label: 'Image Gen',
         icon: '🎨',
         description: 'Generate images from text',
-        category: 'Output' // or Media
+        category: 'Output'
     },
     {
         type: 'music_gen',

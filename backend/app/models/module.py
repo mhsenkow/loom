@@ -23,6 +23,11 @@ class ModuleType(str, Enum):
     QDC_RUN = "qdc_run"
     QDC_STATUS = "qdc_status"
     QDC_RESULTS = "qdc_results"
+    NOTIFICATION = "notification"
+    FILE_WRITE = "file_write"
+    SHELL_EXEC = "shell_exec"
+    DELAY = "delay"
+    HUMAN_APPROVAL = "human_approval"
 
 
 class ModuleStatus(str, Enum):

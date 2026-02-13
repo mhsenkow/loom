@@ -11,7 +11,17 @@
   </head>
   <body>
     <script>
-      (function(){try{var s=localStorage.getItem('loom-settings');if(s){var j=JSON.parse(s);if(j.theme&&/^(phosphor|ruby|sapphire|diamond|ebony)$/.test(j.theme))document.documentElement.dataset.theme=j.theme;}}catch(e){})();
+      (function() {
+        try {
+          var s = localStorage.getItem('loom-settings');
+          if (s) {
+            var j = JSON.parse(s);
+            if (j.theme && /^(phosphor|ruby|sapphire|diamond|ebony)$/.test(j.theme)) {
+              document.documentElement.dataset.theme = j.theme;
+            }
+          }
+        } catch(e) { /* ignore */ }
+      })();
       
       // Suppress service worker errors for chrome-extension:// URLs (common in Electron)
       if ('serviceWorker' in navigator) {

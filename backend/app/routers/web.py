@@ -129,4 +129,38 @@ async def deep_research(request: ResearchRequest, _: None = Depends(require_web_
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# Web service cleanup is handled by app lifespan in app/main.py.
+# ... existing code ...
+
+class FetchRequest(BaseModel):
+    url: HttpUrl
+    method: str = "GET"
+    headers: Optional[dict] = None
+    body: Optional[str] = None
+    timeout: float = 30.0
+
+@router.post("/fetch")
+async def proxy_fetch(req: FetchRequest, _: None = Depends(require_web_api_key)):
+    """
+    Proxy a web request through the backend to avoid CORS.
+    """
+    import httpx
+    try:
+        async with httpx.AsyncClient(verify=False) as client:
+            resp = await client.request(
+                req.method,
+                str(req.url),
+                headers=req.headers,
+                content=req.body,
+                timeout=req.timeout,
+                follow_redirects=True
+            )
+            return {
+                "status": resp.status_code,
+                "text": resp.text,
+                "headers": dict(resp.headers),
+            }
+    except Exception as e:
+        # Log error for debugging
+        print(f"Fetch Proxy Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
