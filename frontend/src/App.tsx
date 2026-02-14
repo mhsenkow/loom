@@ -8,6 +8,7 @@ import {
   loadSettings,
   saveSettings,
   applyTheme,
+  applyVisualSystem,
   type Settings,
   type CrtIntensityPreset,
 } from './components/shell/SettingsModal'
@@ -47,6 +48,7 @@ function App() {
   useEffect(() => {
     const s = loadSettings()
     applyTheme(s.theme)
+    applyVisualSystem(s)
     setCrtEnabled(s.crtEnabled)
     setCrtIntensity(s.crtIntensity)
     setCrtBurstsEnabled(s.crtBurstsEnabled)
@@ -100,6 +102,8 @@ function App() {
       if (custom.detail.theme) {
         applyTheme(custom.detail.theme)
       }
+      const merged = { ...loadSettings(), ...custom.detail }
+      applyVisualSystem(merged)
     }
     window.addEventListener('loom:settings-updated', onSettingsUpdated as EventListener)
     return () => window.removeEventListener('loom:settings-updated', onSettingsUpdated as EventListener)

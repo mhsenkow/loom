@@ -19,6 +19,12 @@ interface SettingsModalProps {
 export type ThemeId = 'phosphor' | 'ruby' | 'sapphire' | 'diamond' | 'ebony'
 export type CrtIntensityPreset = 'subtle' | 'medium' | 'full' | 'insane'
 export type MistralAgentMode = 'off' | 'auto'
+export type UiPresetId = 'command' | 'broadcast' | 'arcade' | 'lab' | 'vault'
+export type UiCornerStyle = 'hard' | 'soft' | 'chamfer'
+export type VisualSystemSettings = Pick<
+  Settings,
+  'uiPreset' | 'uiCornerStyle' | 'uiFrameWeight' | 'uiGlowLevel' | 'uiTextureLevel' | 'uiContrastLevel' | 'uiTintShift'
+>
 
 export interface Settings {
   huggingfaceToken: string
@@ -34,6 +40,13 @@ export interface Settings {
   crtBloomLevel: number
   crtJitterLevel: number
   crtScanDrift: number
+  uiPreset: UiPresetId
+  uiCornerStyle: UiCornerStyle
+  uiFrameWeight: number
+  uiGlowLevel: number
+  uiTextureLevel: number
+  uiContrastLevel: number
+  uiTintShift: number
   goalsEnabled: boolean
   userGoals: string
   assistantGoals: string
@@ -57,6 +70,20 @@ const CRT_INTENSITY_PRESETS: { id: CrtIntensityPreset; label: string; subtitle: 
   { id: 'medium', label: 'MEDIUM', subtitle: 'Balanced retro look' },
   { id: 'full', label: 'FULL', subtitle: 'Strong tube + glitch feel' },
   { id: 'insane', label: 'INSANE', subtitle: 'Arcade chaos mode' },
+]
+
+const UI_PRESET_OPTIONS: Array<{ id: UiPresetId; label: string; subtitle: string }> = [
+  { id: 'command', label: 'Command Deck', subtitle: 'Classic mission terminal' },
+  { id: 'broadcast', label: 'Broadcast Rack', subtitle: 'War-room monitor stack' },
+  { id: 'arcade', label: 'Arcade Tube', subtitle: 'Punchy consumer CRT vibe' },
+  { id: 'lab', label: 'Lab Instrument', subtitle: 'Clean bench console look' },
+  { id: 'vault', label: 'Archive Station', subtitle: 'Dusty long-session terminal' },
+]
+
+const UI_CORNER_OPTIONS: Array<{ id: UiCornerStyle; label: string; subtitle: string }> = [
+  { id: 'hard', label: 'HARD', subtitle: 'Sharp utility geometry' },
+  { id: 'soft', label: 'SOFT', subtitle: 'Slightly rounded console edges' },
+  { id: 'chamfer', label: 'CHAMFER', subtitle: 'Cut corners, machine panel feel' },
 ]
 
 const APPEARANCE_PROFILE_PRESETS: Array<{
@@ -94,7 +121,25 @@ const APPEARANCE_LIVE_KEYS: Array<keyof Settings> = [
   'crtBloomLevel',
   'crtJitterLevel',
   'crtScanDrift',
+  'uiPreset',
+  'uiCornerStyle',
+  'uiFrameWeight',
+  'uiGlowLevel',
+  'uiTextureLevel',
+  'uiContrastLevel',
+  'uiTintShift',
 ]
+
+const UI_FRAME_WEIGHT_MIN = 0
+const UI_FRAME_WEIGHT_MAX = 100
+const UI_GLOW_MIN = 0
+const UI_GLOW_MAX = 100
+const UI_TEXTURE_MIN = 0
+const UI_TEXTURE_MAX = 100
+const UI_CONTRAST_MIN = 0
+const UI_CONTRAST_MAX = 100
+const UI_TINT_MIN = -45
+const UI_TINT_MAX = 45
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
@@ -186,6 +231,36 @@ export function applyTheme(theme: ThemeId) {
   document.documentElement.dataset.theme = theme
 }
 
+export function applyVisualSystem(settings: VisualSystemSettings) {
+  const root = document.documentElement
+  root.dataset.uiPreset = settings.uiPreset
+  root.dataset.uiCorners = settings.uiCornerStyle
+
+  const frameWeightPx = (1 + (settings.uiFrameWeight / 100) * 3.2).toFixed(2)
+  const buttonLiftPx = (1 + (settings.uiFrameWeight / 100) * 3).toFixed(2)
+  const glow = (0.05 + (settings.uiGlowLevel / 100) * 0.52).toFixed(3)
+  const texture = ((settings.uiTextureLevel / 100) * 0.34).toFixed(3)
+  const contrast = (0.92 + (settings.uiContrastLevel / 100) * 0.3).toFixed(3)
+  const tintMix = Math.round(Math.abs(settings.uiTintShift) * 0.65)
+  const cornerRadiusPx = settings.uiCornerStyle === 'soft'
+    ? `${Math.round(3 + (settings.uiFrameWeight / 100) * 8)}px`
+    : '0px'
+  const cornerCutPx = settings.uiCornerStyle === 'chamfer'
+    ? `${Math.round(6 + (settings.uiFrameWeight / 100) * 10)}px`
+    : '0px'
+
+  root.style.setProperty('--ui-frame-weight', `${frameWeightPx}px`)
+  root.style.setProperty('--ui-button-lift', `${buttonLiftPx}px`)
+  root.style.setProperty('--ui-glow-strength', glow)
+  root.style.setProperty('--ui-texture-opacity', texture)
+  root.style.setProperty('--ui-contrast-scale', contrast)
+  root.style.setProperty('--ui-tint-angle', `${settings.uiTintShift}deg`)
+  root.style.setProperty('--ui-tint-mix', `${tintMix}%`)
+  root.style.setProperty('--ui-global-radius', cornerRadiusPx)
+  root.style.setProperty('--ui-led-radius', settings.uiCornerStyle === 'soft' ? '50%' : cornerRadiusPx)
+  root.style.setProperty('--ui-corner-cut', cornerCutPx)
+}
+
 // Load settings from localStorage
 export function loadSettings(): Settings {
   try {
@@ -199,6 +274,12 @@ export function loadSettings(): Settings {
       if (!CRT_INTENSITY_PRESETS.some(preset => preset.id === merged.crtIntensity)) {
         merged.crtIntensity = 'medium'
       }
+      if (!UI_PRESET_OPTIONS.some(option => option.id === merged.uiPreset)) {
+        merged.uiPreset = 'command'
+      }
+      if (!UI_CORNER_OPTIONS.some(option => option.id === merged.uiCornerStyle)) {
+        merged.uiCornerStyle = 'hard'
+      }
       if (typeof merged.crtBurstsEnabled !== 'boolean') {
         merged.crtBurstsEnabled = true
       }
@@ -209,6 +290,11 @@ export function loadSettings(): Settings {
       merged.crtBloomLevel = normalizeNumber(merged.crtBloomLevel, 28, 0, 100)
       merged.crtJitterLevel = normalizeNumber(merged.crtJitterLevel, 8, 0, 40)
       merged.crtScanDrift = normalizeNumber(merged.crtScanDrift, 100, 50, 180)
+      merged.uiFrameWeight = normalizeNumber(merged.uiFrameWeight, 38, UI_FRAME_WEIGHT_MIN, UI_FRAME_WEIGHT_MAX)
+      merged.uiGlowLevel = normalizeNumber(merged.uiGlowLevel, 48, UI_GLOW_MIN, UI_GLOW_MAX)
+      merged.uiTextureLevel = normalizeNumber(merged.uiTextureLevel, 42, UI_TEXTURE_MIN, UI_TEXTURE_MAX)
+      merged.uiContrastLevel = normalizeNumber(merged.uiContrastLevel, 46, UI_CONTRAST_MIN, UI_CONTRAST_MAX)
+      merged.uiTintShift = normalizeNumber(merged.uiTintShift, 0, UI_TINT_MIN, UI_TINT_MAX)
       if (typeof merged.goalsEnabled !== 'boolean') {
         merged.goalsEnabled = true
       }
@@ -250,6 +336,13 @@ function defaultSettings(): Settings {
     crtBloomLevel: 28,
     crtJitterLevel: 8,
     crtScanDrift: 100,
+    uiPreset: 'command',
+    uiCornerStyle: 'hard',
+    uiFrameWeight: 38,
+    uiGlowLevel: 48,
+    uiTextureLevel: 42,
+    uiContrastLevel: 46,
+    uiTintShift: 0,
     goalsEnabled: true,
     userGoals: 'Help me move projects forward with practical, high-signal answers.',
     assistantGoals: 'Be accurate, concise, and explicit about assumptions and tradeoffs.',
@@ -714,6 +807,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     setSettings((prev) => {
       const next = { ...prev, [key]: value }
       if (APPEARANCE_LIVE_KEYS.includes(key)) {
+        applyVisualSystem(next)
         window.dispatchEvent(new CustomEvent('loom:settings-updated', { detail: next }))
       }
       return next
@@ -731,6 +825,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     if (!preset) return
     setSettings((prev) => {
       const next = { ...prev, ...preset.values }
+      applyVisualSystem(next)
       window.dispatchEvent(new CustomEvent('loom:settings-updated', { detail: next }))
       return next
     })
@@ -826,6 +921,139 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 </span>
               </button>
             ))}
+          </div>
+
+          <div className="border border-terminal-border p-3 bg-void/70 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <div className="text-[10px] text-phosphor font-bold tracking-wider">RETRO UI SYSTEM</div>
+                <div className="text-[9px] text-terminal-muted">Changes panel depth, corners, glow, and texture across terminal + circuit.</div>
+              </div>
+            </div>
+
+            <div>
+              <div className="text-[10px] text-phosphor font-bold tracking-wider mb-2">STYLE PRESET</div>
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-2">
+                {UI_PRESET_OPTIONS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => updateSetting('uiPreset', preset.id)}
+                    className={`p-2 border text-left ${
+                      settings.uiPreset === preset.id
+                        ? 'border-phosphor bg-void'
+                        : 'border-terminal-border hover:border-phosphor/50'
+                    }`}
+                  >
+                    <div className="text-[10px] text-phosphor font-bold tracking-wider">{preset.label}</div>
+                    <div className="text-[9px] text-terminal-muted mt-1 leading-tight">{preset.subtitle}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div className="text-[10px] text-phosphor font-bold tracking-wider mb-2">CORNERS</div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                {UI_CORNER_OPTIONS.map((option) => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    onClick={() => updateSetting('uiCornerStyle', option.id)}
+                    className={`p-2 border text-left ${
+                      settings.uiCornerStyle === option.id
+                        ? 'border-phosphor bg-void'
+                        : 'border-terminal-border hover:border-phosphor/50'
+                    }`}
+                  >
+                    <div className="text-[10px] text-phosphor font-bold tracking-wider">{option.label}</div>
+                    <div className="text-[9px] text-terminal-muted mt-1 leading-tight">{option.subtitle}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-2">
+              <div className="border border-terminal-border p-2 bg-void space-y-1">
+                <div className="text-[10px] text-phosphor font-bold tracking-wider">FRAME WEIGHT</div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min={UI_FRAME_WEIGHT_MIN}
+                    max={UI_FRAME_WEIGHT_MAX}
+                    step={1}
+                    value={settings.uiFrameWeight}
+                    onChange={(e) => updateSetting('uiFrameWeight', Number(e.target.value))}
+                    className="flex-1 accent-phosphor"
+                  />
+                  <span className="text-[10px] text-phosphor font-mono w-8 text-right">{settings.uiFrameWeight}%</span>
+                </div>
+              </div>
+
+              <div className="border border-terminal-border p-2 bg-void space-y-1">
+                <div className="text-[10px] text-phosphor font-bold tracking-wider">GLOW FIELD</div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min={UI_GLOW_MIN}
+                    max={UI_GLOW_MAX}
+                    step={1}
+                    value={settings.uiGlowLevel}
+                    onChange={(e) => updateSetting('uiGlowLevel', Number(e.target.value))}
+                    className="flex-1 accent-phosphor"
+                  />
+                  <span className="text-[10px] text-phosphor font-mono w-8 text-right">{settings.uiGlowLevel}%</span>
+                </div>
+              </div>
+
+              <div className="border border-terminal-border p-2 bg-void space-y-1">
+                <div className="text-[10px] text-phosphor font-bold tracking-wider">TEXTURE MIX</div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min={UI_TEXTURE_MIN}
+                    max={UI_TEXTURE_MAX}
+                    step={1}
+                    value={settings.uiTextureLevel}
+                    onChange={(e) => updateSetting('uiTextureLevel', Number(e.target.value))}
+                    className="flex-1 accent-phosphor"
+                  />
+                  <span className="text-[10px] text-phosphor font-mono w-8 text-right">{settings.uiTextureLevel}%</span>
+                </div>
+              </div>
+
+              <div className="border border-terminal-border p-2 bg-void space-y-1">
+                <div className="text-[10px] text-phosphor font-bold tracking-wider">CONTRAST BIAS</div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min={UI_CONTRAST_MIN}
+                    max={UI_CONTRAST_MAX}
+                    step={1}
+                    value={settings.uiContrastLevel}
+                    onChange={(e) => updateSetting('uiContrastLevel', Number(e.target.value))}
+                    className="flex-1 accent-phosphor"
+                  />
+                  <span className="text-[10px] text-phosphor font-mono w-8 text-right">{settings.uiContrastLevel}%</span>
+                </div>
+              </div>
+
+              <div className="border border-terminal-border p-2 bg-void space-y-1">
+                <div className="text-[10px] text-phosphor font-bold tracking-wider">TINT SHIFT</div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min={UI_TINT_MIN}
+                    max={UI_TINT_MAX}
+                    step={1}
+                    value={settings.uiTintShift}
+                    onChange={(e) => updateSetting('uiTintShift', Number(e.target.value))}
+                    className="flex-1 accent-phosphor"
+                  />
+                  <span className="text-[10px] text-phosphor font-mono w-12 text-right">{settings.uiTintShift}deg</span>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="pt-2 border-t border-terminal-border/60">

@@ -20,6 +20,21 @@
   --theme-font: 'JetBrains Mono', 'Consolas', monospace;
   --theme-font-primary: 'JetBrains Mono';
   --theme-prompt: '>';
+  --ui-frame-weight: 2px;
+  --ui-button-lift: 2px;
+  --ui-global-radius: 0px;
+  --ui-led-radius: 0px;
+  --ui-corner-cut: 0px;
+  --ui-glow-strength: 0.28;
+  --ui-texture-opacity: 0.14;
+  --ui-contrast-scale: 1;
+  --ui-tint-angle: 0deg;
+  --ui-tint-mix: 0%;
+  --ui-grid-opacity: 0.08;
+  --ui-grid-size: 4px;
+  --ui-ambient-opacity: 0.2;
+  --ui-panel-tone: 8%;
+  --ui-hue-bias: 0deg;
 }
 
 /* Ruby – Soviet / Eastern bloc. ES EVM, SM 1420, warm amber. Chamfered corners, rolling scanlines. */
@@ -94,10 +109,50 @@
   --theme-prompt: '›';
 }
 
+[data-ui-preset="command"] {
+  --ui-grid-opacity: 0.08;
+  --ui-grid-size: 4px;
+  --ui-ambient-opacity: 0.2;
+  --ui-panel-tone: 8%;
+  --ui-hue-bias: 0deg;
+}
+
+[data-ui-preset="broadcast"] {
+  --ui-grid-opacity: 0.12;
+  --ui-grid-size: 5px;
+  --ui-ambient-opacity: 0.28;
+  --ui-panel-tone: 14%;
+  --ui-hue-bias: -4deg;
+}
+
+[data-ui-preset="arcade"] {
+  --ui-grid-opacity: 0.16;
+  --ui-grid-size: 3px;
+  --ui-ambient-opacity: 0.32;
+  --ui-panel-tone: 18%;
+  --ui-hue-bias: 8deg;
+}
+
+[data-ui-preset="lab"] {
+  --ui-grid-opacity: 0.04;
+  --ui-grid-size: 6px;
+  --ui-ambient-opacity: 0.12;
+  --ui-panel-tone: 4%;
+  --ui-hue-bias: -2deg;
+}
+
+[data-ui-preset="vault"] {
+  --ui-grid-opacity: 0.14;
+  --ui-grid-size: 3px;
+  --ui-ambient-opacity: 0.24;
+  --ui-panel-tone: 12%;
+  --ui-hue-bias: 3deg;
+}
+
 /* Base reset for retro terminal aesthetic */
 @layer base {
   * {
-    border-radius: 0 !important;
+    border-radius: var(--ui-global-radius, 0px) !important;
   }
   
   html {
@@ -229,13 +284,75 @@
   [data-theme="diamond"] .crt-overlay { animation: scanline-breathe calc(4s / var(--crt-scan-speed, 1)) ease-in-out infinite; }
   [data-theme="ebony"] .crt-overlay { animation: scanline-pulse calc(3.5s / var(--crt-scan-speed, 1)) ease-in-out infinite; }
 
-  /* Ruby: chamfered (cut-off) corners, Soviet cabinet feel */
-  [data-theme="ruby"] .loom-app {
-    clip-path: polygon(0 10px, 10px 0, calc(100% - 10px) 0, 100% 10px, 100% calc(100% - 10px), calc(100% - 10px) 100%, 10px 100%, 0 calc(100% - 10px));
+  [data-ui-corners="chamfer"] .loom-app {
+    clip-path: polygon(
+      0 var(--ui-corner-cut),
+      var(--ui-corner-cut) 0,
+      calc(100% - var(--ui-corner-cut)) 0,
+      100% var(--ui-corner-cut),
+      100% calc(100% - var(--ui-corner-cut)),
+      calc(100% - var(--ui-corner-cut)) 100%,
+      var(--ui-corner-cut) 100%,
+      0 calc(100% - var(--ui-corner-cut))
+    );
   }
 
-  /* Diamond: circular LEDs, precision-instrument look */
-  [data-theme="diamond"] .led { border-radius: 50% !important; }
+  .loom-app {
+    position: relative;
+    isolation: isolate;
+    filter: contrast(var(--ui-contrast-scale, 1)) hue-rotate(calc(var(--ui-tint-angle, 0deg) + var(--ui-hue-bias, 0deg)));
+  }
+
+  .loom-app > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  .loom-app::before,
+  .loom-app::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+  }
+
+  .loom-app::before {
+    opacity: var(--ui-texture-opacity, 0.14);
+    mix-blend-mode: soft-light;
+    background-image:
+      repeating-linear-gradient(
+        0deg,
+        rgba(255 255 255 / var(--ui-grid-opacity, 0.08)) 0px,
+        rgba(255 255 255 / var(--ui-grid-opacity, 0.08)) 1px,
+        transparent 1px,
+        transparent var(--ui-grid-size, 4px)
+      ),
+      repeating-linear-gradient(
+        90deg,
+        rgba(255 255 255 / calc(var(--ui-grid-opacity, 0.08) * 0.62)) 0px,
+        rgba(255 255 255 / calc(var(--ui-grid-opacity, 0.08) * 0.62)) 1px,
+        transparent 1px,
+        transparent calc(var(--ui-grid-size, 4px) + 1px)
+      ),
+      radial-gradient(circle at 72% 0%, rgba(255 255 255 / calc(var(--ui-grid-opacity, 0.08) * 1.6)) 0%, transparent 58%);
+  }
+
+  .loom-app::after {
+    opacity: var(--ui-ambient-opacity, 0.2);
+    mix-blend-mode: screen;
+    background:
+      radial-gradient(
+        circle at 12% 14%,
+        color-mix(in srgb, var(--theme-phosphor) var(--ui-tint-mix, 0%), transparent) 0%,
+        transparent 58%
+      ),
+      linear-gradient(
+        125deg,
+        color-mix(in srgb, var(--theme-phosphor) var(--ui-panel-tone, 8%), transparent) 0%,
+        transparent 62%
+      );
+  }
 
   /* Terminal prompt char – per-theme glyph */
   .prompt-char::before { content: var(--theme-prompt, '>'); }
@@ -386,11 +503,13 @@
   .command-input-shell {
     background:
       linear-gradient(180deg, rgba(14, 20, 26, 0.92) 0%, rgba(8, 12, 17, 0.94) 100%);
+    border-width: var(--ui-frame-weight, 1px);
     box-shadow:
       inset 1px 1px 0 rgba(190, 220, 255, 0.06),
       inset -1px -1px 0 rgba(0, 0, 0, 0.7),
       0 0 0 1px rgba(0, 0, 0, 0.42),
-      0 10px 20px rgba(0, 0, 0, 0.3);
+      0 10px 20px rgba(0, 0, 0, 0.3),
+      0 0 calc(12px + (18px * var(--ui-glow-strength, 0.28))) color-mix(in srgb, var(--theme-phosphor) 20%, transparent);
     transition: border-color 120ms linear, box-shadow 120ms linear;
   }
 
@@ -406,6 +525,7 @@
   .command-input-editor-pane {
     padding: 3px 4px;
     border: 1px solid rgba(42, 42, 42, 0.95);
+    border-width: var(--ui-frame-weight, 1px);
     background: linear-gradient(180deg, rgba(8, 11, 15, 0.9), rgba(5, 8, 11, 0.9));
     box-shadow:
       inset 1px 1px 0 rgba(150, 180, 205, 0.05),
@@ -417,6 +537,7 @@
   .command-input-context-dot,
   .command-input-controls {
     background: linear-gradient(180deg, rgba(13, 18, 24, 0.9), rgba(8, 11, 15, 0.9));
+    border-width: var(--ui-frame-weight, 1px);
     box-shadow:
       inset 1px 1px 0 rgba(140, 170, 196, 0.06),
       inset -1px -1px 0 rgba(0, 0, 0, 0.72);
@@ -428,8 +549,8 @@
 
   .command-input-run.btn-terminal {
     box-shadow:
-      2px 2px 0 var(--theme-phosphor),
-      0 0 10px rgba(51, 255, 0, 0.18);
+      var(--ui-button-lift, 2px) var(--ui-button-lift, 2px) 0 var(--theme-phosphor),
+      0 0 calc(10px + (12px * var(--ui-glow-strength, 0.28))) color-mix(in srgb, var(--theme-phosphor) 20%, transparent);
   }
 
   .command-input-secondary {
@@ -805,6 +926,7 @@
     width: 8px;
     height: 8px;
     border: 1px solid currentColor;
+    border-radius: var(--ui-led-radius, 0px);
   }
 
   .led-idle {
@@ -836,11 +958,16 @@
     @apply hover:bg-phosphor hover:text-void;
     @apply active:shadow-none active:translate-x-[2px] active:translate-y-[2px];
     @apply transition-none;
-    box-shadow: 2px 2px 0 var(--theme-phosphor);
+    border-width: var(--ui-frame-weight, 1px);
+    box-shadow:
+      var(--ui-button-lift, 2px) var(--ui-button-lift, 2px) 0 var(--theme-phosphor),
+      0 0 calc(4px + (16px * var(--ui-glow-strength, 0.28))) color-mix(in srgb, var(--theme-phosphor) 20%, transparent);
   }
 
   .btn-terminal:hover {
-    box-shadow: 2px 2px 0 var(--theme-phosphor);
+    box-shadow:
+      var(--ui-button-lift, 2px) var(--ui-button-lift, 2px) 0 var(--theme-phosphor),
+      0 0 calc(8px + (22px * var(--ui-glow-strength, 0.28))) color-mix(in srgb, var(--theme-phosphor) 26%, transparent);
   }
 
   .btn-terminal:active {
@@ -849,6 +976,7 @@
 
   .module-chip {
     @apply bg-slate border border-phosphor;
+    border-width: var(--ui-frame-weight, 1px);
     box-shadow: 2px 2px 0 var(--theme-phosphor-dim);
   }
 
@@ -858,6 +986,7 @@
 
   .port {
     @apply w-3 h-3 border border-phosphor bg-void;
+    border-width: var(--ui-frame-weight, 1px);
   }
 
   .port:hover {
@@ -866,6 +995,23 @@
 
   .port-connected {
     @apply bg-phosphor-dim;
+  }
+
+  [data-ui-corners="chamfer"] .btn-terminal,
+  [data-ui-corners="chamfer"] .module-chip,
+  [data-ui-corners="chamfer"] .command-input-shell,
+  [data-ui-corners="chamfer"] .command-input-editor-pane,
+  [data-ui-corners="chamfer"] .message-action-menu {
+    clip-path: polygon(
+      0 var(--ui-corner-cut),
+      var(--ui-corner-cut) 0,
+      calc(100% - var(--ui-corner-cut)) 0,
+      100% var(--ui-corner-cut),
+      100% calc(100% - var(--ui-corner-cut)),
+      calc(100% - var(--ui-corner-cut)) 100%,
+      var(--ui-corner-cut) 100%,
+      0 calc(100% - var(--ui-corner-cut))
+    );
   }
 }
 
@@ -891,11 +1037,11 @@
 
 /* React Flow overrides */
 .react-flow__node {
-  border-radius: 0 !important;
+  border-radius: var(--ui-global-radius, 0px) !important;
 }
 
 .react-flow__handle {
-  border-radius: 0 !important;
+  border-radius: var(--ui-global-radius, 0px) !important;
   width: 12px !important;
   height: 12px !important;
   background: var(--theme-slate) !important;
@@ -913,6 +1059,19 @@
 
 .react-flow__background-pattern {
   fill: var(--theme-phosphor-dim) !important;
+}
+
+[data-ui-corners="chamfer"] .react-flow__node {
+  clip-path: polygon(
+    0 var(--ui-corner-cut),
+    var(--ui-corner-cut) 0,
+    calc(100% - var(--ui-corner-cut)) 0,
+    100% var(--ui-corner-cut),
+    100% calc(100% - var(--ui-corner-cut)),
+    calc(100% - var(--ui-corner-cut)) 100%,
+    var(--ui-corner-cut) 100%,
+    0 calc(100% - var(--ui-corner-cut))
+  );
 }
 
 /* Avatar – 8-bit style */
