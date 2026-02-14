@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { ModelSelector } from '../terminal/ModelSelector'
 import type { CrtIntensityPreset } from './SettingsModal'
 import { API_BASE_URL } from '../../config/api'
-import { showInfoToast, showErrorToast } from '../../utils/uiNotifications'
+import { showInfoToast, showErrorToast, showSuccessToast } from '../../utils/uiNotifications'
 
 interface TitleBarProps {
   viewMode: 'terminal' | 'circuit'
@@ -13,6 +13,13 @@ interface TitleBarProps {
   onShortcutsClick: () => void
   onSettingsClick: () => void
   hasUnsavedChanges: boolean
+}
+
+interface ShareStatusPayload {
+  active?: boolean
+  public_chat_url?: string | null
+  local_chat_url?: string
+  cloudflared_installed?: boolean
 }
 
 export function TitleBar({
@@ -88,6 +95,44 @@ export function TitleBar({
   // Desktop notification permission state + handler
   const hasNotifApi = typeof Notification !== 'undefined'
   const [notifPerm, setNotifPerm] = useState(hasNotifApi ? Notification.permission : 'denied')
+  const [shareStatus, setShareStatus] = useState<ShareStatusPayload | null>(null)
+  const [shareBusy, setShareBusy] = useState(false)
+
+  const copyToClipboard = useCallback(async (value: string): Promise<boolean> => {
+    if (!value) return false
+    try {
+      await navigator.clipboard.writeText(value)
+      return true
+    } catch {
+      return false
+    }
+  }, [])
+
+  const fetchShareStatus = useCallback(async (): Promise<ShareStatusPayload | null> => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/share/status`)
+      if (!res.ok) return null
+      const payload = await res.json() as ShareStatusPayload
+      setShareStatus(payload)
+      return payload
+    } catch {
+      return null
+    }
+  }, [])
+
+  useEffect(() => {
+    void fetchShareStatus()
+    const onShareStatusChanged = (event: Event) => {
+      const custom = event as CustomEvent<ShareStatusPayload>
+      if (custom.detail) {
+        setShareStatus(custom.detail)
+        return
+      }
+      void fetchShareStatus()
+    }
+    window.addEventListener('loom:share-status-changed', onShareStatusChanged as EventListener)
+    return () => window.removeEventListener('loom:share-status-changed', onShareStatusChanged as EventListener)
+  }, [fetchShareStatus])
 
   const handleNotificationClick = () => {
     if (!hasNotifApi) return
@@ -103,19 +148,71 @@ export function TitleBar({
     }
   }
 
-  const handleMobileChatClick = async () => {
+  const copyLocalChatUrl = async () => {
     try {
       const res = await fetch(`${API_BASE_URL}/network-info`)
       const data = await res.json().catch(() => ({}))
       const url = data.chat_url || (data.local_ip && data.local_ip !== '127.0.0.1' ? `http://${data.local_ip}:8000/chat` : null)
       if (url) {
-        await navigator.clipboard.writeText(url)
+        await copyToClipboard(url)
         showInfoToast('Chat URL copied. Open it on your phone (same Wi‑Fi).', 'Chat from phone', 3500)
       } else {
         showInfoToast('Backend on this machine only. Run backend with host 0.0.0.0 for LAN access.', 'Chat from phone', 4000)
       }
-    } catch (e) {
+    } catch {
       showErrorToast('Could not get chat URL. Is the backend running?', 'Chat from phone')
+    }
+  }
+
+  const handleMobileChatClick = async () => {
+    if (shareBusy) return
+    setShareBusy(true)
+    try {
+      const latest = await fetchShareStatus()
+      if (latest?.active && latest.public_chat_url) {
+        const copied = await copyToClipboard(latest.public_chat_url)
+        if (copied) {
+          showSuccessToast('Public chat URL copied.', 'Share Chat', 3000)
+        } else {
+          showInfoToast(latest.public_chat_url, 'Share Chat', 4500)
+        }
+        return
+      }
+
+      const response = await fetch(`${API_BASE_URL}/api/share/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_url: API_BASE_URL }),
+      })
+      const payload = await response.json().catch(() => ({})) as ShareStatusPayload & { detail?: string }
+      if (!response.ok) {
+        const detail = typeof payload.detail === 'string' ? payload.detail : 'Could not start public sharing.'
+        if (detail.toLowerCase().includes('cloudflared')) {
+          showInfoToast('Public share needs cloudflared. Falling back to LAN chat URL.', 'Share Chat', 4200)
+          await copyLocalChatUrl()
+          return
+        }
+        throw new Error(detail)
+      }
+
+      setShareStatus(payload)
+      window.dispatchEvent(new CustomEvent('loom:share-status-changed', { detail: payload }))
+
+      if (payload.public_chat_url) {
+        const copied = await copyToClipboard(payload.public_chat_url)
+        if (copied) {
+          showSuccessToast('Public chat is live. URL copied to clipboard.', 'Share Chat', 3500)
+        } else {
+          showInfoToast(payload.public_chat_url, 'Share Chat', 4500)
+        }
+      } else {
+        showInfoToast('Sharing started, but no URL was returned yet.', 'Share Chat', 3500)
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not start chat sharing.'
+      showErrorToast(message, 'Share Chat')
+    } finally {
+      setShareBusy(false)
     }
   }
 
@@ -185,11 +282,16 @@ export function TitleBar({
         <button
           type="button"
           onClick={handleMobileChatClick}
-          className="text-xs px-2 py-1 border border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor transition-none"
+          disabled={shareBusy}
+          className={`text-xs px-2 py-1 border transition-none disabled:opacity-60 ${
+            shareStatus?.active
+              ? 'border-phosphor text-phosphor'
+              : 'border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor'
+          }`}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-          title="Copy URL to open chat on your phone (same Wi‑Fi)"
+          title={shareStatus?.active ? 'Copy public chat URL' : 'Start public share link (or copy LAN URL fallback)'}
         >
-          📱 CHAT
+          {shareBusy ? '…' : shareStatus?.active ? '🌐 LIVE CHAT' : '🌐 SHARE CHAT'}
         </button>
 
         {/* Desktop Notifications Toggle */}

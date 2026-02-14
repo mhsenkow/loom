@@ -33,7 +33,7 @@ backend_dir = Path(__file__).parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-from app.routers import modules, images, files, circuits, search, remote, code_context, music, sessions, web, tts, qdc, system, scheduler
+from app.routers import modules, images, files, circuits, search, remote, code_context, music, sessions, web, tts, qdc, system, scheduler, share
 from app.routers import providers as providers_router
 from app.services.ollama_client import ollama_client
 from app.services.provider_manager import provider_manager
@@ -47,6 +47,7 @@ from app.services.housekeeping import cleanup_generated_media
 from app.services.web_service import web_service
 from app.services.qdc_service import qdc_service
 from app.services.scheduler_service import scheduler_service
+from app.services.share_service import share_service
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,11 @@ async def _shutdown_services() -> None:
         scheduler_service.stop()
     except Exception:
         logger.exception("scheduler_stop_failed")
+
+    try:
+        share_service.stop()
+    except Exception:
+        logger.exception("share_service_stop_failed")
 
 
 # Create FastAPI app
@@ -144,6 +150,7 @@ app.include_router(providers_router.router, prefix="/api/providers", tags=["prov
 app.include_router(qdc.router, prefix="/api/qdc", tags=["qdc"])
 app.include_router(system.router, prefix="/api/system", tags=["system"])
 app.include_router(scheduler.router, prefix="/api/scheduler", tags=["scheduler"])
+app.include_router(share.router, prefix="/api/share", tags=["share"])
 
 
 # REST Endpoints

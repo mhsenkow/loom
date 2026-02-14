@@ -9,16 +9,27 @@ import os
 import platform
 import psutil
 from pathlib import Path
+from app.services.share_service import share_service
 
 router = APIRouter()
+
+
+def _assert_remote_api_enabled() -> None:
+    if share_service.is_active():
+        raise HTTPException(
+            status_code=423,
+            detail="Remote command and filesystem endpoints are disabled while public chat sharing is active."
+        )
 
 
 @router.get("/test")
 async def test_remote():
     """Test endpoint to verify remote router is working"""
+    blocked = share_service.is_active()
     return {
-        "status": "ok",
-        "message": "Remote router is active",
+        "status": "ok" if not blocked else "limited",
+        "message": "Remote router is active" if not blocked else "Remote endpoints are temporarily disabled while sharing.",
+        "disabled_while_sharing": blocked,
         "endpoints": [
             "/api/remote/system/status",
             "/api/remote/system/processes",
@@ -45,6 +56,7 @@ async def execute_command(request: CommandRequest):
     """
     Execute a shell command remotely (with safety restrictions)
     """
+    _assert_remote_api_enabled()
     # Safety: Block dangerous commands
     dangerous_commands = ['rm -rf', 'format', 'del /f', 'shutdown', 'reboot', 'sudo rm']
     command_lower = request.command.lower()
@@ -88,6 +100,7 @@ async def execute_command(request: CommandRequest):
 @router.get("/system/status")
 async def get_system_status():
     """Get detailed system status"""
+    _assert_remote_api_enabled()
     try:
         cpu_percent = psutil.cpu_percent(interval=1)
         memory = psutil.virtual_memory()
@@ -132,6 +145,7 @@ async def get_system_status():
 @router.get("/system/processes")
 async def get_processes(limit: int = 20):
     """Get top processes by CPU usage"""
+    _assert_remote_api_enabled()
     try:
         processes = []
         for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent']):
@@ -153,6 +167,7 @@ async def get_processes(limit: int = 20):
 @router.post("/files/list")
 async def list_directory(request: FileListRequest):
     """List files in a directory"""
+    _assert_remote_api_enabled()
     try:
         path = Path(request.path).expanduser()
         
@@ -193,6 +208,7 @@ async def list_directory(request: FileListRequest):
 @router.get("/files/read")
 async def read_file(file_path: str, lines: Optional[int] = None):
     """Read a file (optionally limit to N lines)"""
+    _assert_remote_api_enabled()
     try:
         path = Path(file_path).expanduser()
         

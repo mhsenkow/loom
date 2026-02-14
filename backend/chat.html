@@ -519,6 +519,116 @@
                 padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
             }
         }
+
+        /* Mobile: session + files bar */
+        .mobile-bar {
+            flex-shrink: 0;
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 0.45rem;
+            padding: 0.4rem 0.75rem;
+            background: #111;
+            border-bottom: 1px solid #222;
+            font-size: 0.75rem;
+        }
+        .mobile-row {
+            min-width: 0;
+            display: flex;
+            align-items: center;
+            gap: 0.45rem;
+        }
+        .mobile-row.model-row {
+            grid-column: 1 / -1;
+        }
+        .mobile-bar label { color: #888; white-space: nowrap; }
+        .mobile-bar select {
+            flex: 1;
+            min-width: 0;
+            max-width: 100%;
+            padding: 0.35rem 0.5rem;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            color: #e0e0e0;
+            border-radius: 4px;
+            font-size: 0.75rem;
+        }
+        .mobile-bar .btn-files {
+            padding: 0.35rem 0.6rem;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            color: #00ff88;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+        .mobile-bar .btn-files:active { background: #252525; }
+        .mobile-bar .model-note {
+            grid-column: 1 / -1;
+            color: #8dc5a8;
+            font-size: 0.68rem;
+            line-height: 1.2;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* Files panel overlay */
+        .files-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.85);
+            z-index: 100;
+            flex-direction: column;
+            padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+        }
+        .files-overlay.open { display: flex; }
+        .files-overlay .files-header {
+            flex-shrink: 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.6rem 0.75rem;
+            background: #1a1a1a;
+            border-bottom: 1px solid #333;
+        }
+        .files-overlay .files-header h2 { font-size: 0.9rem; color: #00ff88; margin: 0; }
+        .files-overlay .files-close { padding: 0.3rem 0.6rem; background: #333; color: #e0e0e0; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
+        .files-overlay .files-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0.5rem;
+            -webkit-overflow-scrolling: touch;
+        }
+        .files-overlay .file-item {
+            display: block;
+            width: 100%;
+            padding: 0.5rem 0.6rem;
+            margin-bottom: 0.25rem;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 6px;
+            color: #e0e0e0;
+            font-size: 0.8rem;
+            text-align: left;
+            cursor: pointer;
+        }
+        .files-overlay .file-item:active { background: #252525; }
+        .files-overlay .file-item .file-meta { font-size: 0.7rem; color: #666; margin-top: 0.2rem; }
+        .files-overlay .file-content {
+            display: none;
+            flex: 1;
+            flex-direction: column;
+            min-height: 0;
+            background: #0a0a0a;
+        }
+        .files-overlay .file-content.show { display: flex; }
+        .files-overlay .file-content .file-content-header { flex-shrink: 0; display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.75rem; background: #1a1a1a; border-bottom: 1px solid #333; font-size: 0.75rem; color: #888; }
+        .files-overlay .file-content .files-back { flex-shrink: 0; padding: 0.25rem 0.5rem; background: #333; color: #00ff88; border: none; border-radius: 4px; cursor: pointer; font-size: 0.75rem; }
+        .files-overlay .file-content .file-content-path { flex: 1; min-width: 0; word-break: break-all; }
+        .files-overlay .file-content pre { flex: 1; overflow: auto; margin: 0; padding: 0.75rem; font-size: 0.75rem; white-space: pre-wrap; word-break: break-word; -webkit-overflow-scrolling: touch; }
+        .files-overlay .files-empty, .files-overlay .files-error { padding: 1rem; color: #888; font-size: 0.8rem; text-align: center; }
     </style>
 </head>
 <body>
@@ -539,6 +649,40 @@
     
     <div id="connectionInfo" style="display: none; background: #1a1a1a; padding: 0.4rem 0.5rem; border-bottom: 1px solid #333; font-size: 0.7rem; color: #888; text-align: center; flex-shrink: 0; word-break: break-all; overflow-wrap: break-word;">
         <span id="connectionUrl"></span>
+    </div>
+
+    <div class="mobile-bar">
+        <div class="mobile-row session-row">
+            <label for="sessionSelect">Session</label>
+            <select id="sessionSelect" title="Pick a saved chat session">
+                <option value="">— New —</option>
+            </select>
+        </div>
+        <button type="button" class="btn-files" id="btnFiles" title="Browse data files">Files</button>
+        <div class="mobile-row model-row">
+            <label for="modelSelect">Model</label>
+            <select id="modelSelect" title="Choose AI model">
+                <option value="auto">Auto (Orchestrator)</option>
+            </select>
+        </div>
+        <div class="model-note" id="modelStatusText">Selected: Auto • Last reply: —</div>
+    </div>
+
+    <div class="files-overlay" id="filesOverlay">
+        <div class="files-header">
+            <h2 id="filesPanelTitle">Files</h2>
+            <button type="button" class="files-close" id="filesClose">Close</button>
+        </div>
+        <div class="files-list" id="filesList">
+            <div class="files-empty" id="filesEmpty">Loading…</div>
+        </div>
+        <div class="file-content" id="fileContentPanel">
+            <div class="file-content-header">
+                <button type="button" class="files-back" id="fileContentBack">← List</button>
+                <span id="fileContentPath" class="file-content-path"></span>
+            </div>
+            <pre id="fileContentPre"></pre>
+        </div>
     </div>
 
     <div class="messages" id="messages">
@@ -585,10 +729,19 @@
             
             // Test backend connectivity first
             fetch(`${backendUrl}/health`)
-                .then(res => {
+                .then(async res => {
                     if (res.ok) {
                         console.log('[LOOM] Backend health check passed');
                         addSystemMessage('Backend is reachable. Connecting...');
+                        const payload = await res.json().catch(() => null);
+                        const loaded = payload?.memory?.loaded_model_name;
+                        const fallbackDefault = payload?.memory?.default_model;
+                        if (loaded) {
+                            lastResponseModel = String(loaded);
+                        } else if (fallbackDefault && selectedModel === 'auto') {
+                            lastResponseModel = String(fallbackDefault);
+                        }
+                        updateModelStatus();
                     } else {
                         console.error('[LOOM] Backend health check failed:', res.status);
                         addSystemMessage(`WARNING: Backend returned status ${res.status}. Connection may still work.`);
@@ -651,8 +804,11 @@
             const statusDot = document.getElementById('statusDot');
             const statusText = document.getElementById('statusText');
             const typingIndicator = document.getElementById('typingIndicator');
+            const modelSelect = document.getElementById('modelSelect');
+            const modelStatusText = document.getElementById('modelStatusText');
 
             const STORAGE_KEY = 'loom-mobile-chat-history';
+            const MODEL_STORAGE_KEY = 'loom-mobile-selected-model';
             const MAX_STORED_MESSAGES = 1000; // Keep up to 1000 messages
             
             // Context window: ~4 chars ≈ 1 token (rough). gpt-oss:120b typically 128k context.
@@ -662,6 +818,137 @@
             let currentAIResponse = null;
             let isProcessing = false;
             let messageHistory = []; // Array to store all messages
+            let selectedModel = 'auto';
+            let lastResponseModel = '';
+
+            function isCloudModel(modelId) {
+                const text = String(modelId || '').toLowerCase();
+                return ['openai:', 'anthropic:', 'gemini:', 'mistral:', 'deepseek:', 'openrouter:'].some(prefix => text.startsWith(prefix));
+            }
+
+            function humanModelName(modelId) {
+                const raw = String(modelId || '').trim();
+                if (!raw || raw === 'auto') return 'Auto';
+                return raw;
+            }
+
+            function updateModelStatus(state) {
+                if (!modelStatusText) return;
+                const selectedLabel = humanModelName(selectedModel);
+                let responseLabel = lastResponseModel ? humanModelName(lastResponseModel) : '—';
+                let rightLabel = 'Last reply';
+
+                if (state === 'running') {
+                    rightLabel = 'Running';
+                    responseLabel = lastResponseModel
+                        ? humanModelName(lastResponseModel)
+                        : (selectedModel === 'auto' ? 'auto-selecting' : selectedLabel);
+                }
+                modelStatusText.textContent = `Selected: ${selectedLabel} • ${rightLabel}: ${responseLabel}`;
+            }
+
+            function normalizeSelectedModel(rawValue) {
+                const value = String(rawValue || '').trim();
+                if (!value) return 'auto';
+                return value;
+            }
+
+            function setSelectedModel(nextModel, persist = true) {
+                selectedModel = normalizeSelectedModel(nextModel);
+                if (persist) {
+                    localStorage.setItem(MODEL_STORAGE_KEY, selectedModel);
+                }
+                if (modelSelect) {
+                    const hasOption = Array.from(modelSelect.options).some(opt => opt.value === selectedModel);
+                    if (!hasOption) {
+                        const fallback = modelSelect.options.length > 0 ? modelSelect.options[0].value : 'auto';
+                        selectedModel = fallback || 'auto';
+                        if (persist) {
+                            localStorage.setItem(MODEL_STORAGE_KEY, selectedModel);
+                        }
+                    }
+                    modelSelect.value = selectedModel;
+                }
+                updateModelStatus();
+            }
+
+            function loadSelectedModel() {
+                const stored = localStorage.getItem(MODEL_STORAGE_KEY);
+                setSelectedModel(stored || 'auto', false);
+            }
+
+            function modelSortKey(modelId) {
+                const text = String(modelId || '').toLowerCase();
+                if (text === 'auto') return '0:auto';
+                if (isCloudModel(text)) return `2:${text}`;
+                return `1:${text}`;
+            }
+
+            function populateModelOptions(options) {
+                if (!modelSelect) return;
+
+                const unique = new Map();
+                unique.set('auto', { id: 'auto', label: 'Auto (Orchestrator)' });
+
+                (Array.isArray(options) ? options : []).forEach((entry) => {
+                    if (!entry) return;
+                    if (typeof entry === 'string') {
+                        const id = entry.trim();
+                        if (!id) return;
+                        unique.set(id, { id, label: id });
+                        return;
+                    }
+
+                    if (typeof entry === 'object') {
+                        const id = String(entry.id || entry.name || '').trim();
+                        if (!id) return;
+                        const provider = String(entry.provider || '').trim();
+                        const displayName = String(entry.display_name || entry.name || id).trim();
+                        const label = provider && provider !== 'ollama' && displayName !== id
+                            ? `${displayName} (${provider})`
+                            : (provider && provider !== 'ollama' ? `${id} (${provider})` : displayName || id);
+                        unique.set(id, { id, label });
+                    }
+                });
+
+                const sorted = Array.from(unique.values()).sort((a, b) => modelSortKey(a.id).localeCompare(modelSortKey(b.id)));
+
+                modelSelect.innerHTML = '';
+                sorted.forEach((item) => {
+                    const opt = document.createElement('option');
+                    opt.value = item.id;
+                    opt.textContent = item.label;
+                    modelSelect.appendChild(opt);
+                });
+
+                setSelectedModel(selectedModel, false);
+            }
+
+            async function refreshModelOptions() {
+                try {
+                    const allRes = await fetch(`${backendUrl}/api/providers/models/all`);
+                    if (allRes.ok) {
+                        const allData = await allRes.json();
+                        if (Array.isArray(allData.models) && allData.models.length > 0) {
+                            populateModelOptions(allData.models);
+                            return;
+                        }
+                    }
+                } catch (error) {
+                    console.warn('[LOOM] Could not fetch unified model list:', error);
+                }
+
+                try {
+                    const localRes = await fetch(`${backendUrl}/api/models`);
+                    if (!localRes.ok) throw new Error(localRes.statusText);
+                    const localData = await localRes.json();
+                    const models = Array.isArray(localData.models) ? localData.models : [];
+                    populateModelOptions(models);
+                } catch (error) {
+                    console.warn('[LOOM] Could not fetch local model list:', error);
+                    populateModelOptions([]);
+                }
+            }
 
             // Load message history from localStorage
             function loadHistory() {
@@ -744,6 +1031,129 @@
             // Load history on page load
             loadHistory();
             updateContextIndicator();
+            loadSelectedModel();
+            updateModelStatus();
+            void refreshModelOptions();
+            if (modelSelect) {
+                modelSelect.addEventListener('change', () => {
+                    const next = modelSelect.value || 'auto';
+                    setSelectedModel(next, true);
+                    addSystemMessage(`Model selected: ${humanModelName(selectedModel)}`);
+                });
+            }
+
+            // --- Session picker ---
+            const sessionSelect = document.getElementById('sessionSelect');
+            let currentSessionName = '';
+            function loadSessionsList() {
+                fetch(`${backendUrl}/api/sessions`)
+                    .then(res => res.json())
+                    .then(data => {
+                        const sessions = data.sessions || {};
+                        const names = Object.keys(sessions).sort();
+                        sessionSelect.innerHTML = '<option value="">— New —</option>';
+                        names.forEach(name => {
+                            const meta = sessions[name];
+                            const count = meta.entryCount || 0;
+                            const opt = document.createElement('option');
+                            opt.value = name;
+                            opt.textContent = count ? `${name} (${count})` : name;
+                            sessionSelect.appendChild(opt);
+                        });
+                    })
+                    .catch(() => { sessionSelect.innerHTML = '<option value="">— New —</option>'; });
+            }
+            function loadSessionIntoView(name) {
+                if (!name) {
+                    messageHistory = [];
+                    messagesDiv.innerHTML = '';
+                    currentSessionName = '';
+                    addSystemMessage('New chat. Say something.');
+                    saveHistory();
+                    updateContextIndicator();
+                    return;
+                }
+                fetch(`${backendUrl}/api/sessions/${encodeURIComponent(name)}`)
+                    .then(res => res.ok ? res.json() : Promise.reject(new Error(res.statusText)))
+                    .then(session => {
+                        const entries = session.entries || [];
+                        messageHistory = entries.map(e => ({
+                            type: e.type || 'system',
+                            content: e.content || '',
+                            timestamp: e.timestamp || Date.now(),
+                            isComplete: true
+                        }));
+                        messagesDiv.innerHTML = '';
+                        messageHistory.forEach(msg => restoreMessage(msg));
+                        currentSessionName = name;
+                        saveHistory();
+                        updateContextIndicator();
+                        scrollToBottom();
+                    })
+                    .catch(() => addSystemMessage('Failed to load session: ' + name));
+            }
+            sessionSelect.addEventListener('change', () => loadSessionIntoView(sessionSelect.value || ''));
+            loadSessionsList();
+
+            // --- Files panel ---
+            const filesOverlay = document.getElementById('filesOverlay');
+            const filesList = document.getElementById('filesList');
+            const filesEmpty = document.getElementById('filesEmpty');
+            const fileContentPanel = document.getElementById('fileContentPanel');
+            const fileContentPath = document.getElementById('fileContentPath');
+            const fileContentPre = document.getElementById('fileContentPre');
+            const filesPanelTitle = document.getElementById('filesPanelTitle');
+            document.getElementById('btnFiles').addEventListener('click', () => {
+                filesOverlay.classList.add('open');
+                fileContentPanel.classList.remove('show');
+                filesPanelTitle.textContent = 'Files';
+                filesEmpty.textContent = 'Loading…';
+                filesEmpty.style.display = 'block';
+                filesList.querySelectorAll('.file-item, .files-error').forEach(el => el.remove());
+                fetch(`${backendUrl}/api/files/list`)
+                    .then(res => {
+                        if (!res.ok) throw new Error(res.status === 400 ? 'Data folder not configured' : res.statusText);
+                        return res.json();
+                    })
+                    .then(data => {
+                        const files = (data.files || []).filter(f => !f.is_dir);
+                        filesEmpty.style.display = 'none';
+                        if (files.length === 0) {
+                            filesEmpty.textContent = 'No files in data folder.';
+                            filesEmpty.style.display = 'block';
+                            return;
+                        }
+                        files.forEach(f => {
+                            const btn = document.createElement('button');
+                            btn.className = 'file-item';
+                            btn.type = 'button';
+                            const size = f.size >= 1024 ? (f.size / 1024).toFixed(1) + ' KB' : f.size + ' B';
+                            btn.innerHTML = `<span>${escapeHtml(f.name)}</span><div class="file-meta">${escapeHtml(f.path)} · ${size}</div>`;
+                            btn.addEventListener('click', () => {
+                                fetch(`${backendUrl}/api/files/read`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ path: f.path, mode: 'auto', max_chars: 80000 })
+                                })
+                                    .then(r => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
+                                    .then(result => {
+                                        fileContentPath.textContent = f.path;
+                                        fileContentPre.textContent = result.content || '(empty)';
+                                        fileContentPanel.classList.add('show');
+                                        filesPanelTitle.textContent = f.name;
+                                    })
+                                    .catch(() => { fileContentPath.textContent = f.path; fileContentPre.textContent = 'Could not read file.'; fileContentPanel.classList.add('show'); });
+                            });
+                            filesList.appendChild(btn);
+                        });
+                    })
+                    .catch(err => {
+                        filesEmpty.textContent = err.message || 'Could not list files.';
+                        filesEmpty.style.display = 'block';
+                    });
+            });
+            document.getElementById('filesClose').addEventListener('click', () => filesOverlay.classList.remove('open'));
+            document.getElementById('fileContentBack').addEventListener('click', () => { fileContentPanel.classList.remove('show'); filesPanelTitle.textContent = 'Files'; });
             
             // If no history, show initial message
             if (messageHistory.length === 0) {
@@ -790,6 +1200,8 @@
                     });
                     addSystemMessage('✓ Connected to Loom backend');
                 }
+                void refreshModelOptions();
+                updateModelStatus();
             });
 
             socket.on('disconnect', (reason) => {
@@ -871,10 +1283,14 @@
             });
 
             socket.on('ai_status', (data) => {
+                if (data && data.model) {
+                    lastResponseModel = String(data.model);
+                }
                 if (data.status === 'running') {
                     typingIndicator.classList.add('active');
                     isProcessing = true;
                     updateSendButton();
+                    updateModelStatus('running');
                 } else if (data.status === 'success' || data.status === 'error') {
                     typingIndicator.classList.remove('active');
                     isProcessing = false;
@@ -902,6 +1318,7 @@
                     }
                     currentAIResponse = null;
                     updateContextIndicator();
+                    updateModelStatus();
                 }
                 });
             }
@@ -1338,7 +1755,7 @@
   /run <command>   - Alias for /cmd
 
 💬 CHAT:
-  /ai <prompt>     - Send to AI (default model: gpt-oss:120b)
+  /ai <prompt>     - Send to AI (selected model: ${humanModelName(selectedModel)})
   /clear           - Clear chat history
   /history         - Show command history
 
@@ -1356,7 +1773,7 @@ Examples:
 
 ⚠️ Remote router not available. Restart backend to enable.
 
-Default AI model: llama3.1:8b
+Selected AI model: ${humanModelName(selectedModel)}
 
 Basic commands still work:
   /clear           - Clear chat history
@@ -1553,12 +1970,13 @@ Platform: ${data.platform}`;
                 
                 socketToUse.emit('chat', {
                     prompt: finalPrompt,
-                    model: 'gpt-oss:120b' // Default model
+                    model: selectedModel || 'auto'
                 });
                 
                 isProcessing = true;
                 updateSendButton();
                 typingIndicator.classList.add('active');
+                updateModelStatus('running');
             }
             
             // Set up send button click handler (after function is defined)

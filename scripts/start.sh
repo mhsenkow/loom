@@ -14,6 +14,9 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 PID_FILE="$ROOT/.notebook.pids"
+AUTO_SHARE="$(printf '%s' "${LOOM_AUTO_SHARE_CHAT:-false}" | tr '[:upper:]' '[:lower:]')"
+SHARE_ACTIVE=false
+SHARE_URL=""
 
 # Check prerequisites
 echo -e "${GREEN}==> Checking prerequisites...${NC}"
@@ -41,6 +44,16 @@ fi
 if ! command -v node &> /dev/null; then
     echo -e "${RED}Error: node not found. Please install Node.js 18+${NC}"
     exit 1
+fi
+
+# Optional: Cloudflare tunnel support for one-click public chat sharing
+if command -v cloudflared &> /dev/null; then
+    echo -e "${GREEN}✓ cloudflared is installed (public chat sharing available)${NC}"
+    CLOUDFLARED_AVAILABLE=true
+else
+    CLOUDFLARED_AVAILABLE=false
+    echo -e "${YELLOW}Info: cloudflared not found. Public chat sharing from app is unavailable.${NC}"
+    echo -e "${YELLOW}      Install with: brew install cloudflared${NC}"
 fi
 
 # Mac-specific: Ensure Ollama uses Metal GPU acceleration on Apple Silicon
@@ -186,17 +199,56 @@ fi
 # Wait a moment for frontend to start
 sleep 2
 
+# Optional: auto-share chat on startup (used by `make notebook-open-share`)
+if [[ "$AUTO_SHARE" == "1" || "$AUTO_SHARE" == "true" || "$AUTO_SHARE" == "yes" ]]; then
+    if [ "$CLOUDFLARED_AVAILABLE" = true ]; then
+        echo -e "${CYAN}==> Starting public chat share...${NC}"
+        SHARE_RESP="$(curl -s -X POST "http://localhost:8000/api/share/start" \
+            -H "Content-Type: application/json" \
+            -d "{\"target_url\":\"http://127.0.0.1:8000\"}")"
+        SHARE_URL="$(printf '%s' "$SHARE_RESP" | python3 -c 'import json,sys
+try:
+    data=json.load(sys.stdin)
+    print(data.get("public_chat_url",""))
+except Exception:
+    print("")
+')"
+        SHARE_ERR="$(printf '%s' "$SHARE_RESP" | python3 -c 'import json,sys
+try:
+    data=json.load(sys.stdin)
+    print(data.get("detail",""))
+except Exception:
+    print("")
+')"
+        if [ -n "$SHARE_URL" ]; then
+            SHARE_ACTIVE=true
+            echo -e "${GREEN}✓ Public share active: ${SHARE_URL}${NC}"
+        else
+            echo -e "${YELLOW}Warning: ${SHARE_ERR:-Failed to start public share}${NC}"
+        fi
+    else
+        echo -e "${YELLOW}Warning: Auto-share requested, but cloudflared is not installed.${NC}"
+    fi
+fi
+
 echo ""
-echo -e "${GREEN}╔════════════════════════════════════════╗"
-echo -e "║  ${CYAN}Notebook is open${GREEN}                        ║"
-echo -e "║                                          ║"
-echo -e "║  ${CYAN}Frontend:${NC}  ${GREEN}http://localhost:5173${NC}        ${GREEN}║"
-echo -e "║  ${CYAN}Backend:${NC}   ${GREEN}http://localhost:8000${NC}        ${GREEN}║"
-echo -e "║  ${CYAN}API docs:${NC}  ${GREEN}http://localhost:8000/docs${NC}     ${GREEN}║"
-echo -e "║                                          ║"
-echo -e "║  ${YELLOW}Press Ctrl+C to close${NC}              ${GREEN}║"
-echo -e "║  ${YELLOW}Or run: make notebook-close${NC}        ${GREEN}║"
-echo -e "╚════════════════════════════════════════╝"
+echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗"
+echo -e "║  ${CYAN}Notebook is open${GREEN}                                                ║"
+echo -e "║                                                              ║"
+echo -e "║  ${CYAN}Frontend:${NC}   ${GREEN}http://localhost:5173${NC}                           ${GREEN}║"
+echo -e "║  ${CYAN}Backend:${NC}    ${GREEN}http://localhost:8000${NC}                           ${GREEN}║"
+echo -e "║  ${CYAN}API docs:${NC}   ${GREEN}http://localhost:8000/docs${NC}                      ${GREEN}║"
+if [ "$SHARE_ACTIVE" = true ]; then
+echo -e "║  ${CYAN}Share URL:${NC}  ${GREEN}${SHARE_URL}${NC}  ${GREEN}║"
+elif [ "$CLOUDFLARED_AVAILABLE" = true ]; then
+echo -e "║  ${CYAN}Share:${NC}      ${GREEN}Click SHARE CHAT in the app title bar${NC}          ${GREEN}║"
+else
+echo -e "║  ${CYAN}Share:${NC}      ${YELLOW}Install cloudflared: brew install cloudflared${NC}  ${GREEN}║"
+fi
+echo -e "║                                                              ║"
+echo -e "║  ${YELLOW}Press Ctrl+C to close${NC}                                      ${GREEN}║"
+echo -e "║  ${YELLOW}Or run: make notebook-close${NC}                                ${GREEN}║"
+echo -e "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 
 # Wait for processes

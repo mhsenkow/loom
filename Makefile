@@ -1,4 +1,4 @@
-.PHONY: notebook-open notebook-close start stop install clean help default
+.PHONY: notebook-open notebook-open-share notebook-close start stop install clean help default
 
 # Default target - show help when just running 'make'
 default: help
@@ -9,6 +9,9 @@ help:
 # Branded commands
 notebook-open:
 	@./scripts/start.sh
+
+notebook-open-share:
+	@LOOM_AUTO_SHARE_CHAT=true ./scripts/start.sh
 
 notebook-close:
 	@./scripts/stop.sh

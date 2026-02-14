@@ -126,6 +126,7 @@ type SettingsSectionId =
   | 'model_library'
   | 'orchestrator'
   | 'storage'
+  | 'sharing'
   | 'voice'
   | 'integrations'
   | 'image_models'
@@ -141,6 +142,7 @@ const SETTINGS_SECTIONS: Array<{
   { id: 'model_library', label: 'Model Library', subtitle: 'Cloud + local model catalog', icon: '◍' },
   { id: 'orchestrator', label: 'Orchestrator', subtitle: 'Routing and priorities', icon: '◈' },
   { id: 'storage', label: 'Storage', subtitle: 'Data folder and files', icon: '◌' },
+  { id: 'sharing', label: 'Share Chat Site', subtitle: 'One-click public link', icon: '◐' },
   { id: 'voice', label: 'Voice & Avatar', subtitle: 'Speech and persona', icon: '◎' },
 ]
 
@@ -162,6 +164,21 @@ interface ProviderInfo {
   supports_quick?: boolean
   free_tier_available?: boolean
   notes?: string
+}
+
+interface ShareStatusPayload {
+  active: boolean
+  provider: string
+  cloudflared_installed: boolean
+  cloudflared_path?: string | null
+  local_target_url?: string
+  local_chat_url?: string
+  public_base_url?: string | null
+  public_chat_url?: string | null
+  started_at?: number | null
+  last_error?: string | null
+  remote_api_blocked?: boolean
+  status?: string
 }
 
 // Apply theme to document (call on load and when user changes)
@@ -283,6 +300,9 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null)
   const [downloadProgress, setDownloadProgress] = useState<{ model: string; status: string; message?: string } | null>(null)
   const [openFolderStatus, setOpenFolderStatus] = useState<string | null>(null)
+  const [shareStatus, setShareStatus] = useState<ShareStatusPayload | null>(null)
+  const [shareBusy, setShareBusy] = useState(false)
+  const [shareFeedback, setShareFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
 
   const fetchProviders = useCallback(async () => {
     try {
@@ -336,6 +356,86 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     ])
   }, [fetchProviders, fetchOllamaModels, fetchImageModels])
 
+  const fetchShareStatus = useCallback(async (): Promise<ShareStatusPayload | null> => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/share/status`)
+      if (!response.ok) return null
+      const payload = await response.json() as ShareStatusPayload
+      setShareStatus(payload)
+      return payload
+    } catch (error) {
+      console.error('[LOOM] Failed to fetch share status:', error)
+      return null
+    }
+  }, [])
+
+  const copyText = useCallback(async (value: string): Promise<boolean> => {
+    if (!value) return false
+    try {
+      await navigator.clipboard.writeText(value)
+      return true
+    } catch (error) {
+      console.error('[LOOM] Clipboard write failed:', error)
+      return false
+    }
+  }, [])
+
+  const startChatShare = useCallback(async () => {
+    setShareBusy(true)
+    setShareFeedback(null)
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/share/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_url: API_BASE_URL }),
+      })
+      const payload = await response.json().catch(() => ({})) as ShareStatusPayload & { detail?: string }
+      if (!response.ok) {
+        const detail = typeof payload.detail === 'string' ? payload.detail : 'Failed to start sharing.'
+        throw new Error(detail)
+      }
+      setShareStatus(payload)
+      window.dispatchEvent(new CustomEvent('loom:share-status-changed', { detail: payload }))
+      if (payload.public_chat_url) {
+        const copied = await copyText(payload.public_chat_url)
+        setShareFeedback({
+          type: 'success',
+          message: copied
+            ? 'Public chat link is live and copied to clipboard.'
+            : 'Public chat link is live.',
+        })
+      } else {
+        setShareFeedback({ type: 'success', message: 'Sharing started.' })
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setShareFeedback({ type: 'error', message })
+    } finally {
+      setShareBusy(false)
+    }
+  }, [copyText])
+
+  const stopChatShare = useCallback(async () => {
+    setShareBusy(true)
+    setShareFeedback(null)
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/share/stop`, { method: 'POST' })
+      const payload = await response.json().catch(() => ({})) as ShareStatusPayload & { detail?: string }
+      if (!response.ok) {
+        const detail = typeof payload.detail === 'string' ? payload.detail : 'Failed to stop sharing.'
+        throw new Error(detail)
+      }
+      setShareStatus(payload)
+      window.dispatchEvent(new CustomEvent('loom:share-status-changed', { detail: payload }))
+      setShareFeedback({ type: 'success', message: 'Public sharing stopped.' })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setShareFeedback({ type: 'error', message })
+    } finally {
+      setShareBusy(false)
+    }
+  }, [])
+
   useEffect(() => {
     if (isOpen) {
       setSettings(loadSettings())
@@ -343,14 +443,27 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       setSaved(false)
       setDataFolderStatus('idle')
       setProviderFeedback(null)
+      setShareFeedback(null)
       void refreshModelLibrary()
+      void fetchShareStatus()
     }
-  }, [isOpen, refreshModelLibrary])
+  }, [isOpen, refreshModelLibrary, fetchShareStatus])
 
   useEffect(() => {
     if (!isOpen || activeSection !== 'model_library') return
     void refreshModelLibrary()
   }, [activeSection, isOpen, refreshModelLibrary])
+
+  useEffect(() => {
+    if (!isOpen || activeSection !== 'sharing') return
+    void fetchShareStatus()
+    const intervalId = window.setInterval(() => {
+      void fetchShareStatus()
+    }, 8000)
+    return () => {
+      window.clearInterval(intervalId)
+    }
+  }, [activeSection, isOpen, fetchShareStatus])
 
   const handleConnectProvider = async (providerName: string) => {
     const apiKey = (providerInputs[providerName] || '').trim()
@@ -1292,6 +1405,136 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               Folder not found or not accessible.
             </p>
           )}
+        </section>
+      )
+    }
+
+    if (activeSection === 'sharing') {
+      const isActive = Boolean(shareStatus?.active)
+      const publicUrl = shareStatus?.public_chat_url || ''
+      const localUrl = shareStatus?.local_chat_url || `${API_BASE_URL}/chat`
+
+      return (
+        <section className="space-y-4">
+          {shareFeedback && (
+            <div className={`border px-3 py-2 text-[11px] ${
+              shareFeedback.type === 'success'
+                ? 'border-phosphor text-phosphor bg-void'
+                : 'border-red-500/60 text-red-300 bg-red-950/20'
+            }`}>
+              {shareFeedback.message}
+            </div>
+          )}
+
+          <div className="border border-terminal-border bg-void/70 p-3 space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-[11px] text-phosphor font-bold tracking-wider">ONE-CLICK PUBLIC CHAT SITE</div>
+                <div className="text-[10px] text-terminal-muted mt-1">
+                  Turns your local `/chat` into a public link tied to your machine.
+                </div>
+              </div>
+              <div className={`px-2 py-1 text-[10px] border ${
+                isActive
+                  ? 'border-phosphor text-phosphor'
+                  : 'border-terminal-border text-terminal-muted'
+              }`}>
+                {isActive ? 'LIVE' : 'OFF'}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (isActive) {
+                    void stopChatShare()
+                    return
+                  }
+                  void startChatShare()
+                }}
+                disabled={shareBusy}
+                className="px-3 py-1 text-[10px] border border-phosphor text-phosphor hover:bg-phosphor/10 disabled:opacity-50"
+              >
+                {shareBusy ? 'WORKING...' : isActive ? 'STOP SHARING' : 'START SHARING'}
+              </button>
+              <button
+                type="button"
+                onClick={() => { void fetchShareStatus() }}
+                disabled={shareBusy}
+                className="px-3 py-1 text-[10px] border border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor disabled:opacity-50"
+              >
+                REFRESH
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void copyText(localUrl).then((copied) => {
+                    setShareFeedback({
+                      type: copied ? 'success' : 'error',
+                      message: copied ? 'Local chat URL copied.' : 'Could not copy local chat URL.',
+                    })
+                  })
+                }}
+                className="px-3 py-1 text-[10px] border border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor"
+              >
+                COPY LOCAL URL
+              </button>
+            </div>
+
+            {!shareStatus?.cloudflared_installed && (
+              <div className="border border-yellow-600/70 bg-yellow-900/20 px-3 py-2 text-[10px] text-yellow-200">
+                `cloudflared` is not installed. Install it first, then click Start Sharing.
+                <div className="mt-1 font-mono text-yellow-100">brew install cloudflared</div>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <div>
+                <div className="text-[10px] text-terminal-muted mb-1">Public URL</div>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={publicUrl || 'Not active yet'}
+                    readOnly
+                    className="flex-1 bg-slate border border-terminal-border px-2 py-1 text-[11px] text-phosphor font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!publicUrl) return
+                      void copyText(publicUrl).then((copied) => {
+                        setShareFeedback({
+                          type: copied ? 'success' : 'error',
+                          message: copied ? 'Public chat URL copied.' : 'Could not copy public chat URL.',
+                        })
+                      })
+                    }}
+                    disabled={!publicUrl}
+                    className="px-3 py-1 text-[10px] border border-terminal-border text-terminal-muted hover:text-phosphor hover:border-phosphor disabled:opacity-45"
+                  >
+                    COPY
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <div className="text-[10px] text-terminal-muted mb-1">Local URL</div>
+                <input
+                  type="text"
+                  value={localUrl}
+                  readOnly
+                  className="w-full bg-slate border border-terminal-border px-2 py-1 text-[11px] text-terminal-muted font-mono"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="border border-terminal-border bg-void/50 p-3 text-[10px] text-terminal-muted space-y-1">
+            <p>Share mode uses Cloudflare Quick Tunnel (`cloudflared tunnel --url ...`).</p>
+            <p>Safety: `/api/remote/*` command/filesystem endpoints are disabled while sharing is active.</p>
+            <p>Keep this app running while shared links are in use.</p>
+          </div>
         </section>
       )
     }

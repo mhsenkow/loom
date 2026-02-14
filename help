@@ -7,6 +7,7 @@ cat << 'EOF'
 
 📖 Quick Start:
   make notebook-open    Open Notebook (start all services)
+  make notebook-open-share  Open Notebook and auto-publish chat link (if cloudflared installed)
   make notebook-close   Close Notebook (stop all services)
 
 🚀 Alternative Commands:
@@ -33,6 +34,7 @@ cat << 'EOF'
   Frontend:  http://localhost:5173
   Backend:   http://localhost:8000
   API docs:  http://localhost:8000/docs
+  Share:     Click 🌐 SHARE CHAT in title bar
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 EOF
