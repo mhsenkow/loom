@@ -90,11 +90,11 @@ const UI_VISUAL_PRESETS: Record<
   UiPresetId,
   Pick<Settings, 'uiFrameWeight' | 'uiGlowLevel' | 'uiTextureLevel' | 'uiContrastLevel' | 'uiTintShift' | 'uiCornerStyle'>
 > = {
-  command: { uiFrameWeight: 38, uiGlowLevel: 48, uiTextureLevel: 42, uiContrastLevel: 46, uiTintShift: 0, uiCornerStyle: 'hard' },
-  broadcast: { uiFrameWeight: 68, uiGlowLevel: 58, uiTextureLevel: 46, uiContrastLevel: 62, uiTintShift: -8, uiCornerStyle: 'chamfer' },
-  arcade: { uiFrameWeight: 54, uiGlowLevel: 86, uiTextureLevel: 64, uiContrastLevel: 72, uiTintShift: 16, uiCornerStyle: 'soft' },
-  lab: { uiFrameWeight: 24, uiGlowLevel: 28, uiTextureLevel: 14, uiContrastLevel: 54, uiTintShift: -6, uiCornerStyle: 'soft' },
-  vault: { uiFrameWeight: 78, uiGlowLevel: 34, uiTextureLevel: 78, uiContrastLevel: 40, uiTintShift: 5, uiCornerStyle: 'chamfer' },
+  command: { uiFrameWeight: 30, uiGlowLevel: 24, uiTextureLevel: 36, uiContrastLevel: 46, uiTintShift: 0, uiCornerStyle: 'hard' },
+  broadcast: { uiFrameWeight: 54, uiGlowLevel: 40, uiTextureLevel: 46, uiContrastLevel: 62, uiTintShift: -8, uiCornerStyle: 'chamfer' },
+  arcade: { uiFrameWeight: 46, uiGlowLevel: 64, uiTextureLevel: 64, uiContrastLevel: 72, uiTintShift: 16, uiCornerStyle: 'soft' },
+  lab: { uiFrameWeight: 22, uiGlowLevel: 16, uiTextureLevel: 14, uiContrastLevel: 54, uiTintShift: -6, uiCornerStyle: 'soft' },
+  vault: { uiFrameWeight: 64, uiGlowLevel: 26, uiTextureLevel: 78, uiContrastLevel: 40, uiTintShift: 5, uiCornerStyle: 'chamfer' },
 }
 
 const APPEARANCE_PROFILE_PRESETS: Array<{
@@ -247,9 +247,10 @@ export function applyVisualSystem(settings: VisualSystemSettings) {
   root.dataset.uiPreset = settings.uiPreset
   root.dataset.uiCorners = settings.uiCornerStyle
 
-  const frameWeightPx = (1 + (settings.uiFrameWeight / 100) * 5.2).toFixed(2)
-  const buttonLiftPx = (1 + (settings.uiFrameWeight / 100) * 4).toFixed(2)
-  const glow = (0.02 + (settings.uiGlowLevel / 100) * 0.9).toFixed(3)
+  const frameWeightPx = (1 + (settings.uiFrameWeight / 100) * 2.4).toFixed(2)
+  const borderWidthPx = (1 + (settings.uiFrameWeight / 100) * 0.9).toFixed(2)
+  const buttonLiftPx = (1 + (settings.uiFrameWeight / 100) * 2.2).toFixed(2)
+  const glow = (0.01 + (settings.uiGlowLevel / 100) * 0.3).toFixed(3)
   const texture = ((settings.uiTextureLevel / 100) * 0.5).toFixed(3)
   const contrast = (0.78 + (settings.uiContrastLevel / 100) * 0.64).toFixed(3)
   const tintMix = Math.round(Math.abs(settings.uiTintShift) * 0.65)
@@ -261,6 +262,7 @@ export function applyVisualSystem(settings: VisualSystemSettings) {
     : '0px'
 
   root.style.setProperty('--ui-frame-weight', `${frameWeightPx}px`)
+  root.style.setProperty('--ui-border-width', `${borderWidthPx}px`)
   root.style.setProperty('--ui-button-lift', `${buttonLiftPx}px`)
   root.style.setProperty('--ui-glow-strength', glow)
   root.style.setProperty('--ui-texture-opacity', texture)
@@ -301,8 +303,8 @@ export function loadSettings(): Settings {
       merged.crtBloomLevel = normalizeNumber(merged.crtBloomLevel, 28, 0, 100)
       merged.crtJitterLevel = normalizeNumber(merged.crtJitterLevel, 8, 0, 40)
       merged.crtScanDrift = normalizeNumber(merged.crtScanDrift, 100, 50, 180)
-      merged.uiFrameWeight = normalizeNumber(merged.uiFrameWeight, 38, UI_FRAME_WEIGHT_MIN, UI_FRAME_WEIGHT_MAX)
-      merged.uiGlowLevel = normalizeNumber(merged.uiGlowLevel, 48, UI_GLOW_MIN, UI_GLOW_MAX)
+      merged.uiFrameWeight = normalizeNumber(merged.uiFrameWeight, 30, UI_FRAME_WEIGHT_MIN, UI_FRAME_WEIGHT_MAX)
+      merged.uiGlowLevel = normalizeNumber(merged.uiGlowLevel, 24, UI_GLOW_MIN, UI_GLOW_MAX)
       merged.uiTextureLevel = normalizeNumber(merged.uiTextureLevel, 42, UI_TEXTURE_MIN, UI_TEXTURE_MAX)
       merged.uiContrastLevel = normalizeNumber(merged.uiContrastLevel, 46, UI_CONTRAST_MIN, UI_CONTRAST_MAX)
       merged.uiTintShift = normalizeNumber(merged.uiTintShift, 0, UI_TINT_MIN, UI_TINT_MAX)
@@ -349,8 +351,8 @@ function defaultSettings(): Settings {
     crtScanDrift: 100,
     uiPreset: 'command',
     uiCornerStyle: 'hard',
-    uiFrameWeight: 38,
-    uiGlowLevel: 48,
+    uiFrameWeight: 30,
+    uiGlowLevel: 24,
     uiTextureLevel: 42,
     uiContrastLevel: 46,
     uiTintShift: 0,
