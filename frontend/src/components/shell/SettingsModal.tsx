@@ -86,6 +86,17 @@ const UI_CORNER_OPTIONS: Array<{ id: UiCornerStyle; label: string; subtitle: str
   { id: 'chamfer', label: 'CHAMFER', subtitle: 'Cut corners, machine panel feel' },
 ]
 
+const UI_VISUAL_PRESETS: Record<
+  UiPresetId,
+  Pick<Settings, 'uiFrameWeight' | 'uiGlowLevel' | 'uiTextureLevel' | 'uiContrastLevel' | 'uiTintShift' | 'uiCornerStyle'>
+> = {
+  command: { uiFrameWeight: 38, uiGlowLevel: 48, uiTextureLevel: 42, uiContrastLevel: 46, uiTintShift: 0, uiCornerStyle: 'hard' },
+  broadcast: { uiFrameWeight: 68, uiGlowLevel: 58, uiTextureLevel: 46, uiContrastLevel: 62, uiTintShift: -8, uiCornerStyle: 'chamfer' },
+  arcade: { uiFrameWeight: 54, uiGlowLevel: 86, uiTextureLevel: 64, uiContrastLevel: 72, uiTintShift: 16, uiCornerStyle: 'soft' },
+  lab: { uiFrameWeight: 24, uiGlowLevel: 28, uiTextureLevel: 14, uiContrastLevel: 54, uiTintShift: -6, uiCornerStyle: 'soft' },
+  vault: { uiFrameWeight: 78, uiGlowLevel: 34, uiTextureLevel: 78, uiContrastLevel: 40, uiTintShift: 5, uiCornerStyle: 'chamfer' },
+}
+
 const APPEARANCE_PROFILE_PRESETS: Array<{
   id: string
   label: string
@@ -236,11 +247,11 @@ export function applyVisualSystem(settings: VisualSystemSettings) {
   root.dataset.uiPreset = settings.uiPreset
   root.dataset.uiCorners = settings.uiCornerStyle
 
-  const frameWeightPx = (1 + (settings.uiFrameWeight / 100) * 3.2).toFixed(2)
-  const buttonLiftPx = (1 + (settings.uiFrameWeight / 100) * 3).toFixed(2)
-  const glow = (0.05 + (settings.uiGlowLevel / 100) * 0.52).toFixed(3)
-  const texture = ((settings.uiTextureLevel / 100) * 0.34).toFixed(3)
-  const contrast = (0.92 + (settings.uiContrastLevel / 100) * 0.3).toFixed(3)
+  const frameWeightPx = (1 + (settings.uiFrameWeight / 100) * 5.2).toFixed(2)
+  const buttonLiftPx = (1 + (settings.uiFrameWeight / 100) * 4).toFixed(2)
+  const glow = (0.02 + (settings.uiGlowLevel / 100) * 0.9).toFixed(3)
+  const texture = ((settings.uiTextureLevel / 100) * 0.5).toFixed(3)
+  const contrast = (0.78 + (settings.uiContrastLevel / 100) * 0.64).toFixed(3)
   const tintMix = Math.round(Math.abs(settings.uiTintShift) * 0.65)
   const cornerRadiusPx = settings.uiCornerStyle === 'soft'
     ? `${Math.round(3 + (settings.uiFrameWeight / 100) * 8)}px`
@@ -831,6 +842,17 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     })
   }
 
+  const applyUiPreset = (presetId: UiPresetId) => {
+    const presetValues = UI_VISUAL_PRESETS[presetId]
+    if (!presetValues) return
+    setSettings((prev) => {
+      const next = { ...prev, uiPreset: presetId, ...presetValues }
+      applyVisualSystem(next)
+      window.dispatchEvent(new CustomEvent('loom:settings-updated', { detail: next }))
+      return next
+    })
+  }
+
   const selectedSection = SETTINGS_SECTIONS.find(section => section.id === activeSection) ?? SETTINGS_SECTIONS[0]
   const conversationProfile = buildConversationProfileFromSettings(settings)
   const conversationStoragePreview = buildConversationProfileStoragePreview(conversationProfile)
@@ -938,7 +960,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                   <button
                     key={preset.id}
                     type="button"
-                    onClick={() => updateSetting('uiPreset', preset.id)}
+                    onClick={() => applyUiPreset(preset.id)}
                     className={`p-2 border text-left ${
                       settings.uiPreset === preset.id
                         ? 'border-phosphor bg-void'

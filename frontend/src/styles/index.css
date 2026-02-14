@@ -300,12 +300,25 @@
   .loom-app {
     position: relative;
     isolation: isolate;
-    filter: contrast(var(--ui-contrast-scale, 1)) hue-rotate(calc(var(--ui-tint-angle, 0deg) + var(--ui-hue-bias, 0deg)));
+    filter:
+      contrast(var(--ui-contrast-scale, 1))
+      saturate(calc(0.86 + (0.44 * var(--ui-glow-strength, 0.28))))
+      hue-rotate(calc(var(--ui-tint-angle, 0deg) + var(--ui-hue-bias, 0deg)));
   }
 
   .loom-app > * {
     position: relative;
     z-index: 1;
+  }
+
+  .loom-app :is(button, input:not([type="range"]), select, textarea, .react-flow__node, .react-flow__handle) {
+    border-width: var(--ui-frame-weight, 1px);
+  }
+
+  .loom-app .text-phosphor {
+    text-shadow:
+      0 0 calc(1px + (8px * var(--ui-glow-strength, 0.28)))
+      color-mix(in srgb, var(--theme-phosphor) 26%, transparent);
   }
 
   .loom-app::before,
