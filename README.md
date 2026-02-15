@@ -1,5 +1,7 @@
 # LOOM // Personal Intelligence OS or "What if my AI UI was fun"
 
+feedback is a gift
+
 <img width="2560" height="1440" alt="image" src="https://github.com/user-attachments/assets/dfc9e8e9-8c69-4b9f-a149-4372fe9a6507" />
 
 
