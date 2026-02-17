@@ -299,7 +299,7 @@ const SETTINGS_SECTIONS: Array<{
   subtitle: string
   icon: string
 }> = [
-  { id: 'appearance', label: 'Appearance', subtitle: 'Theme, CRT, effects', icon: '◉' },
+  { id: 'appearance', label: 'Appearance', subtitle: 'Retro, Normcore, Business', icon: '◉' },
   { id: 'conversation', label: 'Conversation', subtitle: 'Goals and memory', icon: '◍' },
   { id: 'model_library', label: 'Model Library', subtitle: 'Cloud + local model catalog', icon: '◍' },
   { id: 'orchestrator', label: 'Orchestrator', subtitle: 'Routing and priorities', icon: '◈' },
@@ -365,6 +365,8 @@ const THEME_INLINE_KEYS = [
   '--theme-terminal-border',
   '--theme-terminal-muted',
   '--theme-terminal-gray',
+  '--theme-font',
+  '--theme-font-primary',
 ] as const
 
 /** Clear inline theme variables so stylesheet [data-theme="…"] rules apply (Retro). */
@@ -513,7 +515,8 @@ export function applyBusinessSystem(settings: BusinessSettings | null | undefine
       indigo: { main: '#4f46e5', dim: '#3730a3', border: '#312e81' },
       neutral: { main: '#525252', dim: '#404040', border: '#262626' },
     }
-    const accent = presetTheme ? presetTheme.accent : accentMap[s.businessAccent]
+    /* Accent always from user choice so Preset (Microsoft/Apple/etc.) + Accent (blue/slate/etc.) both matter */
+    const accent = accentMap[s.businessAccent]
 
     root.style.setProperty('--theme-void', presetTheme?.void ?? '#0f172a')
     root.style.setProperty('--theme-slate', presetTheme?.slate ?? '#1e293b')
@@ -551,6 +554,8 @@ export function applyBusinessSystem(settings: BusinessSettings | null | undefine
     root.style.setProperty('--ui-grid-opacity', '0.04')
     root.style.setProperty('--ui-ambient-opacity', '0.06')
     root.style.setProperty('--ui-panel-tone', '6%')
+    const densityScale = { comfortable: 1, compact: 0.9, dense: 0.78 }[s.businessDensity]
+    root.style.setProperty('--business-density-scale', String(densityScale))
     root.dataset.businessPreset = s.businessPreset
     root.dataset.businessShadows = s.businessShadows
     root.dataset.businessDensity = s.businessDensity
@@ -1535,6 +1540,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
           {appearanceTab === 'retro' && (
           <>
+          <p className="text-[10px] text-terminal-muted">CRT, terminal colors, and panel style. Pick a palette and tweak the vibe.</p>
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-3 p-2 border border-terminal-border bg-void">
               <div>
@@ -1589,6 +1595,10 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             </div>
           </div>
 
+          <div>
+            <div className="text-[10px] text-phosphor font-bold tracking-wider mb-2">PALETTE</div>
+            <div className="text-[9px] text-terminal-muted mb-2">Terminal color set — phosphor, ruby, sapphire, diamond, ebony.</div>
+          </div>
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-2">
             {THEMES.map((t) => (
               <button
@@ -1758,9 +1768,9 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               className="w-full flex items-center justify-between gap-2 p-3 text-left border-b border-terminal-border/50 hover:bg-void"
             >
               <div>
-                <div className="text-[10px] text-phosphor font-bold tracking-wider">FONT WEIGHTS</div>
+                <div className="text-[10px] text-phosphor font-bold tracking-wider">TYPOGRAPHY WEIGHT</div>
                 <div className="text-[9px] text-terminal-muted">
-                  {FONT_WEIGHT_PRESETS.find(p => p.id === settings.fontWeightSet)?.label ?? 'Custom'} — body, heading, mono, UI
+                  {FONT_WEIGHT_PRESETS.find(p => p.id === settings.fontWeightSet)?.label ?? 'Custom'} — preset or fine-tune body, heading, mono, UI
                 </div>
               </div>
               <span className="text-phosphor text-sm transition-transform" style={{ transform: fontWeightsAccordionOpen ? 'rotate(180deg)' : 'none' }}>▼</span>
@@ -1768,7 +1778,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             {fontWeightsAccordionOpen && (
               <div className="p-3 space-y-3 border-t border-terminal-border/50">
                 <div>
-                  <div className="text-[10px] text-phosphor font-bold tracking-wider mb-2">SET</div>
+                  <div className="text-[10px] text-phosphor font-bold tracking-wider mb-2">PRESET</div>
                   <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
                     {FONT_WEIGHT_PRESETS.map((preset) => (
                       <button
@@ -1785,7 +1795,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                     ))}
                   </div>
                 </div>
-                <div className="text-[10px] text-phosphor font-bold tracking-wider">VALUES (when Custom, or to tweak)</div>
+                <div className="text-[10px] text-phosphor font-bold tracking-wider">FINE-TUNE (sliders apply when Custom or override preset)</div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                   {[
                     { key: 'fontWeightBody' as const, label: 'Body', desc: 'Main content' },
@@ -1824,7 +1834,8 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           </div>
 
           <div className="pt-2 border-t border-terminal-border/60">
-            <div className="text-[10px] text-phosphor font-bold tracking-wider mb-2">HACKER PROFILES</div>
+            <div className="text-[10px] text-phosphor font-bold tracking-wider mb-2">ONE-CLICK VIBES</div>
+            <div className="text-[9px] text-terminal-muted mb-2">Apply a full retro style (theme + UI preset + corners) in one tap.</div>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-2">
               {APPEARANCE_PROFILE_PRESETS.map((profile) => (
                 <button
@@ -1928,9 +1939,10 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
           {appearanceTab === 'normcore' && (
           <div className="space-y-4">
+            <p className="text-[10px] text-terminal-muted">Plain, grey, low-impact. Base, borders, contrast, and opacity.</p>
             <div className="border border-terminal-border p-3 bg-void/70 space-y-3">
               <div className="text-[10px] text-phosphor font-bold tracking-wider">NORMCORE UI</div>
-              <div className="text-[9px] text-terminal-muted">Plain, monotype grey. Low impact, light or dark.</div>
+              <div className="text-[9px] text-terminal-muted">Light, dark, or system. Monotype grey, minimal chrome.</div>
             </div>
             <div>
               <div className="text-[10px] text-phosphor font-bold tracking-wider mb-2">BASE</div>
@@ -2023,9 +2035,10 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
           {appearanceTab === 'business' && (
           <div className="space-y-4">
+            <p className="text-[10px] text-terminal-muted">Microsoft, Apple, Meta, IBM–style. Preset sets fonts and glass; Accent tints links and borders.</p>
             <div className="border border-terminal-border p-3 bg-void/70 space-y-3">
               <div className="text-[10px] text-phosphor font-bold tracking-wider">BUSINESS UI SYSTEM</div>
-              <div className="text-[9px] text-terminal-muted">Design system–aligned: enterprise, dashboard, and product suite paradigms.</div>
+              <div className="text-[9px] text-terminal-muted">Design system–aligned: Fluent, Plex, SF, glass. Preset + Accent + Density + Corners + Shadows.</div>
             </div>
             <div>
               <div className="text-[10px] text-phosphor font-bold tracking-wider mb-2">PRESET</div>
@@ -2047,6 +2060,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             </div>
             <div>
               <div className="text-[10px] text-phosphor font-bold tracking-wider mb-2">ACCENT</div>
+              <div className="text-[9px] text-terminal-muted mb-1.5">Tints the preset: links, borders, focus.</div>
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
                 {BUSINESS_ACCENT_OPTIONS.map((opt) => (
                   <button
@@ -3189,7 +3203,12 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               <p className="text-terminal-muted text-xs mt-1">{selectedSection.subtitle}</p>
             </div>
 
-            {renderActiveSection()}
+            <div
+              data-appearance-retro-tab={activeSection === 'appearance' && appearanceTab === 'retro' ? 'true' : undefined}
+              className="contents"
+            >
+              {renderActiveSection()}
+            </div>
           </main>
         </div>
 

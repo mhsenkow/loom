@@ -138,6 +138,28 @@
 
 [data-appearance-mode="business"] .loom-app {
   font-family: var(--theme-font, system-ui, sans-serif) !important;
+  /* --business-density-scale (1 | 0.9 | 0.78) set by applyBusinessSystem for future spacing use */
+}
+
+/* When viewing Appearance > Retro tab, force dark backgrounds so presets/swatches don’t show white */
+[data-appearance-retro-tab="true"] [class*="bg-void"] {
+  background-color: #050505 !important;
+}
+
+[data-appearance-retro-tab="true"] .bg-void\/40 {
+  background-color: rgba(5, 5, 5, 0.4) !important;
+}
+
+[data-appearance-retro-tab="true"] .bg-void\/60 {
+  background-color: rgba(5, 5, 5, 0.6) !important;
+}
+
+[data-appearance-retro-tab="true"] .bg-void\/70 {
+  background-color: rgba(5, 5, 5, 0.7) !important;
+}
+
+[data-appearance-retro-tab="true"] .border-terminal-border {
+  border-color: #2a2a2a !important;
 }
 
 [data-ui-preset="command"] {
