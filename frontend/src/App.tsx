@@ -1,4 +1,4 @@
-import { Component, useState, useEffect, useRef } from 'react'
+import { Component, useState, useEffect, useLayoutEffect, useRef } from 'react'
 import { CRTContainer } from './components/shell/CRTContainer'
 import { TitleBar } from './components/shell/TitleBar'
 import { TerminalFeed } from './components/terminal/TerminalFeed'
@@ -9,8 +9,15 @@ import {
   saveSettings,
   applyTheme,
   applyVisualSystem,
+  applyAppearanceMode,
+  applyNormcoreSystem,
+  applyBusinessSystem,
+  applyFontWeights,
+  getFontWeightVars,
+  clearThemeInlineOverrides,
   type Settings,
   type CrtIntensityPreset,
+  type AppearanceMode,
 } from './components/shell/SettingsModal'
 import { ShortcutCheatSheet } from './components/shell/ShortcutCheatSheet'
 import { ToastHost } from './components/shell/ToastHost'
@@ -78,6 +85,8 @@ function App() {
   const [crtBloomLevel, setCrtBloomLevel] = useState<number>(() => loadSettings().crtBloomLevel)
   const [crtJitterLevel, setCrtJitterLevel] = useState<number>(() => loadSettings().crtJitterLevel)
   const [crtScanDrift, setCrtScanDrift] = useState<number>(() => loadSettings().crtScanDrift)
+  const [appearanceMode, setAppearanceMode] = useState<AppearanceMode>(() => loadSettings().appearanceMode)
+  const [fontWeightVars, setFontWeightVars] = useState<React.CSSProperties>(() => getFontWeightVars(loadSettings()))
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
@@ -86,11 +95,26 @@ function App() {
   const initializedLoadedModelRef = useRef(false)
   const initializedActiveModelRef = useRef(false)
 
-  // Apply saved theme on load
+  useLayoutEffect(() => {
+    const s = loadSettings()
+    applyFontWeights(s)
+    setFontWeightVars(getFontWeightVars(s))
+  }, [])
+
+  // Apply saved theme and appearance mode on load
   useEffect(() => {
     const s = loadSettings()
     applyTheme(s.theme)
-    applyVisualSystem(s)
+    applyAppearanceMode(s.appearanceMode)
+    if (s.appearanceMode === 'retro') {
+      clearThemeInlineOverrides()
+      applyVisualSystem(s)
+    } else if (s.appearanceMode === 'normcore') {
+      applyNormcoreSystem(s)
+    } else if (s.appearanceMode === 'business') {
+      applyBusinessSystem(s)
+    }
+    applyFontWeights(s)
     setCrtEnabled(s.crtEnabled)
     setCrtIntensity(s.crtIntensity)
     setCrtBurstsEnabled(s.crtBurstsEnabled)
@@ -99,6 +123,7 @@ function App() {
     setCrtBloomLevel(s.crtBloomLevel)
     setCrtJitterLevel(s.crtJitterLevel)
     setCrtScanDrift(s.crtScanDrift)
+    setAppearanceMode(s.appearanceMode)
     // Prompt user for desktop notification permission on first visit
     requestDesktopNotificationPermission()
   }, [])
@@ -144,8 +169,21 @@ function App() {
       if (custom.detail.theme) {
         applyTheme(custom.detail.theme)
       }
+      if (custom.detail.appearanceMode) {
+        applyAppearanceMode(custom.detail.appearanceMode)
+        setAppearanceMode(custom.detail.appearanceMode)
+      }
       const merged = { ...loadSettings(), ...custom.detail }
-      applyVisualSystem(merged)
+      if (merged.appearanceMode === 'retro') {
+        clearThemeInlineOverrides()
+        applyVisualSystem(merged)
+      } else if (merged.appearanceMode === 'normcore') {
+        applyNormcoreSystem(merged)
+      } else if (merged.appearanceMode === 'business') {
+        applyBusinessSystem(merged)
+      }
+      applyFontWeights(merged)
+      setFontWeightVars(getFontWeightVars(merged))
     }
     window.addEventListener('loom:settings-updated', onSettingsUpdated as EventListener)
     return () => window.removeEventListener('loom:settings-updated', onSettingsUpdated as EventListener)
@@ -266,7 +304,7 @@ function App() {
 
   return (
     <CRTContainer
-      enabled={crtEnabled}
+      enabled={crtEnabled && appearanceMode === 'retro'}
       intensity={crtIntensity}
       burstsEnabled={crtBurstsEnabled}
       noiseEnabled={crtNoiseEnabled}
@@ -275,7 +313,10 @@ function App() {
       jitterLevel={crtJitterLevel}
       scanDrift={crtScanDrift}
     >
-      <div className="loom-app h-screen w-screen flex flex-col bg-void text-phosphor font-mono overflow-hidden">
+      <div
+        className="loom-app h-screen w-screen flex flex-col bg-void text-phosphor font-mono overflow-hidden"
+        style={fontWeightVars}
+      >
         {/* Custom Title Bar */}
         <TitleBar
           viewMode={viewMode}
@@ -302,7 +343,17 @@ function App() {
         <SettingsModalErrorBoundary onClose={() => setSettingsOpen(false)}>
           <SettingsModal
             isOpen={settingsOpen}
-            onClose={() => setSettingsOpen(false)}
+            onClose={() => {
+              setSettingsOpen(false)
+              const s = loadSettings()
+              applyAppearanceMode(s.appearanceMode)
+              setAppearanceMode(s.appearanceMode)
+              if (s.appearanceMode === 'retro') {
+                clearThemeInlineOverrides()
+                applyVisualSystem(s)
+              } else if (s.appearanceMode === 'normcore') applyNormcoreSystem(s)
+              else if (s.appearanceMode === 'business') applyBusinessSystem(s)
+            }}
           />
         </SettingsModalErrorBoundary>
 

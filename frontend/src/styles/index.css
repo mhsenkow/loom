@@ -36,6 +36,10 @@
   --ui-ambient-opacity: 0.2;
   --ui-panel-tone: 8%;
   --ui-hue-bias: 0deg;
+  --font-weight-body: 400;
+  --font-weight-heading: 600;
+  --font-weight-mono: 400;
+  --font-weight-ui: 500;
 }
 
 /* Ruby – Soviet / Eastern bloc. ES EVM, SM 1420, warm amber. Chamfered corners, rolling scanlines. */
@@ -110,6 +114,32 @@
   --theme-prompt: '›';
 }
 
+/* Appearance mode: retro (default) | normcore | business. Shell and panels can key off this. */
+[data-appearance-mode="normcore"] {
+  /* Normcore: plain, grey, low impact. Override glow/texture to minimal when styling is implemented. */
+  --appearance-normcore: 1;
+}
+
+[data-appearance-mode="business"] {
+  --appearance-business: 1;
+  --business-glass-blur: 16px;
+  --business-glass-opacity: 0.88;
+  --business-panel-bg: rgba(30, 41, 59, 0.85);
+}
+
+/* Business: Fluent / Apple glass panels (backdrop blur) */
+[data-appearance-mode="business"] .loom-app,
+[data-appearance-mode="business"] .loom-app .bg-void,
+[data-appearance-mode="business"] .loom-app .bg-slate,
+[data-appearance-mode="business"] .loom-app [class*="border-terminal-border"] {
+  backdrop-filter: blur(var(--business-glass-blur, 16px));
+  -webkit-backdrop-filter: blur(var(--business-glass-blur, 16px));
+}
+
+[data-appearance-mode="business"] .loom-app {
+  font-family: var(--theme-font, system-ui, sans-serif) !important;
+}
+
 [data-ui-preset="command"] {
   --ui-grid-opacity: 0.08;
   --ui-grid-size: 4px;
@@ -158,6 +188,7 @@
   
   html {
     font-family: var(--theme-font, 'JetBrains Mono', 'Consolas', monospace);
+    font-weight: var(--font-weight-body, 400);
     background-color: var(--theme-void);
     color: var(--theme-phosphor);
   }
@@ -166,8 +197,17 @@
     margin: 0;
     padding: 0;
     overflow: hidden;
+    font-weight: var(--font-weight-body, 400);
     background-color: var(--theme-void);
     -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-weight: var(--font-weight-heading, 600);
+  }
+
+  .font-mono, code, pre {
+    font-weight: var(--font-weight-mono, 400);
   }
 
   ::-webkit-scrollbar {
@@ -971,6 +1011,7 @@
   }
 
   .btn-terminal {
+    font-weight: var(--font-weight-ui, 500);
     @apply font-mono text-sm px-4 py-2 border border-phosphor text-phosphor bg-void;
     @apply hover:bg-phosphor hover:text-void;
     @apply active:shadow-none active:translate-x-[2px] active:translate-y-[2px];
@@ -1101,4 +1142,42 @@
 .avatar-8bit-wrapper {
   image-rendering: pixelated;
   image-rendering: crisp-edges;
+}
+
+/* Font weight settings – applied after Tailwind so vars from applyFontWeights() take effect */
+html {
+  font-weight: var(--font-weight-body, 400) !important;
+}
+
+body {
+  font-weight: var(--font-weight-body, 400) !important;
+}
+
+.loom-app,
+.loom-app * {
+  font-weight: inherit;
+}
+
+.loom-app {
+  font-weight: var(--font-weight-body, 400) !important;
+}
+
+.loom-app [class*="font-bold"],
+.loom-app [class*="font-semibold"] {
+  font-weight: var(--font-weight-heading, 600) !important;
+}
+
+.loom-app .font-mono,
+.loom-app code,
+.loom-app pre {
+  font-weight: var(--font-weight-mono, 400) !important;
+}
+
+.loom-app button,
+.loom-app .btn-terminal,
+.loom-app .module-chip,
+.loom-app input,
+.loom-app select,
+.loom-app [role="button"] {
+  font-weight: var(--font-weight-ui, 500) !important;
 }

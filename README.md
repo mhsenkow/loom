@@ -15,6 +15,8 @@ feedback is a gift
 
 > Retro-Terminal Edition
 
+**Note:** Theming (Retro / Normcore / Business, font weights, glass) needs fixing but we’re trying to keep it experimental — expect rough edges.
+
 **LOOM is your home base** — the one place you work from: terminal feed, circuit board, sessions, and AI. Local-first, desktop-class, with a "Cassette Futurism" / "90s Mainframe" aesthetic. Connections to other communication forms (Slack, Discord, Telegram, etc.) can plug in as optional in/out channels, but the app stays the center: you come here to think, build, and run.
 
 Think *Alien* terminals, *Metal Gear Solid* UI, or a highly polished Linux terminal.

@@ -22,6 +22,24 @@ export type CrtIntensityPreset = 'subtle' | 'medium' | 'full' | 'insane'
 export type MistralAgentMode = 'off' | 'auto'
 export type UiPresetId = 'command' | 'broadcast' | 'arcade' | 'lab' | 'vault'
 export type UiCornerStyle = 'hard' | 'soft' | 'chamfer'
+
+export type AppearanceMode = 'retro' | 'normcore' | 'business'
+export type NormcoreBase = 'light' | 'dark' | 'system'
+export type NormcoreBorders = 'none' | 'hairline' | 'thin'
+export type BusinessPresetId = 'enterprise' | 'dashboard' | 'suite' | 'conference'
+export type BusinessAccentId = 'blue' | 'slate' | 'indigo' | 'neutral'
+export type BusinessDensityId = 'comfortable' | 'compact' | 'dense'
+export type BusinessCornersId = 'sharp' | 'slight' | 'rounded'
+export type BusinessShadowsId = 'subtle' | 'flat' | 'elevation'
+export type FontWeightSetId = 'default' | 'light' | 'medium' | 'heavy' | 'custom'
+
+export type FontWeightValues = {
+  fontWeightBody: number
+  fontWeightHeading: number
+  fontWeightMono: number
+  fontWeightUi: number
+}
+
 export type VisualSystemSettings = Pick<
   Settings,
   'uiPreset' | 'uiCornerStyle' | 'uiFrameWeight' | 'uiGlowLevel' | 'uiTextureLevel' | 'uiContrastLevel' | 'uiTintShift'
@@ -32,6 +50,7 @@ export interface Settings {
   comfyuiUrl: string
   comfyuiEnabled: boolean
   dataFolderPath: string
+  appearanceMode: AppearanceMode
   theme: ThemeId
   crtEnabled: boolean
   crtIntensity: CrtIntensityPreset
@@ -48,6 +67,23 @@ export interface Settings {
   uiTextureLevel: number
   uiContrastLevel: number
   uiTintShift: number
+  // Normcore
+  normcoreBase: NormcoreBase
+  normcoreContrast: number
+  normcoreBorders: NormcoreBorders
+  normcoreGreyLevel: number
+  normcoreOpacity: number
+  // Business
+  businessPreset: BusinessPresetId
+  businessAccent: BusinessAccentId
+  businessDensity: BusinessDensityId
+  businessCorners: BusinessCornersId
+  businessShadows: BusinessShadowsId
+  fontWeightSet: FontWeightSetId
+  fontWeightBody: number
+  fontWeightHeading: number
+  fontWeightMono: number
+  fontWeightUi: number
   goalsEnabled: boolean
   userGoals: string
   assistantGoals: string
@@ -86,6 +122,68 @@ const UI_CORNER_OPTIONS: Array<{ id: UiCornerStyle; label: string; subtitle: str
   { id: 'soft', label: 'SOFT', subtitle: 'Slightly rounded console edges' },
   { id: 'chamfer', label: 'CHAMFER', subtitle: 'Cut corners, machine panel feel' },
 ]
+
+const APPEARANCE_TABS: Array<{ id: AppearanceMode; label: string; subtitle: string }> = [
+  { id: 'retro', label: 'Retro', subtitle: 'CRT, glow, terminal vibe' },
+  { id: 'normcore', label: 'Normcore', subtitle: 'Plain, grey, low impact' },
+  { id: 'business', label: 'Business', subtitle: 'Design system, enterprise' },
+]
+
+const NORMCORE_BASE_OPTIONS: Array<{ id: NormcoreBase; label: string; subtitle: string }> = [
+  { id: 'light', label: 'Light', subtitle: 'Light grey background' },
+  { id: 'dark', label: 'Dark', subtitle: 'Dark grey background' },
+  { id: 'system', label: 'System', subtitle: 'Follow OS preference' },
+]
+
+const NORMCORE_BORDER_OPTIONS: Array<{ id: NormcoreBorders; label: string; subtitle: string }> = [
+  { id: 'none', label: 'None', subtitle: 'No borders' },
+  { id: 'hairline', label: 'Hairline', subtitle: '1px neutral line' },
+  { id: 'thin', label: 'Thin', subtitle: 'Minimal separation' },
+]
+
+const BUSINESS_PRESET_OPTIONS: Array<{ id: BusinessPresetId; label: string; subtitle: string }> = [
+  { id: 'enterprise', label: 'Microsoft', subtitle: 'Fluent, Segoe UI, acrylic glass' },
+  { id: 'dashboard', label: 'IBM', subtitle: 'Plex, data-forward, structured' },
+  { id: 'suite', label: 'Apple', subtitle: 'SF Pro, Apple glass, refined' },
+  { id: 'conference', label: 'Meta', subtitle: 'Clean presentation, system UI' },
+]
+
+const BUSINESS_ACCENT_OPTIONS: Array<{ id: BusinessAccentId; label: string; subtitle: string }> = [
+  { id: 'blue', label: 'Blue', subtitle: 'Microsoft / Meta blue' },
+  { id: 'slate', label: 'Slate', subtitle: 'IBM neutral' },
+  { id: 'indigo', label: 'Indigo', subtitle: 'Accent pop' },
+  { id: 'neutral', label: 'Neutral', subtitle: 'Grey-only' },
+]
+
+const BUSINESS_DENSITY_OPTIONS: Array<{ id: BusinessDensityId; label: string; subtitle: string }> = [
+  { id: 'comfortable', label: 'Comfortable', subtitle: 'Spacious layout' },
+  { id: 'compact', label: 'Compact', subtitle: 'Balanced density' },
+  { id: 'dense', label: 'Dense', subtitle: 'Information density' },
+]
+
+const BUSINESS_CORNER_OPTIONS: Array<{ id: BusinessCornersId; label: string; subtitle: string }> = [
+  { id: 'sharp', label: 'Sharp', subtitle: 'No radius' },
+  { id: 'slight', label: 'Slight', subtitle: '2–4px radius' },
+  { id: 'rounded', label: 'Rounded', subtitle: '6–8px radius' },
+]
+
+const BUSINESS_SHADOW_OPTIONS: Array<{ id: BusinessShadowsId; label: string; subtitle: string }> = [
+  { id: 'subtle', label: 'Subtle', subtitle: 'Light depth' },
+  { id: 'flat', label: 'Flat', subtitle: 'No shadow' },
+  { id: 'elevation', label: 'Elevation', subtitle: 'Layered cards' },
+]
+
+const FONT_WEIGHT_PRESETS: Array<{ id: FontWeightSetId; label: string; subtitle: string; values: FontWeightValues }> = [
+  { id: 'default', label: 'Default', subtitle: 'Standard readability', values: { fontWeightBody: 400, fontWeightHeading: 600, fontWeightMono: 400, fontWeightUi: 500 } },
+  { id: 'light', label: 'Light', subtitle: 'Thinner strokes', values: { fontWeightBody: 300, fontWeightHeading: 500, fontWeightMono: 300, fontWeightUi: 400 } },
+  { id: 'medium', label: 'Medium', subtitle: 'Slightly heavier', values: { fontWeightBody: 500, fontWeightHeading: 600, fontWeightMono: 500, fontWeightUi: 600 } },
+  { id: 'heavy', label: 'Heavy', subtitle: 'Bold terminal feel', values: { fontWeightBody: 600, fontWeightHeading: 700, fontWeightMono: 600, fontWeightUi: 700 } },
+  { id: 'custom', label: 'Custom', subtitle: 'Use values below', values: { fontWeightBody: 400, fontWeightHeading: 600, fontWeightMono: 400, fontWeightUi: 500 } },
+]
+
+const FONT_WEIGHT_MIN = 100
+const FONT_WEIGHT_MAX = 900
+const FONT_WEIGHT_STEP = 100
 
 const UI_VISUAL_PRESETS: Record<
   UiPresetId,
@@ -140,6 +238,11 @@ const APPEARANCE_LIVE_KEYS: Array<keyof Settings> = [
   'uiTextureLevel',
   'uiContrastLevel',
   'uiTintShift',
+  'fontWeightSet',
+  'fontWeightBody',
+  'fontWeightHeading',
+  'fontWeightMono',
+  'fontWeightUi',
 ]
 
 const UI_FRAME_WEIGHT_MIN = 0
@@ -247,6 +350,215 @@ export function applyTheme(theme: ThemeId) {
   document.documentElement.dataset.theme = theme
 }
 
+// Apply appearance mode (retro / normcore / business) for CSS and layout
+export function applyAppearanceMode(mode: AppearanceMode) {
+  const root = typeof document !== 'undefined' ? document.documentElement : null
+  if (root) root.dataset.appearanceMode = mode
+}
+
+const THEME_INLINE_KEYS = [
+  '--theme-void',
+  '--theme-slate',
+  '--theme-phosphor',
+  '--theme-phosphor-dim',
+  '--theme-phosphor-glow',
+  '--theme-terminal-border',
+  '--theme-terminal-muted',
+  '--theme-terminal-gray',
+] as const
+
+/** Clear inline theme variables so stylesheet [data-theme="…"] rules apply (Retro). */
+export function clearThemeInlineOverrides() {
+  const root = typeof document !== 'undefined' ? document.documentElement : null
+  if (!root?.style) return
+  THEME_INLINE_KEYS.forEach((key) => root.style.removeProperty(key))
+}
+
+type NormcoreSettings = Pick<Settings, 'normcoreBase' | 'normcoreContrast' | 'normcoreBorders' | 'normcoreGreyLevel' | 'normcoreOpacity'>
+type BusinessSettings = Pick<Settings, 'businessPreset' | 'businessAccent' | 'businessDensity' | 'businessCorners' | 'businessShadows'>
+
+function lerpHex(a: number, b: number, t: number): number {
+  return Math.round(a + (b - a) * t)
+}
+
+/** Apply normcore parameters: same --theme-* and --ui-* pipeline, plain grey look. */
+export function applyNormcoreSystem(settings: NormcoreSettings | null | undefined) {
+  try {
+    const s = settings ?? defaultSettings()
+    const root = typeof document !== 'undefined' ? document.documentElement : null
+    if (!root?.style) return
+
+    let scheme: 'light' | 'dark' = s.normcoreBase === 'dark' ? 'dark' : 'light'
+    if (s.normcoreBase === 'system' && typeof window !== 'undefined') {
+      scheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+    }
+    root.dataset.normcoreScheme = scheme
+
+    const contrast = s.normcoreContrast / 100
+    const greyLevel = s.normcoreGreyLevel / 100
+    const opacity = s.normcoreOpacity / 100
+
+    if (scheme === 'light') {
+      const voidR = lerpHex(232, 250, greyLevel)
+      const slateR = lerpHex(224, 242, greyLevel)
+      const phosphorR = lerpHex(40, 80, 1 - greyLevel)
+      root.style.setProperty('--theme-void', `rgb(${voidR},${voidR},${voidR})`)
+      root.style.setProperty('--theme-slate', `rgba(${slateR},${slateR},${slateR},${opacity})`)
+      root.style.setProperty('--theme-phosphor', `rgb(${phosphorR},${phosphorR},${phosphorR})`)
+      root.style.setProperty('--theme-phosphor-dim', `rgb(${lerpHex(60, 100, 1 - greyLevel)},${lerpHex(60, 100, 1 - greyLevel)},${lerpHex(60, 100, 1 - greyLevel)})`)
+      root.style.setProperty('--theme-phosphor-glow', `rgba(${phosphorR},${phosphorR},${phosphorR},0.35)`)
+      root.style.setProperty('--theme-terminal-border', `rgb(${lerpHex(200, 220, greyLevel)},${lerpHex(200, 220, greyLevel)},${lerpHex(200, 220, greyLevel)})`)
+      root.style.setProperty('--theme-terminal-muted', `rgb(${lerpHex(100, 140, 1 - greyLevel)},${lerpHex(100, 140, 1 - greyLevel)},${lerpHex(100, 140, 1 - greyLevel)})`)
+      root.style.setProperty('--theme-terminal-gray', `rgb(${lerpHex(180, 200, greyLevel)},${lerpHex(180, 200, greyLevel)},${lerpHex(180, 200, greyLevel)})`)
+    } else {
+      const voidR = lerpHex(18, 8, greyLevel)
+      const slateR = lerpHex(28, 18, greyLevel)
+      const phosphorR = lerpHex(180, 220, greyLevel)
+      root.style.setProperty('--theme-void', `rgb(${voidR},${voidR},${voidR})`)
+      root.style.setProperty('--theme-slate', `rgba(${slateR},${slateR},${slateR},${opacity})`)
+      root.style.setProperty('--theme-phosphor', `rgb(${phosphorR},${phosphorR},${phosphorR})`)
+      root.style.setProperty('--theme-phosphor-dim', `rgb(${lerpHex(120, 160, greyLevel)},${lerpHex(120, 160, greyLevel)},${lerpHex(120, 160, greyLevel)})`)
+      root.style.setProperty('--theme-phosphor-glow', `rgba(${phosphorR},${phosphorR},${phosphorR},0.35)`)
+      root.style.setProperty('--theme-terminal-border', `rgb(${lerpHex(45, 60, greyLevel)},${lerpHex(45, 60, greyLevel)},${lerpHex(45, 60, greyLevel)})`)
+      root.style.setProperty('--theme-terminal-muted', `rgb(${lerpHex(100, 130, greyLevel)},${lerpHex(100, 130, greyLevel)},${lerpHex(100, 130, greyLevel)})`)
+      root.style.setProperty('--theme-terminal-gray', `rgb(${lerpHex(55, 75, greyLevel)},${lerpHex(55, 75, greyLevel)},${lerpHex(55, 75, greyLevel)})`)
+    }
+
+    const borderWidth = s.normcoreBorders === 'none' ? '0px' : s.normcoreBorders === 'hairline' ? '1px' : '2px'
+    root.style.setProperty('--ui-border-width', borderWidth)
+    root.style.setProperty('--ui-frame-weight', '1.2px')
+    root.style.setProperty('--ui-button-lift', '1px')
+    root.style.setProperty('--ui-glow-strength', '0')
+    root.style.setProperty('--ui-texture-opacity', '0')
+    root.style.setProperty('--ui-contrast-scale', String(0.92 + contrast * 0.2))
+    root.style.setProperty('--ui-tint-angle', '0deg')
+    root.style.setProperty('--ui-tint-mix', '0%')
+    root.style.setProperty('--ui-global-radius', '2px')
+    root.style.setProperty('--ui-led-radius', '2px')
+    root.style.setProperty('--ui-corner-cut', '0px')
+    root.style.setProperty('--ui-grid-opacity', '0')
+    root.style.setProperty('--ui-ambient-opacity', '0')
+    root.style.setProperty('--ui-panel-tone', '4%')
+  } catch (e) {
+    console.warn('[LOOM] applyNormcoreSystem failed:', e)
+  }
+}
+
+const BUSINESS_PRESET_THEMES: Record<
+  BusinessPresetId,
+  {
+    font: string
+    void: string
+    slate: string
+    accent: { main: string; dim: string; border: string }
+    radius: string
+    glassBlur: string
+    glassOpacity: string
+    panelBg: string
+  }
+> = {
+  enterprise: {
+    font: "'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif",
+    void: '#202020',
+    slate: 'rgba(32, 32, 32, 0.72)',
+    accent: { main: '#0078D4', dim: '#106EBE', border: '#005A9E' },
+    radius: '4px',
+    glassBlur: '20px',
+    glassOpacity: '0.85',
+    panelBg: 'rgba(243, 243, 243, 0.08)',
+  },
+  dashboard: {
+    font: "'IBM Plex Sans', 'IBM Plex Mono', system-ui, sans-serif",
+    void: '#0f0f0f',
+    slate: 'rgba(22, 22, 22, 0.9)',
+    accent: { main: '#0f62fe', dim: '#0043ce', border: '#002d9c' },
+    radius: '0px',
+    glassBlur: '12px',
+    glassOpacity: '0.92',
+    panelBg: 'rgba(15, 15, 15, 0.85)',
+  },
+  suite: {
+    font: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Helvetica Neue', sans-serif",
+    void: '#1c1c1e',
+    slate: 'rgba(44, 44, 46, 0.72)',
+    accent: { main: '#0a84ff', dim: '#0066cc', border: '#0055aa' },
+    radius: '10px',
+    glassBlur: '40px',
+    glassOpacity: '0.72',
+    panelBg: 'rgba(44, 44, 46, 0.65)',
+  },
+  conference: {
+    font: "system-ui, -apple-system, 'Segoe UI', 'Helvetica Neue', sans-serif",
+    void: '#18191a',
+    slate: 'rgba(24, 25, 26, 0.85)',
+    accent: { main: '#1877F2', dim: '#166fe5', border: '#0d65d9' },
+    radius: '8px',
+    glassBlur: '16px',
+    glassOpacity: '0.88',
+    panelBg: 'rgba(36, 37, 38, 0.75)',
+  },
+}
+
+/** Apply business parameters: Microsoft/IBM/Apple/Meta-style with Fluent/Apple glass, fonts, accents. */
+export function applyBusinessSystem(settings: BusinessSettings | null | undefined) {
+  try {
+    const s = settings ?? defaultSettings()
+    const root = typeof document !== 'undefined' ? document.documentElement : null
+    if (!root?.style) return
+
+    const presetTheme = BUSINESS_PRESET_THEMES[s.businessPreset]
+    const accentMap: Record<BusinessAccentId, { main: string; dim: string; border: string }> = {
+      blue: { main: '#2563eb', dim: '#1e40af', border: '#1e3a8a' },
+      slate: { main: '#475569', dim: '#334155', border: '#1e293b' },
+      indigo: { main: '#4f46e5', dim: '#3730a3', border: '#312e81' },
+      neutral: { main: '#525252', dim: '#404040', border: '#262626' },
+    }
+    const accent = presetTheme ? presetTheme.accent : accentMap[s.businessAccent]
+
+    root.style.setProperty('--theme-void', presetTheme?.void ?? '#0f172a')
+    root.style.setProperty('--theme-slate', presetTheme?.slate ?? '#1e293b')
+    root.style.setProperty('--theme-phosphor', accent.main)
+    root.style.setProperty('--theme-phosphor-dim', accent.dim)
+    root.style.setProperty('--theme-phosphor-glow', `${accent.main}50`)
+    root.style.setProperty('--theme-terminal-border', accent.border)
+    root.style.setProperty('--theme-terminal-muted', '#94a3b8')
+    root.style.setProperty('--theme-terminal-gray', '#334155')
+    if (presetTheme?.font) {
+      root.style.setProperty('--theme-font', presetTheme.font)
+      root.style.setProperty('--theme-font-primary', presetTheme.font.split(',')[0].trim().replace(/'/g, ''))
+    }
+    root.style.setProperty('--business-glass-blur', presetTheme?.glassBlur ?? '16px')
+    root.style.setProperty('--business-glass-opacity', presetTheme?.glassOpacity ?? '0.88')
+    root.style.setProperty('--business-panel-bg', presetTheme?.panelBg ?? 'rgba(30, 41, 59, 0.85)')
+
+    const radiusMap: Record<BusinessCornersId, string> = {
+      sharp: '0px',
+      slight: '4px',
+      rounded: '8px',
+    }
+    const radius = radiusMap[s.businessCorners]
+    root.style.setProperty('--ui-global-radius', radius)
+    root.style.setProperty('--ui-led-radius', radius)
+    root.style.setProperty('--ui-corner-cut', '0px')
+    root.style.setProperty('--ui-border-width', '1px')
+    root.style.setProperty('--ui-frame-weight', '1.5px')
+    root.style.setProperty('--ui-button-lift', s.businessShadows === 'flat' ? '0px' : '1px')
+    root.style.setProperty('--ui-glow-strength', '0.04')
+    root.style.setProperty('--ui-texture-opacity', '0')
+    root.style.setProperty('--ui-contrast-scale', '1.05')
+    root.style.setProperty('--ui-tint-angle', '0deg')
+    root.style.setProperty('--ui-tint-mix', '0%')
+    root.style.setProperty('--ui-grid-opacity', '0.04')
+    root.style.setProperty('--ui-ambient-opacity', '0.06')
+    root.style.setProperty('--ui-panel-tone', '6%')
+    root.dataset.businessPreset = s.businessPreset
+    root.dataset.businessShadows = s.businessShadows
+    root.dataset.businessDensity = s.businessDensity
+  } catch (e) {
+    console.warn('[LOOM] applyBusinessSystem failed:', e)
+  }
+}
+
 const VISUAL_SYSTEM_DEFAULTS: VisualSystemSettings = {
   uiPreset: 'command',
   uiCornerStyle: 'hard',
@@ -303,6 +615,56 @@ export function applyVisualSystem(settings: VisualSystemSettings | null | undefi
   }
 }
 
+type FontWeightSettings = Pick<Settings, 'fontWeightSet' | 'fontWeightBody' | 'fontWeightHeading' | 'fontWeightMono' | 'fontWeightUi'>
+
+export function applyFontWeights(settings: FontWeightSettings | null | undefined) {
+  try {
+    const s = settings ?? defaultSettings()
+    const root = typeof document !== 'undefined' ? document.documentElement : null
+    if (!root?.style) return
+    const preset = s.fontWeightSet !== 'custom'
+      ? FONT_WEIGHT_PRESETS.find(p => p.id === s.fontWeightSet)
+      : null
+    const body = preset ? preset.values.fontWeightBody : Number(s.fontWeightBody) || 400
+    const heading = preset ? preset.values.fontWeightHeading : Number(s.fontWeightHeading) || 600
+    const mono = preset ? preset.values.fontWeightMono : Number(s.fontWeightMono) || 400
+    const ui = preset ? preset.values.fontWeightUi : Number(s.fontWeightUi) || 500
+    root.style.setProperty('--font-weight-body', String(clamp(body, 100, 900)))
+    root.style.setProperty('--font-weight-heading', String(clamp(heading, 100, 900)))
+    root.style.setProperty('--font-weight-mono', String(clamp(mono, 100, 900)))
+    root.style.setProperty('--font-weight-ui', String(clamp(ui, 100, 900)))
+  } catch (e) {
+    console.warn('[LOOM] applyFontWeights failed:', e)
+  }
+}
+
+/** Return CSS custom properties for font weights so the app container can set them inline (guarantees they apply). */
+export function getFontWeightVars(settings: FontWeightSettings | null | undefined): Record<string, string> {
+  try {
+    const s = settings ?? defaultSettings()
+    const preset = s.fontWeightSet !== 'custom'
+      ? FONT_WEIGHT_PRESETS.find(p => p.id === s.fontWeightSet)
+      : null
+    const body = preset ? preset.values.fontWeightBody : Number(s.fontWeightBody) || 400
+    const heading = preset ? preset.values.fontWeightHeading : Number(s.fontWeightHeading) || 600
+    const mono = preset ? preset.values.fontWeightMono : Number(s.fontWeightMono) || 400
+    const ui = preset ? preset.values.fontWeightUi : Number(s.fontWeightUi) || 500
+    return {
+      '--font-weight-body': String(clamp(body, 100, 900)),
+      '--font-weight-heading': String(clamp(heading, 100, 900)),
+      '--font-weight-mono': String(clamp(mono, 100, 900)),
+      '--font-weight-ui': String(clamp(ui, 100, 900)),
+    }
+  } catch {
+    return {
+      '--font-weight-body': '400',
+      '--font-weight-heading': '600',
+      '--font-weight-mono': '400',
+      '--font-weight-ui': '500',
+    }
+  }
+}
+
 // Load settings from localStorage. Never throws: returns defaultSettings() on any error.
 export function loadSettings(): Settings {
   try {
@@ -322,6 +684,7 @@ export function loadSettings(): Settings {
       if (Array.isArray(UI_PRESET_OPTIONS) && !UI_PRESET_OPTIONS.some(option => option.id === merged.uiPreset)) {
         merged.uiPreset = 'command'
       }
+      /* Default corners to hard (never chamfer) when missing or invalid */
       if (Array.isArray(UI_CORNER_OPTIONS) && !UI_CORNER_OPTIONS.some(option => option.id === merged.uiCornerStyle)) {
         merged.uiCornerStyle = 'hard'
       }
@@ -348,6 +711,23 @@ export function loadSettings(): Settings {
       )
       merged.memoryNotes = normalizeMultilineSetting(merged.memoryNotes)
       if (merged.mistralAgentMode !== 'auto') merged.mistralAgentMode = 'off'
+      if (!['retro', 'normcore', 'business'].includes(merged.appearanceMode)) merged.appearanceMode = 'retro'
+      if (!['light', 'dark', 'system'].includes(merged.normcoreBase)) merged.normcoreBase = 'system'
+      merged.normcoreContrast = normalizeNumber(merged.normcoreContrast, 50, 0, 100)
+      if (!['none', 'hairline', 'thin'].includes(merged.normcoreBorders)) merged.normcoreBorders = 'hairline'
+      merged.normcoreGreyLevel = normalizeNumber(merged.normcoreGreyLevel, 50, 0, 100)
+      merged.normcoreOpacity = normalizeNumber(merged.normcoreOpacity, 100, 20, 100)
+      if (!['enterprise', 'dashboard', 'suite', 'conference'].includes(merged.businessPreset)) merged.businessPreset = 'enterprise'
+      if (!['blue', 'slate', 'indigo', 'neutral'].includes(merged.businessAccent)) merged.businessAccent = 'blue'
+      if (!['comfortable', 'compact', 'dense'].includes(merged.businessDensity)) merged.businessDensity = 'comfortable'
+      if (!['sharp', 'slight', 'rounded'].includes(merged.businessCorners)) merged.businessCorners = 'slight'
+      if (!['subtle', 'flat', 'elevation'].includes(merged.businessShadows)) merged.businessShadows = 'subtle'
+      if (!['default', 'light', 'medium', 'heavy', 'custom'].includes(merged.fontWeightSet)) merged.fontWeightSet = 'default'
+      const round100 = (n: number) => Math.round(n / 100) * 100
+      merged.fontWeightBody = round100(normalizeNumber(merged.fontWeightBody, 400, FONT_WEIGHT_MIN, FONT_WEIGHT_MAX))
+      merged.fontWeightHeading = round100(normalizeNumber(merged.fontWeightHeading, 600, FONT_WEIGHT_MIN, FONT_WEIGHT_MAX))
+      merged.fontWeightMono = round100(normalizeNumber(merged.fontWeightMono, 400, FONT_WEIGHT_MIN, FONT_WEIGHT_MAX))
+      merged.fontWeightUi = round100(normalizeNumber(merged.fontWeightUi, 500, FONT_WEIGHT_MIN, FONT_WEIGHT_MAX))
       return merged
     }
   } catch (e) {
@@ -362,6 +742,7 @@ function defaultSettings(): Settings {
     comfyuiUrl: 'http://localhost:8188',
     comfyuiEnabled: false,
     dataFolderPath: '',
+    appearanceMode: 'retro',
     theme: 'phosphor',
     crtEnabled: true,
     crtIntensity: 'medium',
@@ -378,6 +759,21 @@ function defaultSettings(): Settings {
     uiTextureLevel: 42,
     uiContrastLevel: 46,
     uiTintShift: 0,
+    normcoreBase: 'system',
+    normcoreContrast: 50,
+    normcoreBorders: 'hairline',
+    normcoreGreyLevel: 50,
+    normcoreOpacity: 100,
+    businessPreset: 'enterprise',
+    businessAccent: 'blue',
+    businessDensity: 'comfortable',
+    businessCorners: 'slight',
+    businessShadows: 'subtle',
+    fontWeightSet: 'default',
+    fontWeightBody: 400,
+    fontWeightHeading: 600,
+    fontWeightMono: 400,
+    fontWeightUi: 500,
     goalsEnabled: true,
     userGoals: 'Help me move projects forward with practical, high-signal answers.',
     assistantGoals: 'Be accurate, concise, and explicit about assumptions and tradeoffs.',
@@ -421,6 +817,8 @@ function getInitialSettings(): Settings {
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [settings, setSettings] = useState<Settings>(getInitialSettings)
   const [activeSection, setActiveSection] = useState<SettingsSectionId>('appearance')
+  const [appearanceTab, setAppearanceTab] = useState<AppearanceMode>(() => getInitialSettings().appearanceMode)
+  const [fontWeightsAccordionOpen, setFontWeightsAccordionOpen] = useState(false)
   const [saved, setSaved] = useState(false)
   const [dataFolderStatus, setDataFolderStatus] = useState<'idle' | 'checking' | 'valid' | 'invalid'>('idle')
   const [imageModels, setImageModels] = useState<Array<{ name: string; type: string; vram?: string }>>([])
@@ -675,7 +1073,9 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
   useEffect(() => {
     if (isOpen) {
-      setSettings(loadSettings())
+      const loaded = loadSettings()
+      setSettings(loaded)
+      setAppearanceTab(loaded.appearanceMode)
       setActiveSection('appearance')
       setSaved(false)
       setDataFolderStatus('idle')
@@ -712,6 +1112,24 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     void fetchExtensionsSources()
     void fetchExtensionsInstalled()
   }, [activeSection, isOpen, fetchExtensionsSources, fetchExtensionsInstalled])
+
+  // Live-preview appearance: apply the current tab's system so changes are visible before Save
+  useEffect(() => {
+    if (!isOpen || activeSection !== 'appearance') return
+    if (appearanceTab === 'retro') {
+      applyAppearanceMode('retro')
+      clearThemeInlineOverrides()
+      applyTheme(settings.theme)
+      applyVisualSystem(settings)
+      applyFontWeights(settings)
+    } else if (appearanceTab === 'normcore') {
+      applyAppearanceMode('normcore')
+      applyNormcoreSystem(settings)
+    } else if (appearanceTab === 'business') {
+      applyAppearanceMode('business')
+      applyBusinessSystem(settings)
+    }
+  }, [isOpen, activeSection, appearanceTab, settings.theme, settings.normcoreBase, settings.normcoreContrast, settings.normcoreBorders, settings.normcoreGreyLevel, settings.normcoreOpacity, settings.businessPreset, settings.businessAccent, settings.businessDensity, settings.businessCorners, settings.businessShadows, settings.uiPreset, settings.uiCornerStyle, settings.uiFrameWeight, settings.uiGlowLevel, settings.uiTextureLevel, settings.uiContrastLevel, settings.uiTintShift, settings.fontWeightSet, settings.fontWeightBody, settings.fontWeightHeading, settings.fontWeightMono, settings.fontWeightUi])
 
   const handleConnectTelegram = async () => {
     const token = telegramToken.trim()
@@ -1000,7 +1418,9 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       }
     }
 
-    saveSettings(settings)
+    const toSave = { ...settings, appearanceMode: appearanceTab }
+    saveSettings(toSave)
+    applyAppearanceMode(toSave.appearanceMode)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
   }
@@ -1030,6 +1450,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       const next = { ...prev, [key]: value }
       if (APPEARANCE_LIVE_KEYS.includes(key)) {
         applyVisualSystem(next)
+        applyFontWeights(next)
         window.dispatchEvent(new CustomEvent('loom:settings-updated', { detail: next }))
       }
       return next
@@ -1064,6 +1485,21 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     })
   }
 
+  const applyFontWeightPreset = (presetId: FontWeightSetId) => {
+    const preset = FONT_WEIGHT_PRESETS.find(p => p.id === presetId)
+    if (!preset) return
+    setSettings((prev) => {
+      const next = {
+        ...prev,
+        fontWeightSet: presetId,
+        ...(presetId !== 'custom' ? preset.values : {}),
+      }
+      applyFontWeights(next)
+      window.dispatchEvent(new CustomEvent('loom:settings-updated', { detail: next }))
+      return next
+    })
+  }
+
   const safeSettings = settings ?? defaultSettings()
   const selectedSection = SETTINGS_SECTIONS.find(section => section.id === activeSection) ?? SETTINGS_SECTIONS[0]
   const conversationProfile = buildConversationProfileFromSettings(safeSettings)
@@ -1079,6 +1515,26 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     if (activeSection === 'appearance') {
       return (
         <section className="space-y-4">
+          <div className="flex border-b border-terminal-border gap-0">
+            {APPEARANCE_TABS.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setAppearanceTab(tab.id)}
+                className={`flex-1 px-3 py-2 text-left border-b-2 transition-colors ${
+                  appearanceTab === tab.id
+                    ? 'border-phosphor text-phosphor bg-void'
+                    : 'border-transparent text-terminal-muted hover:text-phosphor hover:border-phosphor/50 -mb-px'
+                }`}
+              >
+                <span className="text-[10px] font-bold tracking-wider block">{tab.label}</span>
+                <span className="text-[9px] opacity-80 block mt-0.5">{tab.subtitle}</span>
+              </button>
+            ))}
+          </div>
+
+          {appearanceTab === 'retro' && (
+          <>
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-3 p-2 border border-terminal-border bg-void">
               <div>
@@ -1295,6 +1751,78 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             </div>
           </div>
 
+          <div className="border border-terminal-border bg-void/70">
+            <button
+              type="button"
+              onClick={() => setFontWeightsAccordionOpen((open) => !open)}
+              className="w-full flex items-center justify-between gap-2 p-3 text-left border-b border-terminal-border/50 hover:bg-void"
+            >
+              <div>
+                <div className="text-[10px] text-phosphor font-bold tracking-wider">FONT WEIGHTS</div>
+                <div className="text-[9px] text-terminal-muted">
+                  {FONT_WEIGHT_PRESETS.find(p => p.id === settings.fontWeightSet)?.label ?? 'Custom'} — body, heading, mono, UI
+                </div>
+              </div>
+              <span className="text-phosphor text-sm transition-transform" style={{ transform: fontWeightsAccordionOpen ? 'rotate(180deg)' : 'none' }}>▼</span>
+            </button>
+            {fontWeightsAccordionOpen && (
+              <div className="p-3 space-y-3 border-t border-terminal-border/50">
+                <div>
+                  <div className="text-[10px] text-phosphor font-bold tracking-wider mb-2">SET</div>
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                    {FONT_WEIGHT_PRESETS.map((preset) => (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => applyFontWeightPreset(preset.id)}
+                        className={`p-2 border text-left ${
+                          settings.fontWeightSet === preset.id ? 'border-phosphor bg-void' : 'border-terminal-border hover:border-phosphor/50'
+                        }`}
+                      >
+                        <div className="text-[10px] font-bold tracking-wider">{preset.label}</div>
+                        <div className="text-[9px] text-terminal-muted mt-1 leading-tight">{preset.subtitle}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="text-[10px] text-phosphor font-bold tracking-wider">VALUES (when Custom, or to tweak)</div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {[
+                    { key: 'fontWeightBody' as const, label: 'Body', desc: 'Main content' },
+                    { key: 'fontWeightHeading' as const, label: 'Heading', desc: 'Titles, section headers' },
+                    { key: 'fontWeightMono' as const, label: 'Mono', desc: 'Code, terminal' },
+                    { key: 'fontWeightUi' as const, label: 'UI', desc: 'Buttons, labels' },
+                  ].map(({ key, label, desc }) => (
+                    <div key={key} className="border border-terminal-border p-2 bg-void space-y-1">
+                      <div className="text-[10px] text-phosphor font-bold tracking-wider">{label}</div>
+                      <div className="text-[9px] text-terminal-muted">{desc}</div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="range"
+                          min={FONT_WEIGHT_MIN}
+                          max={FONT_WEIGHT_MAX}
+                          step={FONT_WEIGHT_STEP}
+                          value={settings[key]}
+                          onChange={(e) => {
+                            const value = Number(e.target.value)
+                            setSettings((prev) => {
+                              const next = { ...prev, fontWeightSet: 'custom' as const, [key]: value }
+                              applyFontWeights(next)
+                              window.dispatchEvent(new CustomEvent('loom:settings-updated', { detail: next }))
+                              return next
+                            })
+                          }}
+                          className="flex-1 accent-phosphor"
+                        />
+                        <span className="text-[10px] text-phosphor font-mono w-10 text-right">{settings[key]}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="pt-2 border-t border-terminal-border/60">
             <div className="text-[10px] text-phosphor font-bold tracking-wider mb-2">HACKER PROFILES</div>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-2">
@@ -1395,6 +1923,204 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               </div>
             </div>
           </div>
+          </>
+          )}
+
+          {appearanceTab === 'normcore' && (
+          <div className="space-y-4">
+            <div className="border border-terminal-border p-3 bg-void/70 space-y-3">
+              <div className="text-[10px] text-phosphor font-bold tracking-wider">NORMCORE UI</div>
+              <div className="text-[9px] text-terminal-muted">Plain, monotype grey. Low impact, light or dark.</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-phosphor font-bold tracking-wider mb-2">BASE</div>
+              <div className="grid grid-cols-3 gap-2">
+                {NORMCORE_BASE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => updateSetting('normcoreBase', opt.id)}
+                    className={`p-2 border text-left ${
+                      settings.normcoreBase === opt.id ? 'border-phosphor bg-void' : 'border-terminal-border hover:border-phosphor/50'
+                    }`}
+                  >
+                    <div className="text-[10px] font-bold tracking-wider">{opt.label}</div>
+                    <div className="text-[9px] text-terminal-muted mt-1 leading-tight">{opt.subtitle}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] text-phosphor font-bold tracking-wider mb-2">BORDERS</div>
+              <div className="grid grid-cols-3 gap-2">
+                {NORMCORE_BORDER_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => updateSetting('normcoreBorders', opt.id)}
+                    className={`p-2 border text-left ${
+                      settings.normcoreBorders === opt.id ? 'border-phosphor bg-void' : 'border-terminal-border hover:border-phosphor/50'
+                    }`}
+                  >
+                    <div className="text-[10px] font-bold tracking-wider">{opt.label}</div>
+                    <div className="text-[9px] text-terminal-muted mt-1 leading-tight">{opt.subtitle}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+              <div className="border border-terminal-border p-2 bg-void space-y-1">
+                <div className="text-[10px] text-phosphor font-bold tracking-wider">CONTRAST</div>
+                <div className="text-[9px] text-terminal-muted">How much grey steps differ</div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={settings.normcoreContrast}
+                    onChange={(e) => updateSetting('normcoreContrast', Number(e.target.value))}
+                    className="flex-1 accent-phosphor"
+                  />
+                  <span className="text-[10px] text-phosphor font-mono w-8 text-right">{settings.normcoreContrast}%</span>
+                </div>
+              </div>
+              <div className="border border-terminal-border p-2 bg-void space-y-1">
+                <div className="text-[10px] text-phosphor font-bold tracking-wider">GREY LEVEL</div>
+                <div className="text-[9px] text-terminal-muted">Overall grey tone</div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={settings.normcoreGreyLevel}
+                    onChange={(e) => updateSetting('normcoreGreyLevel', Number(e.target.value))}
+                    className="flex-1 accent-phosphor"
+                  />
+                  <span className="text-[10px] text-phosphor font-mono w-8 text-right">{settings.normcoreGreyLevel}%</span>
+                </div>
+              </div>
+              <div className="border border-terminal-border p-2 bg-void space-y-1 lg:col-span-2">
+                <div className="text-[10px] text-phosphor font-bold tracking-wider">OPACITY</div>
+                <div className="text-[9px] text-terminal-muted">Panel opacity for a flatter look</div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min={20}
+                    max={100}
+                    step={1}
+                    value={settings.normcoreOpacity}
+                    onChange={(e) => updateSetting('normcoreOpacity', Number(e.target.value))}
+                    className="flex-1 accent-phosphor"
+                  />
+                  <span className="text-[10px] text-phosphor font-mono w-8 text-right">{settings.normcoreOpacity}%</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          )}
+
+          {appearanceTab === 'business' && (
+          <div className="space-y-4">
+            <div className="border border-terminal-border p-3 bg-void/70 space-y-3">
+              <div className="text-[10px] text-phosphor font-bold tracking-wider">BUSINESS UI SYSTEM</div>
+              <div className="text-[9px] text-terminal-muted">Design system–aligned: enterprise, dashboard, and product suite paradigms.</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-phosphor font-bold tracking-wider mb-2">PRESET</div>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                {BUSINESS_PRESET_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => updateSetting('businessPreset', opt.id)}
+                    className={`p-2 border text-left ${
+                      settings.businessPreset === opt.id ? 'border-phosphor bg-void' : 'border-terminal-border hover:border-phosphor/50'
+                    }`}
+                  >
+                    <div className="text-[10px] font-bold tracking-wider">{opt.label}</div>
+                    <div className="text-[9px] text-terminal-muted mt-1 leading-tight">{opt.subtitle}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] text-phosphor font-bold tracking-wider mb-2">ACCENT</div>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                {BUSINESS_ACCENT_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => updateSetting('businessAccent', opt.id)}
+                    className={`p-2 border text-left ${
+                      settings.businessAccent === opt.id ? 'border-phosphor bg-void' : 'border-terminal-border hover:border-phosphor/50'
+                    }`}
+                  >
+                    <div className="text-[10px] font-bold tracking-wider">{opt.label}</div>
+                    <div className="text-[9px] text-terminal-muted mt-1 leading-tight">{opt.subtitle}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] text-phosphor font-bold tracking-wider mb-2">DENSITY</div>
+              <div className="grid grid-cols-3 gap-2">
+                {BUSINESS_DENSITY_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => updateSetting('businessDensity', opt.id)}
+                    className={`p-2 border text-left ${
+                      settings.businessDensity === opt.id ? 'border-phosphor bg-void' : 'border-terminal-border hover:border-phosphor/50'
+                    }`}
+                  >
+                    <div className="text-[10px] font-bold tracking-wider">{opt.label}</div>
+                    <div className="text-[9px] text-terminal-muted mt-1 leading-tight">{opt.subtitle}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <div>
+                <div className="text-[10px] text-phosphor font-bold tracking-wider mb-2">CORNERS</div>
+                <div className="grid grid-cols-3 gap-2">
+                  {BUSINESS_CORNER_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => updateSetting('businessCorners', opt.id)}
+                      className={`p-2 border text-left ${
+                        settings.businessCorners === opt.id ? 'border-phosphor bg-void' : 'border-terminal-border hover:border-phosphor/50'
+                      }`}
+                    >
+                      <div className="text-[10px] font-bold tracking-wider">{opt.label}</div>
+                      <div className="text-[9px] text-terminal-muted mt-1 leading-tight">{opt.subtitle}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] text-phosphor font-bold tracking-wider mb-2">SHADOWS</div>
+                <div className="grid grid-cols-3 gap-2">
+                  {BUSINESS_SHADOW_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => updateSetting('businessShadows', opt.id)}
+                      className={`p-2 border text-left ${
+                        settings.businessShadows === opt.id ? 'border-phosphor bg-void' : 'border-terminal-border hover:border-phosphor/50'
+                      }`}
+                    >
+                      <div className="text-[10px] font-bold tracking-wider">{opt.label}</div>
+                      <div className="text-[9px] text-terminal-muted mt-1 leading-tight">{opt.subtitle}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+          )}
         </section>
       )
     }
