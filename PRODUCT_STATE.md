@@ -7,7 +7,9 @@
 
 ## Product Overview
 
-**LOOM** is a local-first, desktop-class Personal Intelligence OS with a retro terminal aesthetic. It combines:
+**LOOM** is your **home-base app** — the central place you operate from (terminal, circuits, sessions, AI). It is local-first and desktop-class with a retro terminal aesthetic. Other communication surfaces (Slack, Discord, Telegram, WhatsApp, etc.) are treated as **optional connections** to that home base: inbound feeds or outbound posts, not the primary interface. You come to LOOM to work; channels can connect in when you want them.
+
+It combines:
 - Terminal-based notebook interface with session management
 - Circuit board (node-graph) for building AI processing pipelines
 - Local AI via Ollama (LLMs + Vision models)
@@ -52,6 +54,7 @@
 - Live Qualcomm QDC API backend integration (current lane is mock-backed)
 
 ### 📋 Planned Features
+- **Channel connectors** — Optional in/out connections to Slack, Discord, Telegram, etc., so the home base can ingest or push to those channels without making them the primary UI.
 - Multi-user support
 - Cloud sync (optional)
 - Plugin system

@@ -12,9 +12,17 @@ import asyncio
 import logging
 
 from app.services.image_gen import image_gen_service
-from app.services.local_image_gen import local_image_gen
 
 router = APIRouter()
+
+
+def _get_local_image_gen():
+    """Lazy import so Docker image without torch can still start."""
+    try:
+        from app.services.local_image_gen import local_image_gen
+        return local_image_gen
+    except ImportError:
+        return None
 logger = logging.getLogger("loom.router.images")
 
 
@@ -73,7 +81,13 @@ async def generate_image(request: ImageGenRequest):
                 "provider": "ollama",
             }
         elif provider == "local":
-            # Use local diffusers with MPS/CUDA
+            # Use local diffusers with MPS/CUDA (optional: not in Docker slim image)
+            local_image_gen = _get_local_image_gen()
+            if local_image_gen is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Local image generation (torch/diffusers) is not installed. Use provider 'ollama' or install full requirements.",
+                )
             result = await local_image_gen.generate(
                 prompt=request.prompt,
                 model=model,
@@ -194,55 +208,56 @@ async def list_models():
     except Exception as e:
         logger.warning("failed_to_fetch_ollama_image_models error=%s", e)
     
-    # Get local diffusers models (only if actually downloaded/cached)
+    # Get local diffusers models (only if torch/diffusers installed and actually downloaded/cached)
     local_models = []
-    try:
-        from pathlib import Path
-        models_dir = local_image_gen.models_dir
-        
-        # Check for local .safetensors files
-        for f in models_dir.glob("**/*.safetensors"):
-            local_models.append({
-                "name": f.stem,
-                "path": str(f),
-                "type": "local",
-                "vram": "varies",
-            })
-        
-        # For predefined models, include only if they are downloaded
-        from app.services.local_image_gen import MODELS
-        
-        for name, info in MODELS.items():
-            if local_image_gen.is_model_downloaded(name):
+    local_gen = _get_local_image_gen()
+    if local_gen is not None:
+        try:
+            from pathlib import Path
+            models_dir = local_gen.models_dir
+            for f in models_dir.glob("**/*.safetensors"):
                 local_models.append({
-                    "name": name,
-                    "repo": info["repo"],
-                    "type": info["type"],
-                    "vram": info["vram"],
-                    "path": str(local_image_gen.get_model_local_dir(name)),
+                    "name": f.stem,
+                    "path": str(f),
+                    "type": "local",
+                    "vram": "varies",
                 })
-    except Exception as e:
-        logger.warning("failed_to_check_local_image_models error=%s", e)
+            from app.services.local_image_gen import MODELS
+            for name, info in MODELS.items():
+                if local_gen.is_model_downloaded(name):
+                    local_models.append({
+                        "name": name,
+                        "repo": info["repo"],
+                        "type": info["type"],
+                        "vram": info["vram"],
+                        "path": str(local_gen.get_model_local_dir(name)),
+                    })
+        except Exception as e:
+            logger.warning("failed_to_check_local_image_models error=%s", e)
     
-    # Combine both sources - Ollama models first (they're actually downloaded)
     all_models = ollama_image_models + local_models
+    device = local_gen.device if local_gen else "unavailable"
+    current_model = local_gen.current_model if local_gen else ""
     
     return {
-        "local": all_models,  # All actually available models
+        "local": all_models,
         "ollama": ollama_image_models,
         "diffusers": local_models,
         "huggingface": list(image_gen_service.MODELS.keys()),
-        "hf_models": list(image_gen_service.MODELS.keys()),  # Alias for frontend
-        "device": local_image_gen.device,
-        "current_model": local_image_gen.current_model,
+        "hf_models": list(image_gen_service.MODELS.keys()),
+        "device": device,
+        "current_model": current_model,
     }
 
 
 @router.post("/models/load")
 async def load_model(model: str):
     """Pre-load a model into memory"""
+    local_gen = _get_local_image_gen()
+    if local_gen is None:
+        raise HTTPException(status_code=503, detail="Local image gen (torch) not installed")
     try:
-        local_image_gen.load_model(model)
+        local_gen.load_model(model)
         return {"status": "ok", "model": model, "message": f"Model {model} loaded"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -251,15 +266,20 @@ async def load_model(model: str):
 @router.post("/models/unload")
 async def unload_model():
     """Unload current model to free memory"""
-    local_image_gen.unload_model()
+    local_gen = _get_local_image_gen()
+    if local_gen is not None:
+        local_gen.unload_model()
     return {"status": "ok", "message": "Model unloaded"}
 
 
 @router.post("/models/download")
 async def download_model(request: DownloadModelRequest):
     """Download a model from CivitAI or other URL"""
+    local_gen = _get_local_image_gen()
+    if local_gen is None:
+        raise HTTPException(status_code=503, detail="Local image gen (torch) not installed")
     try:
-        path = local_image_gen.download_civitai_model(request.url, request.name)
+        path = local_gen.download_civitai_model(request.url, request.name)
         return {"status": "ok", "path": path, "name": request.name}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -269,7 +289,9 @@ async def download_model(request: DownloadModelRequest):
 async def set_hf_token(request: SetTokenRequest):
     """Set HuggingFace API token"""
     image_gen_service.set_hf_token(request.token)
-    local_image_gen.set_hf_token(request.token)
+    local_gen = _get_local_image_gen()
+    if local_gen is not None:
+        local_gen.set_hf_token(request.token)
     return {"status": "ok", "message": "HuggingFace token set"}
 
 
@@ -290,10 +312,13 @@ async def check_comfyui():
 @router.get("/status")
 async def get_status():
     """Get image generation status"""
+    local_gen = _get_local_image_gen()
+    if local_gen is None:
+        return {"device": "unavailable", "current_model": "", "models_dir": ""}
     return {
-        "device": local_image_gen.device,
-        "current_model": local_image_gen.current_model,
-        "models_dir": str(local_image_gen.models_dir),
+        "device": local_gen.device,
+        "current_model": local_gen.current_model,
+        "models_dir": str(local_gen.models_dir),
     }
 
 

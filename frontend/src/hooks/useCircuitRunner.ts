@@ -807,6 +807,24 @@ export function useCircuitRunner() {
         return summary ? `QDC ${jobId}: ${summary}` : `QDC ${jobId}: result pending`
       }
 
+      case 'telegram_send': {
+        const messageTemplate = cell.content?.trim() || '{{input}}'
+        const message = messageTemplate.replace(/\{\{input\}\}/g, input).trim()
+        if (!message) throw new Error('Telegram send: no message (use input or cell content)')
+
+        const response = await fetch(`${API_BASE}/api/connectors/telegram/send`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message }),
+        })
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) {
+          const detail = typeof data?.detail === 'string' ? data.detail : 'Telegram send failed'
+          throw new Error(detail)
+        }
+        return data?.message ?? `Sent to Telegram: ${message.slice(0, 50)}${message.length > 50 ? '…' : ''}`
+      }
+
       case 'notification': {
         const title = cell.notificationTitle || 'Loom Alert'
         const bodyTemplate = cell.notificationBody || '{{input}}'

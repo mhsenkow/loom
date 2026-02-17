@@ -208,6 +208,8 @@ function validateCell(cell: CellData, index: number): string | null {
       return content ? null : 'Provide a QDC job id.'
     case 'notification':
       return (cell.notificationTitle || '').trim() ? null : 'Notification needs a title.'
+    case 'telegram_send':
+      return null
     case 'file_write':
       return (cell.fileWritePath || '').trim() ? null : 'File Write needs a path.'
     case 'shell_exec':
@@ -546,6 +548,7 @@ export function CircuitBoard() {
       qdc_status: 'QDC STATUS',
       qdc_results: 'QDC RESULT',
       notification: 'NOTIFY',
+      telegram_send: 'TELEGRAM',
       file_write: 'WRITE FILE',
       shell_exec: 'SHELL',
       delay: 'DELAY',
@@ -573,6 +576,7 @@ export function CircuitBoard() {
       qdc_status: 'qdc-job-xxxxxxxxxx',
       qdc_results: 'qdc-job-xxxxxxxxxx',
       notification: 'System Alert',
+      telegram_send: '{{input}}',
       file_write: 'Log entry: {{input}}',
       shell_exec: 'echo "Hello from Loom"',
       delay: '',
@@ -667,6 +671,11 @@ export function CircuitBoard() {
             content: 'Task Completed',
             notificationTitle: 'Loom Alert',
             notificationBody: '{{input}}',
+            inputMode: 'previous',
+          }
+        case 'telegram_send':
+          return {
+            content: '{{input}}',
             inputMode: 'previous',
           }
         case 'file_write':

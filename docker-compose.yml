@@ -1,0 +1,30 @@
+# LOOM — one command to run the app.
+# Prereq: Ollama running on the host (e.g. ollama serve, or Ollama app).
+#
+# Run from the loom directory so the build context is only this app:
+#
+#   cd loom
+#   make dock-notebook
+#
+# Then open http://localhost:8000 and use "Get base models" to pull the default chat + image stack.
+
+services:
+  loom:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      # Talk to Ollama on host (Mac/Windows; Linux may need network_mode: host or extra_hosts)
+      OLLAMA_HOST: http://host.docker.internal:11434
+      LOOM_SERVE_FRONTEND: "1"
+    volumes:
+      # Persist ChromaDB, sessions, circuits, generated media
+      - loom_data:/app/backend/data
+    extra_hosts:
+      # So container can reach host Ollama on Linux too
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  loom_data: {}

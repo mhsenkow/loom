@@ -148,13 +148,7 @@ export function SessionPanel({
           onClick={onToggleCollapse}
         />
       )}
-      <div
-        className={`h-full bg-void border-r border-terminal-border transition-all duration-200 flex flex-col absolute md:relative left-0 top-0 z-40 md:z-auto shadow-2xl md:shadow-none ${
-          isCollapsed
-            ? 'w-56 md:w-10 -translate-x-[calc(100%-2.5rem)] md:translate-x-0'
-            : 'w-56 sm:w-60 md:w-40 lg:w-44 translate-x-0'
-        }`}
-      >
+      <div className="h-full min-h-0 flex-1 flex flex-col bg-void transition-all duration-200 w-full overflow-hidden absolute md:relative left-0 top-0 z-40 md:z-auto shadow-2xl md:shadow-none">
       {/* Header */}
       <div className="border-b border-terminal-border flex items-center">
         {!isCollapsed && (

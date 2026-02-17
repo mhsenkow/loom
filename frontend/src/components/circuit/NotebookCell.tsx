@@ -269,6 +269,13 @@ export function NotebookCell({
       bodyTintClass: 'bg-[#1a150a]',
       description: 'Sends a desktop notification.',
     },
+    telegram_send: {
+      icon: '✈️',
+      color: 'text-sky-400',
+      bgColor: 'bg-sky-600',
+      bodyTintClass: 'bg-[#0a121a]',
+      description: 'Sends a message to Telegram. Connect your bot in Settings → Connections. Use {{input}} for previous cell output.',
+    },
     file_write: {
       icon: '💾',
       color: 'text-blue-300',
@@ -373,6 +380,8 @@ export function NotebookCell({
         return '* * * * *'
       case 'notification':
         return 'Title and body (use {{input}} for previous output)'
+      case 'telegram_send':
+        return 'Message to send (e.g. {{input}} or static text). Connect bot in Settings → Connections.'
       default:
         return 'Enter content...'
     }

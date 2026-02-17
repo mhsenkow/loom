@@ -184,6 +184,7 @@ type SettingsSectionId =
   | 'storage'
   | 'sharing'
   | 'voice'
+  | 'connections'
   | 'integrations'
   | 'image_models'
 
@@ -200,6 +201,7 @@ const SETTINGS_SECTIONS: Array<{
   { id: 'storage', label: 'Storage', subtitle: 'Data folder and files', icon: '◌' },
   { id: 'sharing', label: 'Share Chat Site', subtitle: 'One-click public link', icon: '◐' },
   { id: 'voice', label: 'Voice & Avatar', subtitle: 'Speech and persona', icon: '◎' },
+  { id: 'connections', label: 'Connections', subtitle: 'Telegram, Discord in/out', icon: '◔' },
 ]
 
 const OLLAMA_LIBRARY_RECOMMENDED = [
@@ -242,63 +244,86 @@ export function applyTheme(theme: ThemeId) {
   document.documentElement.dataset.theme = theme
 }
 
-export function applyVisualSystem(settings: VisualSystemSettings) {
-  const root = document.documentElement
-  root.dataset.uiPreset = settings.uiPreset
-  root.dataset.uiCorners = settings.uiCornerStyle
-
-  const frameWeightPx = (1 + (settings.uiFrameWeight / 100) * 2.4).toFixed(2)
-  const borderWidthPx = (1 + (settings.uiFrameWeight / 100) * 0.9).toFixed(2)
-  const buttonLiftPx = (1 + (settings.uiFrameWeight / 100) * 2.2).toFixed(2)
-  const glow = (0.01 + (settings.uiGlowLevel / 100) * 0.3).toFixed(3)
-  const texture = ((settings.uiTextureLevel / 100) * 0.5).toFixed(3)
-  const contrast = (0.78 + (settings.uiContrastLevel / 100) * 0.64).toFixed(3)
-  const tintMix = Math.round(Math.abs(settings.uiTintShift) * 0.65)
-  const cornerRadiusPx = settings.uiCornerStyle === 'soft'
-    ? `${Math.round(3 + (settings.uiFrameWeight / 100) * 8)}px`
-    : '0px'
-  const cornerCutPx = settings.uiCornerStyle === 'chamfer'
-    ? `${Math.round(6 + (settings.uiFrameWeight / 100) * 10)}px`
-    : '0px'
-
-  root.style.setProperty('--ui-frame-weight', `${frameWeightPx}px`)
-  root.style.setProperty('--ui-border-width', `${borderWidthPx}px`)
-  root.style.setProperty('--ui-button-lift', `${buttonLiftPx}px`)
-  root.style.setProperty('--ui-glow-strength', glow)
-  root.style.setProperty('--ui-texture-opacity', texture)
-  root.style.setProperty('--ui-contrast-scale', contrast)
-  root.style.setProperty('--ui-tint-angle', `${settings.uiTintShift}deg`)
-  root.style.setProperty('--ui-tint-mix', `${tintMix}%`)
-  root.style.setProperty('--ui-global-radius', cornerRadiusPx)
-  root.style.setProperty('--ui-led-radius', settings.uiCornerStyle === 'soft' ? '50%' : cornerRadiusPx)
-  root.style.setProperty('--ui-corner-cut', cornerCutPx)
+const VISUAL_SYSTEM_DEFAULTS: VisualSystemSettings = {
+  uiPreset: 'command',
+  uiCornerStyle: 'hard',
+  uiFrameWeight: 30,
+  uiGlowLevel: 24,
+  uiTextureLevel: 42,
+  uiContrastLevel: 46,
+  uiTintShift: 0,
 }
 
-// Load settings from localStorage
+export function applyVisualSystem(settings: VisualSystemSettings | null | undefined) {
+  try {
+    const s = settings ?? VISUAL_SYSTEM_DEFAULTS
+    const uiPreset = s.uiPreset ?? VISUAL_SYSTEM_DEFAULTS.uiPreset
+    const uiCornerStyle = s.uiCornerStyle ?? VISUAL_SYSTEM_DEFAULTS.uiCornerStyle
+    const uiFrameWeight = Number(s.uiFrameWeight) || VISUAL_SYSTEM_DEFAULTS.uiFrameWeight
+    const uiGlowLevel = Number(s.uiGlowLevel) ?? VISUAL_SYSTEM_DEFAULTS.uiGlowLevel
+    const uiTextureLevel = Number(s.uiTextureLevel) ?? VISUAL_SYSTEM_DEFAULTS.uiTextureLevel
+    const uiContrastLevel = Number(s.uiContrastLevel) ?? VISUAL_SYSTEM_DEFAULTS.uiContrastLevel
+    const uiTintShift = Number(s.uiTintShift) ?? VISUAL_SYSTEM_DEFAULTS.uiTintShift
+
+    const root = typeof document !== 'undefined' ? document.documentElement : null
+    if (!root?.style) return
+    root.dataset.uiPreset = String(uiPreset)
+    root.dataset.uiCorners = String(uiCornerStyle)
+
+    const frameWeightPx = (1 + (uiFrameWeight / 100) * 2.4).toFixed(2)
+    const borderWidthPx = (1 + (uiFrameWeight / 100) * 0.9).toFixed(2)
+    const buttonLiftPx = (1 + (uiFrameWeight / 100) * 2.2).toFixed(2)
+    const glow = (0.01 + (uiGlowLevel / 100) * 0.3).toFixed(3)
+    const texture = ((uiTextureLevel / 100) * 0.5).toFixed(3)
+    const contrast = (0.78 + (uiContrastLevel / 100) * 0.64).toFixed(3)
+    const tintMix = Math.round(Math.abs(Number(uiTintShift)) * 0.65)
+    const cornerRadiusPx = uiCornerStyle === 'soft'
+      ? `${Math.round(3 + (uiFrameWeight / 100) * 8)}px`
+      : '0px'
+    const cornerCutPx = uiCornerStyle === 'chamfer'
+      ? `${Math.round(6 + (uiFrameWeight / 100) * 10)}px`
+      : '0px'
+
+    root.style.setProperty('--ui-frame-weight', `${frameWeightPx}px`)
+    root.style.setProperty('--ui-border-width', `${borderWidthPx}px`)
+    root.style.setProperty('--ui-button-lift', `${buttonLiftPx}px`)
+    root.style.setProperty('--ui-glow-strength', glow)
+    root.style.setProperty('--ui-texture-opacity', texture)
+    root.style.setProperty('--ui-contrast-scale', contrast)
+    root.style.setProperty('--ui-tint-angle', `${uiTintShift}deg`)
+    root.style.setProperty('--ui-tint-mix', `${tintMix}%`)
+    root.style.setProperty('--ui-global-radius', cornerRadiusPx)
+    root.style.setProperty('--ui-led-radius', uiCornerStyle === 'soft' ? '50%' : cornerRadiusPx)
+    root.style.setProperty('--ui-corner-cut', cornerCutPx)
+  } catch (e) {
+    console.warn('[LOOM] applyVisualSystem failed:', e)
+  }
+}
+
+// Load settings from localStorage. Never throws: returns defaultSettings() on any error.
 export function loadSettings(): Settings {
   try {
-    const stored = localStorage.getItem(SETTINGS_KEY)
-    if (stored) {
-      const parsed = JSON.parse(stored)
-      const merged = { ...defaultSettings(), ...parsed }
-      if (!THEMES.some(t => t.id === merged.theme)) {
+    const stored = typeof localStorage !== 'undefined' ? localStorage.getItem(SETTINGS_KEY) : null
+    if (stored && typeof stored === 'string') {
+      const parsed = JSON.parse(stored) as Record<string, unknown>
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return defaultSettings()
+      }
+      const merged = { ...defaultSettings(), ...parsed } as Settings
+      if (Array.isArray(THEMES) && !THEMES.some(t => t.id === merged.theme)) {
         merged.theme = 'phosphor'
       }
-      if (!CRT_INTENSITY_PRESETS.some(preset => preset.id === merged.crtIntensity)) {
+      if (Array.isArray(CRT_INTENSITY_PRESETS) && !CRT_INTENSITY_PRESETS.some(preset => preset.id === merged.crtIntensity)) {
         merged.crtIntensity = 'medium'
       }
-      if (!UI_PRESET_OPTIONS.some(option => option.id === merged.uiPreset)) {
+      if (Array.isArray(UI_PRESET_OPTIONS) && !UI_PRESET_OPTIONS.some(option => option.id === merged.uiPreset)) {
         merged.uiPreset = 'command'
       }
-      if (!UI_CORNER_OPTIONS.some(option => option.id === merged.uiCornerStyle)) {
+      if (Array.isArray(UI_CORNER_OPTIONS) && !UI_CORNER_OPTIONS.some(option => option.id === merged.uiCornerStyle)) {
         merged.uiCornerStyle = 'hard'
       }
-      if (typeof merged.crtBurstsEnabled !== 'boolean') {
-        merged.crtBurstsEnabled = true
-      }
-      if (typeof merged.crtNoiseEnabled !== 'boolean') {
-        merged.crtNoiseEnabled = true
-      }
+      if (typeof merged.crtBurstsEnabled !== 'boolean') merged.crtBurstsEnabled = true
+      if (typeof merged.crtNoiseEnabled !== 'boolean') merged.crtNoiseEnabled = true
       merged.crtNoiseLevel = normalizeNumber(merged.crtNoiseLevel, 22, 0, 100)
       merged.crtBloomLevel = normalizeNumber(merged.crtBloomLevel, 28, 0, 100)
       merged.crtJitterLevel = normalizeNumber(merged.crtJitterLevel, 8, 0, 40)
@@ -308,12 +333,8 @@ export function loadSettings(): Settings {
       merged.uiTextureLevel = normalizeNumber(merged.uiTextureLevel, 42, UI_TEXTURE_MIN, UI_TEXTURE_MAX)
       merged.uiContrastLevel = normalizeNumber(merged.uiContrastLevel, 46, UI_CONTRAST_MIN, UI_CONTRAST_MAX)
       merged.uiTintShift = normalizeNumber(merged.uiTintShift, 0, UI_TINT_MIN, UI_TINT_MAX)
-      if (typeof merged.goalsEnabled !== 'boolean') {
-        merged.goalsEnabled = true
-      }
-      if (typeof merged.memoryEnabled !== 'boolean') {
-        merged.memoryEnabled = true
-      }
+      if (typeof merged.goalsEnabled !== 'boolean') merged.goalsEnabled = true
+      if (typeof merged.memoryEnabled !== 'boolean') merged.memoryEnabled = true
       merged.userGoals = normalizeMultilineSetting(
         merged.userGoals,
         'Help me move projects forward with practical, high-signal answers.',
@@ -323,9 +344,7 @@ export function loadSettings(): Settings {
         'Be accurate, concise, and explicit about assumptions and tradeoffs.',
       )
       merged.memoryNotes = normalizeMultilineSetting(merged.memoryNotes)
-      if (merged.mistralAgentMode !== 'auto') {
-        merged.mistralAgentMode = 'off'
-      }
+      if (merged.mistralAgentMode !== 'auto') merged.mistralAgentMode = 'off'
       return merged
     }
   } catch (e) {
@@ -388,8 +407,16 @@ async function configureDataFolder(path: string): Promise<boolean> {
   }
 }
 
+function getInitialSettings(): Settings {
+  try {
+    return loadSettings()
+  } catch {
+    return defaultSettings()
+  }
+}
+
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
-  const [settings, setSettings] = useState<Settings>(loadSettings)
+  const [settings, setSettings] = useState<Settings>(getInitialSettings)
   const [activeSection, setActiveSection] = useState<SettingsSectionId>('appearance')
   const [saved, setSaved] = useState(false)
   const [dataFolderStatus, setDataFolderStatus] = useState<'idle' | 'checking' | 'valid' | 'invalid'>('idle')
@@ -409,6 +436,27 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [shareStatus, setShareStatus] = useState<ShareStatusPayload | null>(null)
   const [shareBusy, setShareBusy] = useState(false)
   const [shareFeedback, setShareFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+  const [telegramToken, setTelegramToken] = useState('')
+  const [telegramVerify, setTelegramVerify] = useState<null | 'checking' | { ok: true; username: string } | { error: string }>(null)
+  const [connectorsStatus, setConnectorsStatus] = useState<{
+    telegram?: { connected: boolean; username?: string }
+    discord?: { connected: boolean; username?: string }
+  }>({})
+  const [connectorsBusy, setConnectorsBusy] = useState<string | null>(null)
+
+  const fetchConnectorsStatus = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/connectors/status`)
+      if (!response.ok) return
+      const data = await response.json()
+      setConnectorsStatus({
+        telegram: data.telegram,
+        discord: data.discord,
+      })
+    } catch (e) {
+      console.error('[LOOM] Failed to fetch connectors status:', e)
+    }
+  }, [])
 
   const fetchProviders = useCallback(async () => {
     try {
@@ -571,6 +619,56 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     }
   }, [activeSection, isOpen, fetchShareStatus])
 
+  useEffect(() => {
+    if (!isOpen || activeSection !== 'connections') return
+    void fetchConnectorsStatus()
+  }, [activeSection, isOpen, fetchConnectorsStatus])
+
+  const handleConnectTelegram = async () => {
+    const token = telegramToken.trim()
+    if (!token) return
+    setConnectorsBusy('telegram')
+    try {
+      const username =
+        typeof telegramVerify === 'object' && telegramVerify !== null && 'ok' in telegramVerify
+          ? (telegramVerify as { username?: string }).username
+          : undefined
+      const response = await fetch(`${API_BASE_URL}/api/connectors/telegram`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, username }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        const detail = typeof data?.detail === 'string' ? data.detail : 'Connect failed'
+        throw new Error(detail)
+      }
+      setTelegramToken('')
+      setTelegramVerify(null)
+      setConnectorsStatus({ ...connectorsStatus, telegram: data?.telegram })
+      await fetchConnectorsStatus()
+    } catch (e) {
+      setProviderFeedback({ type: 'error', message: e instanceof Error ? e.message : 'Connect failed' })
+    } finally {
+      setConnectorsBusy(null)
+    }
+  }
+
+  const handleDisconnectTelegram = async () => {
+    setConnectorsBusy('telegram')
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/connectors/telegram`, { method: 'DELETE' })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(typeof data?.detail === 'string' ? data.detail : 'Disconnect failed')
+      setConnectorsStatus({ ...connectorsStatus, telegram: data?.telegram })
+      await fetchConnectorsStatus()
+    } catch (e) {
+      setProviderFeedback({ type: 'error', message: e instanceof Error ? e.message : 'Disconnect failed' })
+    } finally {
+      setConnectorsBusy(null)
+    }
+  }
+
   const handleConnectProvider = async (providerName: string) => {
     const apiKey = (providerInputs[providerName] || '').trim()
     if (!apiKey) {
@@ -625,6 +723,28 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       setProviderFeedback({ type: 'error', message })
     } finally {
       setProviderBusy(null)
+    }
+  }
+
+  const handleVerifyTelegram = async () => {
+    const token = telegramToken.trim()
+    if (!token) return
+    setTelegramVerify('checking')
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/connectors/telegram/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        const detail = typeof data?.detail === 'string' ? data.detail : 'Verification failed'
+        setTelegramVerify({ error: detail })
+        return
+      }
+      setTelegramVerify({ ok: true, username: data.username ?? data?.result?.username ?? 'Bot' })
+    } catch (e) {
+      setTelegramVerify({ error: e instanceof Error ? e.message : 'Request failed' })
     }
   }
 
@@ -855,10 +975,16 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     })
   }
 
+  const safeSettings = settings ?? defaultSettings()
   const selectedSection = SETTINGS_SECTIONS.find(section => section.id === activeSection) ?? SETTINGS_SECTIONS[0]
-  const conversationProfile = buildConversationProfileFromSettings(settings)
+  const conversationProfile = buildConversationProfileFromSettings(safeSettings)
   const conversationStoragePreview = buildConversationProfileStoragePreview(conversationProfile)
-  const memoryVaultPreview = loadMemoryVault().slice(0, 10)
+  let memoryVaultPreview: Record<string, unknown>[] = []
+  try {
+    memoryVaultPreview = loadMemoryVault().slice(0, 10)
+  } catch {
+    // ignore
+  }
 
   const renderActiveSection = () => {
     if (activeSection === 'appearance') {
@@ -1807,6 +1933,144 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       )
     }
 
+    if (activeSection === 'connections') {
+      const tgIsObj = typeof telegramVerify === 'object' && telegramVerify !== null
+      const tgOk = tgIsObj && 'ok' in telegramVerify
+      const tgErr = tgIsObj && 'error' in telegramVerify
+      return (
+        <section className="space-y-4">
+          <p className="text-[11px] text-terminal-muted">
+            Optional in/out links: receive messages in LOOM and send from LOOM. LOOM stays your home base.
+          </p>
+          <div className="border border-terminal-border bg-void/40 p-4 space-y-3">
+            <div className="text-[10px] text-phosphor font-bold tracking-wider">TELEGRAM</div>
+            <ul className="text-[10px] text-terminal-muted list-disc list-inside space-y-0.5">
+              <li>Receive: DMs to your bot appear in the LOOM feed</li>
+              <li>Send: Post from LOOM to a Telegram chat or channel</li>
+            </ul>
+            <p className="text-[10px] text-terminal-muted">
+              Get a bot token in one step:{' '}
+              <a
+                href="https://t.me/BotFather"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-phosphor hover:underline"
+              >
+                Open @BotFather in Telegram
+              </a>
+              {' '}→ send <code className="text-phosphor">/newbot</code> → name it → paste the token below.
+            </p>
+            <a
+              href="https://core.telegram.org/bots#6-botfather"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[10px] text-phosphor hover:underline block"
+            >
+              Bot API docs (core.telegram.org/bots)
+            </a>
+            <div className="flex items-center gap-2">
+              <input
+                type="password"
+                value={telegramToken}
+                onChange={(e) => { setTelegramToken(e.target.value); setTelegramVerify(null) }}
+                placeholder="Bot token (e.g. 123456:ABC…)"
+                className="flex-1 min-w-0 bg-void border border-terminal-border p-2 text-phosphor font-mono text-sm focus:outline-none focus:border-phosphor"
+              />
+              <button
+                type="button"
+                onClick={() => void handleVerifyTelegram()}
+                disabled={!telegramToken.trim() || telegramVerify === 'checking'}
+                title={
+                  telegramVerify === 'checking'
+                    ? 'Verifying…'
+                    : tgOk
+                      ? `Verified: ${(telegramVerify as { username?: string }).username ?? 'Bot'}`
+                      : tgErr
+                        ? (telegramVerify as { error: string }).error
+                        : 'Verify token'
+                }
+                className={`shrink-0 w-8 h-8 flex items-center justify-center border text-sm ${
+                  telegramVerify === 'checking'
+                    ? 'border-terminal-border text-terminal-muted'
+                    : tgOk
+                      ? 'border-phosphor text-phosphor'
+                      : tgErr
+                        ? 'border-red-500 text-red-400'
+                        : 'border-terminal-border text-terminal-muted hover:border-phosphor hover:text-phosphor'
+                }`}
+              >
+                {telegramVerify === 'checking' ? '…' : tgOk ? '✓' : tgErr ? '✗' : '✓'}
+              </button>
+            </div>
+            {tgErr && (
+              <span className="text-[10px] text-red-400">{(telegramVerify as { error: string }).error}</span>
+            )}
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[10px] text-terminal-muted">
+                Status: {connectorsStatus.telegram?.connected ? `Connected as ${connectorsStatus.telegram.username ?? 'Bot'}` : 'Not connected'}
+              </span>
+              {connectorsStatus.telegram?.connected ? (
+                <button
+                  type="button"
+                  onClick={() => void handleDisconnectTelegram()}
+                  disabled={connectorsBusy === 'telegram'}
+                  className="px-2 py-1 text-[10px] border border-terminal-border text-terminal-muted hover:border-phosphor hover:text-phosphor disabled:opacity-50"
+                >
+                  {connectorsBusy === 'telegram' ? '…' : 'Disconnect'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void handleConnectTelegram()}
+                  disabled={!telegramToken.trim() || connectorsBusy === 'telegram'}
+                  className="px-2 py-1 text-[10px] border border-phosphor text-phosphor hover:bg-phosphor hover:text-void disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {connectorsBusy === 'telegram' ? '…' : 'Connect'}
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="border border-terminal-border bg-void/40 p-4 space-y-3">
+            <div className="text-[10px] text-phosphor font-bold tracking-wider">DISCORD</div>
+            <ul className="text-[10px] text-terminal-muted list-disc list-inside space-y-0.5">
+              <li>Receive: DMs or channel messages to the bot appear in the LOOM feed</li>
+              <li>Send: Post from LOOM to a Discord channel or DM</li>
+            </ul>
+            <p className="text-[10px] text-terminal-muted">
+              Get a bot token:{' '}
+              <a
+                href="https://discord.com/developers/applications"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-phosphor hover:underline"
+              >
+                Discord Developer Portal
+              </a>
+              {' '}→ New Application → Bot → Add Bot → Reset Token → copy. Invite the bot to your server with the right scopes.
+            </p>
+            <a
+              href="https://discord.com/developers/docs/getting-started"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[10px] text-phosphor hover:underline block"
+            >
+              Discord developer docs
+            </a>
+            <input
+              type="password"
+              placeholder="Bot token"
+              className="w-full bg-void border border-terminal-border p-2 text-phosphor font-mono text-sm focus:outline-none focus:border-phosphor"
+            />
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-terminal-muted">Status: Not connected</span>
+              <button type="button" disabled className="px-2 py-1 text-[10px] border border-terminal-border text-terminal-muted cursor-not-allowed">Connect</button>
+            </div>
+          </div>
+          <span className="text-[10px] text-terminal-muted">Implementation guide: docs/CONNECTIONS_TELEGRAM_DISCORD.md in the repo.</span>
+        </section>
+      )
+    }
+
     if (activeSection === 'integrations') {
       return (
         <section className="space-y-2">
@@ -1853,10 +2117,20 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           </div>
         ) : (
           <div className="bg-void p-3 border border-terminal-border">
-            <div className="text-terminal-muted text-center py-2 space-y-1">
+            <div className="text-terminal-muted text-center py-2 space-y-2">
               <div className="text-phosphor text-[11px]">No models downloaded yet</div>
-              <div className="text-[10px]">First run: start Ollama, then download one model below.</div>
-              <div className="text-[10px]">You can also run: <code className="text-phosphor">/pull x/flux2-klein</code></div>
+              <div className="text-[10px]">Have <strong className="text-phosphor">Ollama</strong> running (ollama.app or <code className="text-phosphor">ollama serve</code>), then get the default chat + image stack with one click.</div>
+              <button
+                type="button"
+                onClick={() => {
+                  window.dispatchEvent(new CustomEvent('loom:run-setup-models'))
+                  onClose()
+                }}
+                className="w-full py-2 px-3 text-[11px] font-bold border-2 border-phosphor bg-phosphor/10 text-phosphor hover:bg-phosphor hover:text-void transition-colors"
+              >
+                Get base models
+              </button>
+              <div className="text-[10px]">Or run in terminal: <code className="text-phosphor">/setup-models</code> or <code className="text-phosphor">/pull llama3.1:8b</code></div>
             </div>
           </div>
         )}

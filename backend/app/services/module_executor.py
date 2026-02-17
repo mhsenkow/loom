@@ -9,7 +9,6 @@ from typing import Any, Optional
 
 from app.services.ollama_client import OllamaClient
 from app.services.file_loader import file_loader, FileReadMode
-from app.services.local_image_gen import local_image_gen
 from app.services.document_indexer import DocumentIndexer
 from app.services.vector_store import VectorStore
 from app.services.qdc_service import qdc_service
@@ -78,6 +77,13 @@ async def run_module(
             raise RuntimeError(f"File load error: {e}")
 
     if module_type == "image_gen":
+        try:
+            from app.services.local_image_gen import local_image_gen
+        except ImportError as e:
+            raise RuntimeError(
+                "Local image generation (torch/diffusers) is not installed. "
+                "Install with: pip install -r requirements.txt (or use Ollama image models in the app)."
+            ) from e
         prompt = inp or content or "an image"
         neg = content if inp and content else ""
         try:
@@ -382,6 +388,15 @@ async def run_module(
         # Current behavior: Pass through with warning log.
         logger.warning("Human approval cell encountered in backend execution - auto-passing for now.")
         return f"✅ Human Approval (Auto-passed in backend): {inp or 'Approved'}"
+
+    if module_type == "telegram_send":
+        # Send message via connected Telegram bot. Input = message body; content = optional chat_id.
+        from app.services.connector_service import send_telegram_message
+        message = (inp or content or "").strip()
+        if not message:
+            raise ValueError("Telegram send: no message (use input or cell content)")
+        result = await send_telegram_message(text=message, chat_id=None)
+        return f"📤 {result}"
 
     # markdown, conditional, web_fetch, etc. – pass-through
     return inp

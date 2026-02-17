@@ -49,6 +49,8 @@ backend/data/images/
 backend/data/music/
 backend/data/tts/
 backend/data/qdc_packages/
+backend/data/connectors.json
+backend/data/telegram_conversation.json
 *.sqlite3
 backend/jobs.sqlite
 backend/models/

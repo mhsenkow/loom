@@ -126,6 +126,7 @@ function getDefaultLabel(type: string): string {
     data_loader: 'DATA',
     conditional: 'GATE',
     web_fetch: 'FETCH',
+    telegram_send: 'TELEGRAM',
   }
   return labels[type] || 'MODULE'
 }

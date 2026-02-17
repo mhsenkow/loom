@@ -33,7 +33,7 @@ backend_dir = Path(__file__).parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-from app.routers import modules, images, files, circuits, search, remote, code_context, music, sessions, web, tts, qdc, system, scheduler, share
+from app.routers import modules, images, files, circuits, search, remote, code_context, music, sessions, web, tts, qdc, system, scheduler, share, connectors
 from app.routers import providers as providers_router
 from app.services.ollama_client import ollama_client
 from app.services.provider_manager import provider_manager
@@ -51,12 +51,22 @@ from app.services.share_service import share_service
 
 logger = logging.getLogger(__name__)
 
-# ... (lines omitted)
+# Optional: serve built frontend from backend (e.g. Docker single-container)
+SERVE_FRONTEND = os.getenv("LOOM_SERVE_FRONTEND", "").strip().lower() in ("1", "true", "yes")
+FRONTEND_DIST = os.getenv("LOOM_FRONTEND_DIST") or str(backend_dir / "frontend_dist")
+FRONTEND_DIST_PATH = Path(FRONTEND_DIST)
 
 async def _initialize_services() -> None:
     storage_init_db()
     vector_store.set_ollama_client(ollama_client)
     scheduler_service.start()  # Start scheduler
+    try:
+        from app.services.telegram_listener import get_telegram_listener
+        get_telegram_listener(sio).start()
+    except Exception as e:
+        logger.warning("Telegram listener not started: %s", e)
+    if SERVE_FRONTEND:
+        logger.info("Open the app in your browser: http://localhost:8000")
     # Log mobile chat URL so users can connect from phone on same Wi‑Fi
     try:
         local_ip = _get_local_ip()
@@ -68,6 +78,11 @@ async def _initialize_services() -> None:
 # ... (lines omitted)
 
 async def _shutdown_services() -> None:
+    try:
+        from app.services.telegram_listener import get_telegram_listener
+        get_telegram_listener(sio).stop()
+    except Exception:
+        logger.exception("telegram_listener_stop_failed")
     try:
         await web_service.cleanup()
     except Exception:
@@ -88,6 +103,7 @@ async def _shutdown_services() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    app.state.sio = sio
     await _initialize_services()
     yield
     # Shutdown
@@ -112,6 +128,7 @@ app.add_middleware(
 # Initialize Socket.IO
 # Allow all origins for now to simplify local development
 sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
+
 
 # Wrap FastAPI with Socket.IO
 # This is the ASGI application that should be run by uvicorn
@@ -151,16 +168,18 @@ app.include_router(qdc.router, prefix="/api/qdc", tags=["qdc"])
 app.include_router(system.router, prefix="/api/system", tags=["system"])
 app.include_router(scheduler.router, prefix="/api/scheduler", tags=["scheduler"])
 app.include_router(share.router, prefix="/api/share", tags=["share"])
+app.include_router(connectors.router, prefix="/api/connectors", tags=["connectors"])
 
 
-# REST Endpoints
-@app.get("/")
-async def root():
-    return {
-        "name": "Loom Backend",
-        "version": "0.1.0",
-        "status": "online",
-    }
+# REST Endpoints (when not serving frontend, / returns API info)
+if not SERVE_FRONTEND:
+    @app.get("/")
+    async def root():
+        return {
+            "name": "Loom Backend",
+            "version": "0.1.0",
+            "status": "online",
+        }
 
 
 def _get_local_ip() -> str:
@@ -505,15 +524,33 @@ async def update_orchestrator_settings(settings: dict):
     orchestrator.update_settings(settings)
     return {"status": "success", "settings": orchestrator.get_settings()}
 
+
+# Serve built frontend when LOOM_SERVE_FRONTEND is set (e.g. Docker)
+if SERVE_FRONTEND and FRONTEND_DIST_PATH.is_dir() and (FRONTEND_DIST_PATH / "index.html").exists():
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
+    logger.info("Serving frontend from %s", FRONTEND_DIST)
+
+
 @sio.event
 async def connect(sid, environ):
     logger.info("socket_client_connected sid=%s", sid)
+    try:
+        from app.services.telegram_listener import get_telegram_listener
+        get_telegram_listener(sio).client_connected(sid)
+    except Exception:
+        pass
     await sio.emit('system', {'type': 'connected', 'message': 'Connected to Loom Backend'}, room=sid)
 
 
 @sio.event
 async def disconnect(sid):
     _session_auto_model.pop(sid, None)
+    try:
+        from app.services.telegram_listener import get_telegram_listener
+        get_telegram_listener(sio).client_disconnected(sid)
+    except Exception:
+        pass
     logger.info("socket_client_disconnected sid=%s", sid)
 
 

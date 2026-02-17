@@ -1,4 +1,4 @@
-.PHONY: notebook-open notebook-open-share notebook-close start stop install clean help default
+.PHONY: notebook-open notebook-open-share notebook-close start stop install clean help default dock-notebook docker-build
 
 # Default target - show help when just running 'make'
 default: help
@@ -15,6 +15,13 @@ notebook-open-share:
 
 notebook-close:
 	@./scripts/stop.sh
+
+# Docker: one container (backend + frontend). Requires Ollama on host. Open http://localhost:8000
+dock-notebook:
+	docker compose up --build
+
+docker-build:
+	docker compose build
 
 # Legacy aliases (for backwards compatibility)
 start:

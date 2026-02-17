@@ -1,0 +1,36 @@
+# Dependencies and build artifacts (keep context small)
+**/node_modules
+**/dist
+**/venv
+**/__pycache__
+**/.pytest_cache
+**/*.pyc
+**/.mypy_cache
+**/*.egg-info
+# Git and IDE
+.git
+.github
+.cursor
+**/*.md
+!README.md
+# Local data and downloaded model files (bind mount in compose; never send 100GB+ to build)
+# Exclude only the big backend/models dir (downloaded weights), not backend/app/models (Python package)
+backend/data
+**/data
+backend/models
+**/.ollama
+**/cache
+**/.cache
+# Scripts not needed in image
+scripts
+Makefile
+start
+close
+help
+**/*.sh
+.env
+.env.*
+!.env.example
+# Electron and large binaries
+frontend/electron
+**/dist-electron

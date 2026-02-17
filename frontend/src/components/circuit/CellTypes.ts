@@ -55,6 +55,13 @@ export const CELL_TYPES: CellTypeConfig[] = [
         category: 'System'
     },
     {
+        type: 'telegram_send',
+        label: 'Telegram',
+        icon: '✈️',
+        description: 'Send message to Telegram (connect bot in Settings → Connections)',
+        category: 'System'
+    },
+    {
         type: 'cron_trigger',
         label: 'Cron Schedule',
         icon: '⏰',

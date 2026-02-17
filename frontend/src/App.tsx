@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { Component, useState, useEffect, useRef } from 'react'
 import { CRTContainer } from './components/shell/CRTContainer'
 import { TitleBar } from './components/shell/TitleBar'
 import { TerminalFeed } from './components/terminal/TerminalFeed'
@@ -19,6 +19,48 @@ import { useSocket } from './hooks/useSocket'
 import { useSystemStatus } from './hooks/useSystemStatus'
 
 type ViewMode = 'terminal' | 'circuit'
+
+/** Catches render errors in Settings so the app does not crash. */
+class SettingsModalErrorBoundary extends Component<
+  { children: React.ReactNode; onClose: () => void },
+  { hasError: boolean }
+> {
+  state = { hasError: false }
+
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+
+  componentDidCatch(error: Error) {
+    console.error('[LOOM] SettingsModal error:', error)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-void/90 p-4">
+          <div className="border border-terminal-border bg-slate p-6 max-w-md text-center">
+            <p className="text-phosphor font-bold mb-2">Settings failed to load</p>
+            <p className="text-terminal-muted text-sm mb-4">
+              Check the console for details. You can close this and try again.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                this.setState({ hasError: false })
+                this.props.onClose()
+              }}
+              className="px-4 py-2 border border-phosphor text-phosphor hover:bg-phosphor hover:text-void"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
@@ -257,10 +299,12 @@ function App() {
         />
 
         {/* Settings Modal */}
-        <SettingsModal
-          isOpen={settingsOpen}
-          onClose={() => setSettingsOpen(false)}
-        />
+        <SettingsModalErrorBoundary onClose={() => setSettingsOpen(false)}>
+          <SettingsModal
+            isOpen={settingsOpen}
+            onClose={() => setSettingsOpen(false)}
+          />
+        </SettingsModalErrorBoundary>
 
         <ShortcutCheatSheet
           isOpen={shortcutsOpen}

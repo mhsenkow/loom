@@ -19,6 +19,7 @@ import { DialogModal } from '../shell/DialogModal'
 import { loadSettings, saveSettings } from '../shell/SettingsModal'
 import { AvatarPanel } from '../avatar/AvatarPanel'
 import { VoiceChatModal } from '../avatar/VoiceChatModal'
+import { API_BASE_URL } from '../../config/api'
 import { getSocketInstance, type PullStatus, useSocket } from '../../hooks/useSocket'
 import { useAudioAnalyzer } from '../../hooks/useAudioAnalyzer'
 import { useSpeechSynthesis } from '../../hooks/useSpeechSynthesis'
@@ -38,6 +39,7 @@ import {
   saveCircuit,
 } from '../../hooks/useCircuitRunner'
 import { NOTEBOOK_TEMPLATES } from '../circuit/TemplatesSidebar'
+import { TelegramChatPanel } from './TelegramChatPanel'
 import type { LogEntry } from '../../types/module'
 import { buildConversationContext, buildEnhancedPrompt } from '../../utils/conversationContext'
 import { buildConversationProfileFromSettings, normalizeProfileLines, toMultilineText } from '../../utils/conversationProfile'
@@ -58,7 +60,6 @@ import {
   upsertMaintenanceTask,
   type MaintenanceTask,
 } from '../../utils/maintenanceQueue'
-import { API_BASE_URL } from '../../config/api'
 import { loadEntriesFromLocalStorage } from '../../utils/terminalHistory'
 import {
   deleteSessionAsync,
@@ -592,6 +593,7 @@ export function TerminalFeed() {
   const circuitExecution = useCircuitExecution()
 
   const [entries, setEntries] = useState<LogEntry[]>(() => loadEntriesFromLocalStorage(STORAGE_KEY))
+  const [telegramPanelCollapsed, setTelegramPanelCollapsed] = useState(true)
   const [panelCollapsed, setPanelCollapsed] = useState(() => {
     try {
       return localStorage.getItem(PANEL_COLLAPSED_KEY) === 'true'
@@ -719,7 +721,11 @@ export function TerminalFeed() {
   const speakNextAiResponseRef = useRef(false)
   const voiceChatContentRef = useRef('')
   const voiceChatRecordingRef = useRef(false)
-  const handleAIRequestRef = useRef<((prompt: string, timestamp: number, contextMode: 'input' | 'key' | 'full', modelOverride?: string) => void) | null>(null)
+  const handleAIRequestRef = useRef<((prompt: string, timestamp: number, contextMode: 'input' | 'key' | 'full', modelOverride?: string, options?: { onComplete?: (r: string) => void; telegramContext?: string; telegramChatId?: string }) => void) | null>(null)
+  const inFlightTelegramKeyRef = useRef<string | null>(null)
+  const onCompleteCalledForEntryIdRef = useRef<Set<string>>(new Set())
+  const telegramTypingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const telegramStatusMessageRef = useRef<{ chatId: string; messageId: number } | null>(null)
 
   const [avatarConfig, setAvatarConfig] = useState(() => {
     try {
@@ -1280,6 +1286,217 @@ export function TerminalFeed() {
     return unsubscribe
   }, [])
 
+  // Listen for Telegram inbound (messages, images, voice, audio from your bot)
+  useEffect(() => {
+    const socket = getSocketInstance()
+    if (!socket) return
+    const handler = async (data: {
+      type: string
+      content: string
+      text?: string
+      chat_id?: string | number
+      image_url_path?: string
+      audio_url_path?: string
+      file_url_path?: string
+      caption?: string | null
+    }) => {
+      const ts = Date.now()
+      const base = `${API_BASE_URL}/api/connectors/telegram/files/`
+      if (data.type === 'image' && data.image_url_path) {
+        setEntries(prev => [...prev, {
+          id: `telegram-${ts}-img`,
+          type: 'image',
+          content: data.caption || data.content,
+          timestamp: ts,
+          imageUrl: base + data.image_url_path,
+          metadata: { source: 'telegram' },
+        }])
+        return
+      }
+      if (data.type === 'audio' && data.audio_url_path) {
+        setEntries(prev => [...prev, {
+          id: `telegram-${ts}-audio`,
+          type: 'audio',
+          content: data.caption || data.content,
+          timestamp: ts,
+          audioUrl: base + data.audio_url_path,
+          metadata: { source: 'telegram' },
+        }])
+        return
+      }
+      if (data.type === 'system' && data.file_url_path) {
+        setEntries(prev => [...prev, {
+          id: `telegram-${ts}-file`,
+          type: 'system',
+          content: (data.caption ? data.content + '\n\n' + data.caption : data.content) + `\n\nFile: ${base}${data.file_url_path}`,
+          timestamp: ts,
+          metadata: { source: 'telegram', fileUrl: base + data.file_url_path },
+        }])
+        return
+      }
+      if (data.type === 'text' && data.text != null && data.chat_id != null) {
+        const messageKey = `${data.chat_id}:${(data as { message_id?: number }).message_id ?? ts}`
+        if (inFlightTelegramKeyRef.current === messageKey) return
+        inFlightTelegramKeyRef.current = messageKey
+        setEntries(prev => [...prev, {
+          id: `telegram-${ts}`,
+          type: 'system',
+          content: data.content,
+          timestamp: ts,
+          metadata: { source: 'telegram' },
+        }, {
+          id: `user-telegram-${ts}`,
+          type: 'user',
+          content: data.text,
+          timestamp: ts,
+          metadata: { source: 'telegram' },
+        }])
+        const chatId = String(data.chat_id)
+        const inReplyToMessageId = (data as { message_id?: number }).message_id
+        const inReplyToUpdateId = (data as { update_id?: number }).update_id
+        const rawText = (data.text || '').trim()
+        const dreamMatch = /^\/dream\s*(.*)$/i.exec(rawText)
+        if (dreamMatch) {
+          const prompt = dreamMatch[1].trim()
+          if (!prompt) {
+            fetch(`${API_BASE_URL}/api/connectors/telegram/send`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: chatId, message: 'Usage: /dream <prompt> — e.g. /dream a sunset over the ocean' }),
+            }).catch(() => {})
+            inFlightTelegramKeyRef.current = null
+            return
+          }
+          fetch(`${API_BASE_URL}/api/connectors/telegram/send-status`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, text: 'Generating image…' }),
+          }).catch(() => {})
+          fetch(`${API_BASE_URL}/api/images/generate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt, provider: 'ollama', model: '' }),
+          })
+            .then(r => r.json())
+            .then(async (gen) => {
+              if (gen?.status === 'success' && gen?.image) {
+                const body: { chat_id: string; image_base64: string; caption?: string; in_reply_to_message_id?: number; in_reply_to_update_id?: number } = {
+                  chat_id: chatId,
+                  image_base64: gen.image,
+                  caption: prompt.slice(0, 200),
+                }
+                if (typeof inReplyToMessageId === 'number') body.in_reply_to_message_id = inReplyToMessageId
+                if (typeof inReplyToUpdateId === 'number') body.in_reply_to_update_id = inReplyToUpdateId
+                await fetch(`${API_BASE_URL}/api/connectors/telegram/send-photo`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(body),
+                })
+              } else {
+                await fetch(`${API_BASE_URL}/api/connectors/telegram/send`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ chat_id: chatId, message: `Image generation failed: ${gen?.detail || gen?.message || 'unknown error'}` }),
+                })
+              }
+            })
+            .catch(async () => {
+              await fetch(`${API_BASE_URL}/api/connectors/telegram/send`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: chatId, message: 'Image generation failed. Make sure Ollama is running and an image model is installed (e.g. ollama pull x/flux2-klein:4b).' }),
+              })
+            })
+            .finally(() => {
+              inFlightTelegramKeyRef.current = null
+            })
+          return
+        }
+        const run = handleAIRequestRef.current
+        let telegramContext: string | undefined
+        try {
+          const convRes = await fetch(`${API_BASE_URL}/api/connectors/telegram/conversation?chat_id=${encodeURIComponent(chatId)}`)
+          if (convRes.ok) {
+            const conv = await convRes.json()
+            const messages = (conv.messages || []) as { role: string; content: string }[]
+            const block = messages.slice(-20).map(m => `${m.role}: ${m.content}`).join('\n')
+            if (block) telegramContext = `[Telegram conversation]\n${block}`
+          }
+        } catch {
+          // ignore
+        }
+        if (run) {
+          run(data.text, ts, 'input', undefined, {
+            telegramChatId: chatId,
+            onComplete: (response) => {
+              const statusMsg = telegramStatusMessageRef.current
+              telegramStatusMessageRef.current = null
+              inFlightTelegramKeyRef.current = null
+              if (statusMsg && statusMsg.chatId === chatId) {
+                const editBody: { chat_id: string; message_id: number; text: string; append_to_conversation: boolean; in_reply_to_message_id?: number; in_reply_to_update_id?: number } = {
+                  chat_id: chatId,
+                  message_id: statusMsg.messageId,
+                  text: response,
+                  append_to_conversation: true,
+                }
+                if (typeof inReplyToMessageId === 'number') editBody.in_reply_to_message_id = inReplyToMessageId
+                if (typeof inReplyToUpdateId === 'number') editBody.in_reply_to_update_id = inReplyToUpdateId
+                fetch(`${API_BASE_URL}/api/connectors/telegram/edit-message`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(editBody),
+                })
+                  .then(() => { window.dispatchEvent(new CustomEvent('loom:telegram-conversation-update')) })
+                  .catch(() => {
+                    const body: { message: string; chat_id: string; in_reply_to_message_id?: number; in_reply_to_update_id?: number } = {
+                      message: response,
+                      chat_id: chatId,
+                    }
+                    if (typeof inReplyToMessageId === 'number') body.in_reply_to_message_id = inReplyToMessageId
+                    if (typeof inReplyToUpdateId === 'number') body.in_reply_to_update_id = inReplyToUpdateId
+                    fetch(`${API_BASE_URL}/api/connectors/telegram/send`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(body),
+                    })
+                      .then(() => { window.dispatchEvent(new CustomEvent('loom:telegram-conversation-update')) })
+                      .catch(e => console.warn('[LOOM] Send to Telegram failed:', e))
+                  })
+              } else {
+                const body: { message: string; chat_id: string; in_reply_to_message_id?: number; in_reply_to_update_id?: number } = {
+                  message: response,
+                  chat_id: chatId,
+                }
+                if (typeof inReplyToMessageId === 'number') body.in_reply_to_message_id = inReplyToMessageId
+                if (typeof inReplyToUpdateId === 'number') body.in_reply_to_update_id = inReplyToUpdateId
+                fetch(`${API_BASE_URL}/api/connectors/telegram/send`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(body),
+                })
+                  .then(() => { window.dispatchEvent(new CustomEvent('loom:telegram-conversation-update')) })
+                  .catch(e => console.warn('[LOOM] Send to Telegram failed:', e))
+              }
+            },
+            telegramContext,
+          })
+        } else {
+          inFlightTelegramKeyRef.current = null
+        }
+        return
+      }
+      setEntries(prev => [...prev, {
+        id: `telegram-${ts}`,
+        type: 'system',
+        content: data.content,
+        timestamp: ts,
+        metadata: { source: 'telegram' },
+      }])
+    }
+    socket.on('telegram_inbound', handler)
+    return () => { socket.off('telegram_inbound', handler) }
+  }, [])
+
   const addSystemEntry = useCallback((content: string, timestamp: number) => {
     setEntries(prev => [...prev, {
       id: `system-${timestamp}-${Math.random()}`,
@@ -1406,6 +1623,11 @@ export function TerminalFeed() {
       fetchModels()
     }
 
+    const telegramModelLabel = (name: string) => {
+      const first = (name.split(/[:\-]/)[0] || name).trim()
+      return first ? first.charAt(0).toUpperCase() + first.slice(1) : name
+    }
+
     const handleOrchestratorEvent = (event: Event) => {
       const detail = (event as CustomEvent<Record<string, unknown>>).detail || {}
       const type = typeof detail.type === 'string' ? detail.type : ''
@@ -1419,6 +1641,15 @@ export function TerminalFeed() {
       if (type === 'model_switched' && model) {
         const fromLabel = previousModel || 'previous model'
         addSystemEntry(`🧠 Auto Model Switch:\n${fromLabel} → ${model}\nReason: ${reason}`, Date.now())
+      }
+      if ((type === 'model_selected' || type === 'model_switched') && model && telegramStatusMessageRef.current) {
+        const { chatId, messageId } = telegramStatusMessageRef.current
+        const label = `${telegramModelLabel(model)} thinking…`
+        fetch(`${API_BASE_URL}/api/connectors/telegram/edit-message`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, message_id: messageId, text: label }),
+        }).catch(() => {})
       }
     }
 
@@ -1571,7 +1802,12 @@ export function TerminalFeed() {
     timestamp: number,
     contextMode: 'input' | 'key' | 'full' = 'input',
     modelOverride?: string,
+    options?: { onComplete?: (response: string) => void; telegramContext?: string; telegramChatId?: string },
   ) => {
+    if (telegramTypingIntervalRef.current) {
+      clearInterval(telegramTypingIntervalRef.current)
+      telegramTypingIntervalRef.current = null
+    }
     let effectiveContextMode: 'input' | 'key' | 'full' = contextMode
     if (contextMode === 'input' && shouldAutoUseKeyContext(prompt, entries)) {
       effectiveContextMode = 'key'
@@ -1607,7 +1843,9 @@ export function TerminalFeed() {
       return fallbackModel
     }
 
-    const modelToUse = getChatModel(modelOverride)
+    const modelToUse = options?.telegramChatId
+      ? 'auto'
+      : getChatModel(modelOverride)
 
     setEntries(prev => [...prev, {
       id: entryId,
@@ -1624,6 +1862,21 @@ export function TerminalFeed() {
         missionObjective: sessionMission.objective || undefined,
       },
     }])
+
+    if (options?.telegramChatId) {
+      const chatId = options.telegramChatId
+      telegramStatusMessageRef.current = null
+      fetch(`${API_BASE_URL}/api/connectors/telegram/send-status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, text: 'Thinking…' }),
+      })
+        .then(res => res.ok ? res.json() : null)
+        .then(data => {
+          if (data?.message_id) telegramStatusMessageRef.current = { chatId, messageId: data.message_id }
+        })
+        .catch(() => {})
+    }
 
     const handleChunk = (chunk: { content: string }) => {
       const now = Date.now()
@@ -1707,6 +1960,11 @@ export function TerminalFeed() {
       }
 
       if (statusData.status === 'success' || statusData.status === 'error') {
+        if (telegramTypingIntervalRef.current) {
+          clearInterval(telegramTypingIntervalRef.current)
+          telegramTypingIntervalRef.current = null
+        }
+        if (statusData.status === 'error') telegramStatusMessageRef.current = null
         const isSuccess = statusData.status === 'success'
         emitCrtBurst(isSuccess ? 'ai-done' : 'ai-error', isSuccess ? 0.95 : 1.35, isSuccess ? 140 : 200)
         // Desktop notification when tab is backgrounded
@@ -1743,6 +2001,14 @@ export function TerminalFeed() {
               if (!(autoGenerateAudio && ttsModelType === 'orpheus')) {
                 setTimeout(() => speakTTSUnified(text), 0)
               }
+            }
+          }
+          if (statusData.status === 'success' && options?.onComplete && !onCompleteCalledForEntryIdRef.current.has(entryId)) {
+            onCompleteCalledForEntryIdRef.current.add(entryId)
+            try {
+              options.onComplete(currentAIContentRef.current || '')
+            } catch (e) {
+              console.warn('[LOOM] Telegram reply onComplete failed:', e)
             }
           }
           return prev.map(ent =>
@@ -1817,7 +2083,10 @@ export function TerminalFeed() {
         contextMode: effectiveContextMode,
         maxTurns: adaptiveMaxTurns,
       })
-    const enhancedPrompt = buildEnhancedPrompt(prompt, conversationBlock, circuitContext, conversationProfile)
+    let enhancedPrompt = buildEnhancedPrompt(prompt, conversationBlock, circuitContext, conversationProfile)
+    if (options?.telegramContext) {
+      enhancedPrompt = options.telegramContext + '\n\n---\n\n' + enhancedPrompt
+    }
     const feedbackBias = feedbackToBias(agentFeedbackProfile)
 
     const useCodeContext = codeContextActive
@@ -1839,6 +2108,11 @@ export function TerminalFeed() {
     )
 
     if (!sent) {
+      if (telegramTypingIntervalRef.current) {
+        clearInterval(telegramTypingIntervalRef.current)
+        telegramTypingIntervalRef.current = null
+      }
+      telegramStatusMessageRef.current = null
       setAiRuntimeTelemetry({
         active: false,
         phase: 'Backend offline',
@@ -3602,7 +3876,7 @@ export function TerminalFeed() {
         id: 'models',
         label: 'Chat model ready',
         complete: hasLocalChatModel,
-        actionLabel: 'Setup stack',
+        actionLabel: 'Get base models',
         action: () => handleCommand('/setup-models', 'input'),
       },
       {
@@ -3621,6 +3895,15 @@ export function TerminalFeed() {
       },
     ] as const
   }, [chatModels.length, connectedCloudProviders.length, codeContextActive, codeContextFolder, codeContextFilesIndexed, handleCommand])
+
+  // Allow Settings (or other UI) to trigger "Get base models" without coupling to TerminalFeed
+  useEffect(() => {
+    const onRunSetupModels = () => {
+      handleCommand('/setup-models', 'input')
+    }
+    window.addEventListener('loom:run-setup-models', onRunSetupModels)
+    return () => window.removeEventListener('loom:run-setup-models', onRunSetupModels)
+  }, [handleCommand])
 
   const onboardingCompleteCount = useMemo(
     () => onboardingChecklist.filter(item => item.complete).length,
@@ -3964,17 +4247,27 @@ export function TerminalFeed() {
         avatarActive={avatarPanelOpen}
       />
 
-      {/* Session Panel */}
-      <SessionPanel
-        isCollapsed={panelCollapsed}
-        onToggleCollapse={() => setPanelCollapsed(prev => !prev)}
-        onLoadSession={handleLoadSession}
-        onSaveSession={() => setShowSaveModal(true)}
-        onNewSession={handleNewSession}
-        onDeleteSession={handleDeleteSession}
-        currentEntryCount={entries.length}
-        currentSessionName={currentSessionName}
-      />
+      {/* Left sidebar: Sessions + Telegram */}
+      <div
+        className={`flex flex-col h-full shrink-0 border-r border-terminal-border bg-void transition-all duration-200 ${
+          panelCollapsed ? 'w-10' : 'w-56 sm:w-60 md:w-40 lg:w-44'
+        }`}
+      >
+        <SessionPanel
+          isCollapsed={panelCollapsed}
+          onToggleCollapse={() => setPanelCollapsed(prev => !prev)}
+          onLoadSession={handleLoadSession}
+          onSaveSession={() => setShowSaveModal(true)}
+          onNewSession={handleNewSession}
+          onDeleteSession={handleDeleteSession}
+          currentEntryCount={entries.length}
+          currentSessionName={currentSessionName}
+        />
+        <TelegramChatPanel
+          isCollapsed={telegramPanelCollapsed}
+          onToggleCollapse={() => setTelegramPanelCollapsed(prev => !prev)}
+        />
+      </div>
 
       {/* Main Terminal Area */}
       <div className={`relative flex-1 flex flex-col transition-all duration-200 ${(imageGeneration || musicGeneration || avatarPanelOpen) ? 'mr-0 xl:mr-96' : ''}`}>
@@ -4091,6 +4384,11 @@ export function TerminalFeed() {
                   <div className="text-[10px] tracking-widest text-phosphor">ONBOARDING CHECKLIST</div>
                   <div className="text-[10px] text-terminal-muted">{onboardingCompleteCount}/{onboardingChecklist.length} complete</div>
                 </div>
+                {onboardingCompleteCount === 0 && (
+                  <p className="text-[10px] text-terminal-muted">
+                    First run? Start <strong className="text-phosphor">Ollama</strong> on your machine (ollama.app or <code className="text-phosphor">ollama serve</code>), then click <strong className="text-phosphor">Get base models</strong>.
+                  </p>
+                )}
                 <div className="space-y-1.5">
                   {onboardingChecklist.map(item => (
                     <div key={item.id} className="flex items-center justify-between gap-2 text-xs">

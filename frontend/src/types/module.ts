@@ -17,6 +17,7 @@ export type ModuleType =
   | 'qdc_status'
   | 'qdc_results'
   | 'notification'
+  | 'telegram_send'
   | 'file_write'
   | 'shell_exec'
   | 'delay'

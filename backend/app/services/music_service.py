@@ -1,45 +1,51 @@
 
 import os
-import torch
 import soundfile as sf
 import numpy as np
 import logging
 from fastapi import HTTPException
 
-# Mac MPS (Metal) optimization - allow full GPU memory usage
-if torch.backends.mps.is_available():
-    os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
-
-# Monkey-patch torchaudio.save to use soundfile backend (fixes torchcodec issue in torchaudio 2.10+)
-def _patched_torchaudio_save(filepath, audio_tensor, sample_rate, **kwargs):
-    """Save audio using soundfile instead of torchaudio's broken torchcodec path."""
-    # Convert tensor to numpy
-    audio_np = audio_tensor.cpu().numpy()
-    
-    # soundfile expects (samples, channels), torchaudio uses (channels, samples) by default
-    if len(audio_np.shape) > 1 and audio_np.shape[0] < audio_np.shape[1]:
-        audio_np = audio_np.T
-    
-    sf.write(filepath, audio_np, sample_rate)
-
-try:
-    import torchaudio
-    torchaudio.save = _patched_torchaudio_save
-    logging.getLogger(__name__).info("Patched torchaudio.save to use soundfile backend")
-except ImportError:
-    pass
-
-# Configure logging
 logger = logging.getLogger(__name__)
 
-# Model configuration
 MODEL_CACHE_DIR = os.path.expanduser("~/.cache/ace-step/checkpoints")
+
+
+def _get_torch():
+    """Lazy import so Docker image without torch can start."""
+    try:
+        import torch
+        return torch
+    except ImportError:
+        return None
+
+
+def _apply_torch_settings(torch):
+    """Apply MPS env and torchaudio patch when torch is available."""
+    if torch.backends.mps.is_available():
+        os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
+    try:
+        import torchaudio
+        def _patched_torchaudio_save(filepath, audio_tensor, sample_rate, **kwargs):
+            audio_np = audio_tensor.cpu().numpy()
+            if len(audio_np.shape) > 1 and audio_np.shape[0] < audio_np.shape[1]:
+                audio_np = audio_np.T
+            sf.write(filepath, audio_np, sample_rate)
+        torchaudio.save = _patched_torchaudio_save
+        logger.info("Patched torchaudio.save to use soundfile backend")
+    except ImportError:
+        pass
+
 
 class MusicService:
     def __init__(self):
         self.model = None
         self.has_loaded = False
-        self.device = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
+        torch = _get_torch()
+        if torch is not None:
+            _apply_torch_settings(torch)
+            self.device = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
+        else:
+            self.device = "unavailable"
         
         # Status tracking for UI
         self.is_downloading = False
@@ -168,16 +174,20 @@ class MusicService:
         if not self.has_loaded:
             await self.load_model()
 
-        # Handle seed
+        # Handle seed (avoid torch if not installed, for mock path)
         if seed is None:
-            seed = torch.randint(0, 2**32 - 1, (1,)).item()
+            import random
+            seed = random.randrange(0, 2**32)
         
         logger.info(f"Generating music: '{prompt}' ({duration}s), Seed: {seed}, Task: {task}")
         
-        # Set seed for reproducibility
-        torch.manual_seed(seed)
-        if self.device == "cuda":
-            torch.cuda.manual_seed(seed)
+        torch = _get_torch()
+        if self.model is not None and torch is None:
+            raise HTTPException(status_code=503, detail="Music generation (torch) is not installed. Install full requirements for ACE-Step.")
+        if torch is not None:
+            torch.manual_seed(seed)
+            if self.device == "cuda":
+                torch.cuda.manual_seed(seed)
         
         output_dir = "data/music"
         os.makedirs(output_dir, exist_ok=True)

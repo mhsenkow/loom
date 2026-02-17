@@ -15,7 +15,9 @@ feedback is a gift
 
 > Retro-Terminal Edition
 
-A local-first, desktop-class Personal Intelligence OS with a "Cassette Futurism" / "90s Mainframe" aesthetic. Think *Alien* terminals, *Metal Gear Solid* UI, or a highly polished Linux terminal.
+**LOOM is your home base** — the one place you work from: terminal feed, circuit board, sessions, and AI. Local-first, desktop-class, with a "Cassette Futurism" / "90s Mainframe" aesthetic. Connections to other communication forms (Slack, Discord, Telegram, etc.) can plug in as optional in/out channels, but the app stays the center: you come here to think, build, and run.
+
+Think *Alien* terminals, *Metal Gear Solid* UI, or a highly polished Linux terminal.
 
 ## ✨ Features
 
@@ -94,6 +96,31 @@ This will:
 - ✅ Display URLs when ready
 
 **That's it!** Open http://localhost:5173 in your browser.
+
+### 🐳 Run with Docker (single “working app”)
+
+If you prefer not to install Python/Node locally, use Docker. You still need **Ollama** running on your machine (the app in the container talks to it).
+
+**Important:** Run from inside the `loom` directory so the build context is only this app:
+
+```bash
+cd loom
+make dock-notebook
+```
+
+Or: `docker compose up --build`
+
+The first build sends only source and config (no `node_modules`, `venv`, `backend/data`, or `backend/models`). If you see a multi‑GB “transferring context,” check that you’re in `loom` and that `.dockerignore` is present; local models and caches are excluded so the context stays small.
+
+Then open **http://localhost:8000**. The image does **not** include AI models; those live in Ollama on your host. To get the default chat + image stack:
+
+- Use the **“Get base models”** button in **Settings** (Models / Hacker profiles), or  
+- In the terminal checklist, click **“Get base models”**, or  
+- Type **`/setup-models`** in the terminal.
+
+That will pull TinyLlama (router), Llama 3.1 8B (chat), and Flux Klein (image) into Ollama on your machine. Data (sessions, circuits, ChromaDB) is stored in a Docker volume. The container reaches Ollama via `OLLAMA_HOST=http://host.docker.internal:11434` (see `docker-compose.yml`).
+
+The Docker image uses a smaller dependency set for faster builds (see `backend/requirements-docker.txt`). For full image/music/web/cloud features, use the non-Docker setup or extend the Dockerfile to use `backend/requirements.txt`.
 
 ### Closing Notebook
 

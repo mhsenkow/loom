@@ -1,16 +1,36 @@
 import asyncio
-from playwright.async_api import async_playwright
+import re
 from pathlib import Path
 import time
 import httpx
 import os
-from bs4 import BeautifulSoup
 import base64
 import logging
 
 logger = logging.getLogger(__name__)
 
-# Stealth mode to avoid bot detection
+# Playwright and BeautifulSoup are optional (lazy import) so Docker slim image can start without them.
+
+
+def _get_playwright():
+    """Lazy import so Docker image without playwright can start."""
+    try:
+        from playwright.async_api import async_playwright
+        return async_playwright
+    except ImportError:
+        return None
+
+
+def _get_BeautifulSoup():
+    """Lazy import so Docker image without bs4 can start."""
+    try:
+        from bs4 import BeautifulSoup
+        return BeautifulSoup
+    except ImportError:
+        return None
+
+
+# Stealth mode to avoid bot detection (only used when playwright is used)
 try:
     from playwright_stealth import stealth_async
     HAS_STEALTH = True
@@ -55,6 +75,12 @@ class WebService:
         self.current_page = None
 
     async def _ensure_browser(self):
+        async_playwright = _get_playwright()
+        if async_playwright is None:
+            raise RuntimeError(
+                "Playwright is not installed. Install with: pip install playwright && playwright install chromium. "
+                "Web browsing and /research will be disabled until then."
+            )
         if not self.playwright:
             self.playwright = await async_playwright().start()
         if not self.browser:
@@ -62,7 +88,8 @@ class WebService:
 
     def _extract_text(self, html: str) -> str:
         """Extract clean text using Readability (Mozilla Reader View) with BeautifulSoup fallback."""
-        if HAS_READABILITY:
+        BeautifulSoup = _get_BeautifulSoup()
+        if HAS_READABILITY and BeautifulSoup is not None:
             try:
                 doc = Document(html)
                 article_html = doc.summary()
@@ -73,10 +100,16 @@ class WebService:
             except Exception as e:
                 logger.debug("Readability failed, using fallback: %s", e)
         
-        soup = BeautifulSoup(html, 'html.parser')
-        for tag in soup(["script", "style", "nav", "footer", "iframe", "header", "aside"]):
-            tag.decompose()
-        return soup.get_text(separator=' ', strip=True)
+        if BeautifulSoup is not None:
+            soup = BeautifulSoup(html, 'html.parser')
+            for tag in soup(["script", "style", "nav", "footer", "iframe", "header", "aside"]):
+                tag.decompose()
+            return soup.get_text(separator=' ', strip=True)
+        # Fallback: strip tags with regex (no bs4)
+        text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<[^>]+>', ' ', text)
+        return ' '.join(text.split())
 
     async def _capture_page_state(self, page, url: str, analyze_vision: bool) -> dict:
         """Helper to capture screenshot, text, and optional vision analysis."""

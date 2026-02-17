@@ -14,6 +14,10 @@ cat << 'EOF'
   ./start               Open Notebook (same as make notebook-open)
   ./close               Close Notebook (same as make notebook-close)
 
+🐳 Docker (alternative to notebook-open):
+  make dock-notebook    Run app in Docker (one container). Open http://localhost:8000
+  make docker-build     Build Docker image only. Requires: Ollama on host.
+
 🔧 Utility Commands:
   make install          Install all dependencies
   make clean            Clean up dependencies and build artifacts
