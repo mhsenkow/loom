@@ -39,7 +39,6 @@ import {
   saveCircuit,
 } from '../../hooks/useCircuitRunner'
 import { NOTEBOOK_TEMPLATES } from '../circuit/TemplatesSidebar'
-import { TelegramChatPanel } from './TelegramChatPanel'
 import type { LogEntry } from '../../types/module'
 import { buildConversationContext, buildEnhancedPrompt } from '../../utils/conversationContext'
 import { buildConversationProfileFromSettings, normalizeProfileLines, toMultilineText } from '../../utils/conversationProfile'
@@ -593,7 +592,6 @@ export function TerminalFeed() {
   const circuitExecution = useCircuitExecution()
 
   const [entries, setEntries] = useState<LogEntry[]>(() => loadEntriesFromLocalStorage(STORAGE_KEY))
-  const [telegramPanelCollapsed, setTelegramPanelCollapsed] = useState(true)
   const [panelCollapsed, setPanelCollapsed] = useState(() => {
     try {
       return localStorage.getItem(PANEL_COLLAPSED_KEY) === 'true'
@@ -3949,6 +3947,52 @@ export function TerminalFeed() {
     })
   }, [emitSessionRitualBriefing])
 
+  const handleLoadTelegramConversation = useCallback(async () => {
+    try {
+      const [statusRes, convRes] = await Promise.all([
+        fetch(`${API_BASE_URL}/api/connectors/status`),
+        fetch(`${API_BASE_URL}/api/connectors/telegram/conversation`),
+      ])
+      if (!convRes.ok) {
+        showErrorToast('Could not load Telegram conversation.', 'Session')
+        return
+      }
+      const conv = await convRes.json()
+      const messages = Array.isArray(conv?.messages) ? conv.messages : []
+      const status = statusRes.ok ? await statusRes.json() : {}
+      const botUsername = status?.telegram?.username ?? 'Telegram'
+      const label = `Telegram: @${botUsername}`
+
+      const timestamp = Date.now()
+      const mapped: LogEntry[] = messages.map((msg: { role: string; content: string; ts?: string | null }, i: number) => ({
+        id: `telegram-${i}-${timestamp}`,
+        type: msg.role === 'user' ? 'user' : 'ai',
+        content: msg.content ?? '',
+        timestamp: typeof msg.ts === 'string' ? new Date(msg.ts).getTime() : timestamp + i,
+        metadata: { source: 'telegram' },
+      }))
+
+      setCurrentSessionName(label)
+      try {
+        localStorage.setItem('loom-current-session', label)
+      } catch { }
+      setEntries([
+        {
+          id: `system-${timestamp}`,
+          type: 'system',
+          content: `Loaded Telegram conversation (${mapped.length} messages).`,
+          timestamp,
+        },
+        ...mapped,
+      ])
+      setTimeout(() => emitSessionRitualBriefing(Date.now()), 0)
+      showSuccessToast('Telegram conversation loaded in main view.', 'Session')
+    } catch (e) {
+      console.warn('[LOOM] Load Telegram conversation failed:', e)
+      showErrorToast('Failed to load Telegram conversation.', 'Session')
+    }
+  }, [emitSessionRitualBriefing])
+
   const handleSaveSession = useCallback((name: string) => {
     // Filter out system initialization messages
     const filtered = entries.filter(e =>
@@ -4562,15 +4606,12 @@ export function TerminalFeed() {
           isCollapsed={panelCollapsed}
           onToggleCollapse={() => setPanelCollapsed(prev => !prev)}
           onLoadSession={handleLoadSession}
+          onLoadTelegramConversation={handleLoadTelegramConversation}
           onSaveSession={() => setShowSaveModal(true)}
           onNewSession={handleNewSession}
           onDeleteSession={handleDeleteSession}
           currentEntryCount={entries.length}
           currentSessionName={currentSessionName}
-        />
-        <TelegramChatPanel
-          isCollapsed={telegramPanelCollapsed}
-          onToggleCollapse={() => setTelegramPanelCollapsed(prev => !prev)}
         />
       </div>
 

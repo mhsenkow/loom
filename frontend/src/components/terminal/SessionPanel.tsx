@@ -10,6 +10,7 @@ interface SessionPanelProps {
   isCollapsed: boolean
   onToggleCollapse: () => void
   onLoadSession: (name: string) => void
+  onLoadTelegramConversation?: () => void
   onSaveSession: () => void
   onNewSession: () => void
   onDeleteSession?: (name: string) => void
@@ -21,6 +22,7 @@ export function SessionPanel({
   isCollapsed,
   onToggleCollapse,
   onLoadSession,
+  onLoadTelegramConversation,
   onSaveSession,
   onNewSession,
   onDeleteSession,
@@ -29,7 +31,25 @@ export function SessionPanel({
 }: SessionPanelProps) {
   const [sessions, setSessions] = useState<Record<string, SessionInfo>>({})
   const [hoveredSession, setHoveredSession] = useState<string | null>(null)
+  const [telegramLabel, setTelegramLabel] = useState<string | null>(null)
   const lastRefreshMsRef = useRef(0)
+
+  useEffect(() => {
+    if (!onLoadTelegramConversation) return
+    let mounted = true
+    fetch(`${API_BASE}/api/connectors/status`)
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (!mounted || !data?.telegram?.connected) {
+          setTelegramLabel(null)
+          return
+        }
+        const username = data.telegram?.username ?? 'bot'
+        setTelegramLabel(`Chat with @${username}`)
+      })
+      .catch(() => { if (mounted) setTelegramLabel(null) })
+    return () => { mounted = false }
+  }, [onLoadTelegramConversation])
 
   // Load sessions index (from backend with localStorage fallback)
   const refreshSessions = useCallback(async () => {
@@ -230,8 +250,26 @@ export function SessionPanel({
                 </div>
               )}
 
-              {recentSessionList.length > 0 && (
+              {(recentSessionList.length > 0 || telegramLabel) && (
                 <div className="px-3 pt-2 pb-1 text-[8px] text-terminal-muted tracking-widest">RECENT</div>
+              )}
+              {telegramLabel && onLoadTelegramConversation && (
+                <div className="px-3 py-2 border-b border-terminal-border/40">
+                  <button
+                    onClick={() => {
+                      onLoadTelegramConversation()
+                      closeDrawerOnMobile()
+                    }}
+                    title="Load Telegram conversation in main view"
+                    className="w-full text-left group flex items-start gap-2"
+                  >
+                    <span className="shrink-0 w-6 h-6 rounded flex items-center justify-center bg-cyan-500/20 text-cyan-400 border border-cyan-500/40 text-[11px] font-bold" aria-hidden>TG</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[10px] text-terminal-muted group-hover:text-phosphor truncate">{telegramLabel}</div>
+                      <div className="text-[8px] text-terminal-muted/60 mt-0.5">View in main</div>
+                    </div>
+                  </button>
+                </div>
               )}
               {recentSessionList.map(([name, info]) => (
                 <div
