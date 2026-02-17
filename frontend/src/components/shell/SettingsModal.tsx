@@ -10,6 +10,7 @@ import { dispatchDownloadTelemetry } from '../../utils/downloadTelemetry'
 import { buildConversationProfileFromSettings, buildConversationProfileStoragePreview } from '../../utils/conversationProfile'
 import { loadMemoryVault } from '../../utils/memoryVault'
 import { getSocketInstance, type PullStatus } from '../../hooks/useSocket'
+import { refreshCircuitsFromBackend } from '../../hooks/useCircuitRunner'
 
 interface SettingsModalProps {
   isOpen: boolean
@@ -185,6 +186,7 @@ type SettingsSectionId =
   | 'sharing'
   | 'voice'
   | 'connections'
+  | 'extensions'
   | 'integrations'
   | 'image_models'
 
@@ -202,6 +204,7 @@ const SETTINGS_SECTIONS: Array<{
   { id: 'sharing', label: 'Share Chat Site', subtitle: 'One-click public link', icon: '◐' },
   { id: 'voice', label: 'Voice & Avatar', subtitle: 'Speech and persona', icon: '◎' },
   { id: 'connections', label: 'Connections', subtitle: 'Telegram, Discord in/out', icon: '◔' },
+  { id: 'extensions', label: 'Extensions', subtitle: 'Skills → circuits and cell types', icon: '◇' },
 ]
 
 const OLLAMA_LIBRARY_RECOMMENDED = [
@@ -443,6 +446,86 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     discord?: { connected: boolean; username?: string }
   }>({})
   const [connectorsBusy, setConnectorsBusy] = useState<string | null>(null)
+  const [extensionsSources, setExtensionsSources] = useState<Array<{ id: string; url?: string; label?: string }>>([])
+  const [extensionsInstalled, setExtensionsInstalled] = useState<Array<{ id: string; name: string; version: string; description?: string; circuitCount: number }>>([])
+  const [extensionsInstallUrl, setExtensionsInstallUrl] = useState('')
+  const [extensionsInstallPath, setExtensionsInstallPath] = useState('')
+  const [extensionsInstallBusy, setExtensionsInstallBusy] = useState(false)
+  const [extensionsInstallError, setExtensionsInstallError] = useState<string | null>(null)
+  const [extensionsUninstallBusy, setExtensionsUninstallBusy] = useState<string | null>(null)
+
+  const fetchExtensionsSources = useCallback(async () => {
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/extensions/sources`)
+      if (r.ok) {
+        const list = await r.json()
+        setExtensionsSources(Array.isArray(list) ? list : [])
+      }
+    } catch (e) {
+      console.error('[LOOM] Failed to fetch extensions sources:', e)
+    }
+  }, [])
+
+  const fetchExtensionsInstalled = useCallback(async () => {
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/extensions/installed`)
+      if (r.ok) {
+        const list = await r.json()
+        setExtensionsInstalled(Array.isArray(list) ? list : [])
+      }
+    } catch (e) {
+      console.error('[LOOM] Failed to fetch extensions installed:', e)
+    }
+  }, [])
+
+  const handleInstallExtension = useCallback(async () => {
+    const url = extensionsInstallUrl.trim()
+    const path = extensionsInstallPath.trim()
+    if (!url && !path) {
+      setExtensionsInstallError('Enter a URL or a folder path.')
+      return
+    }
+    setExtensionsInstallBusy(true)
+    setExtensionsInstallError(null)
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/extensions/install`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(url ? { url } : { path }),
+      })
+      const data = await r.json().catch(() => ({}))
+      if (!r.ok) {
+        setExtensionsInstallError(data.detail || data.error || 'Install failed')
+        return
+      }
+      setExtensionsInstallUrl('')
+      setExtensionsInstallPath('')
+      await fetchExtensionsInstalled()
+      await refreshCircuitsFromBackend()
+    } catch (e) {
+      setExtensionsInstallError(e instanceof Error ? e.message : 'Install failed')
+    } finally {
+      setExtensionsInstallBusy(false)
+    }
+  }, [extensionsInstallUrl, extensionsInstallPath, fetchExtensionsInstalled])
+
+  const handleUninstallExtension = useCallback(async (skillId: string) => {
+    setExtensionsUninstallBusy(skillId)
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/extensions/installed/${encodeURIComponent(skillId)}`, { method: 'DELETE' })
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}))
+        setExtensionsInstallError(data.detail || 'Remove failed')
+        return
+      }
+      await fetchExtensionsInstalled()
+      await refreshCircuitsFromBackend()
+    } catch (e) {
+      setExtensionsInstallError(e instanceof Error ? e.message : 'Remove failed')
+    } finally {
+      setExtensionsUninstallBusy(null)
+    }
+  }, [fetchExtensionsInstalled])
 
   const fetchConnectorsStatus = useCallback(async () => {
     try {
@@ -623,6 +706,12 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     if (!isOpen || activeSection !== 'connections') return
     void fetchConnectorsStatus()
   }, [activeSection, isOpen, fetchConnectorsStatus])
+
+  useEffect(() => {
+    if (!isOpen || activeSection !== 'extensions') return
+    void fetchExtensionsSources()
+    void fetchExtensionsInstalled()
+  }, [activeSection, isOpen, fetchExtensionsSources, fetchExtensionsInstalled])
 
   const handleConnectTelegram = async () => {
     const token = telegramToken.trim()
@@ -1929,6 +2018,111 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             <li><strong className="text-phosphor">Avatar</strong> - Pick a style (Data Nebula, Plasma Orb, etc.)</li>
             <li><strong className="text-phosphor">Voice chat</strong> - Opens a modal to talk back and forth (hold to talk, AI replies aloud)</li>
           </ul>
+        </section>
+      )
+    }
+
+    if (activeSection === 'extensions') {
+      return (
+        <section className="space-y-4">
+          <p className="text-[11px] text-terminal-muted">
+            Install <strong className="text-phosphor">skills</strong> and LOOM turns them into circuits you can run from the Circuit Board or <code className="text-phosphor">/run &lt;name&gt;</code>.
+          </p>
+          <div className="border border-terminal-border bg-void/40 p-4 space-y-3">
+            <div className="text-[10px] text-phosphor font-bold tracking-wider">INSTALL A SKILL</div>
+            <p className="text-[10px] text-terminal-muted">
+              GitHub repo URL, .zip link, or local folder path containing <code className="text-phosphor">SKILL.md</code>.
+            </p>
+            <div className="flex flex-wrap items-center gap-2 mb-2">
+              <span className="text-[10px] text-terminal-muted">Quick example:</span>
+              <button
+                type="button"
+                onClick={async () => {
+                  setExtensionsInstallBusy(true)
+                  setExtensionsInstallError(null)
+                  try {
+                    const r = await fetch(`${API_BASE_URL}/api/extensions/install`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ path: 'sample-skill' }),
+                    })
+                    const data = await r.json().catch(() => ({}))
+                    if (!r.ok) {
+                      setExtensionsInstallError(data.detail || data.error || 'Install failed')
+                      return
+                    }
+                    await fetchExtensionsInstalled()
+                    await refreshCircuitsFromBackend()
+                  } catch (e) {
+                    setExtensionsInstallError(e instanceof Error ? e.message : 'Install failed')
+                  } finally {
+                    setExtensionsInstallBusy(false)
+                  }
+                }}
+                disabled={extensionsInstallBusy}
+                className="px-2 py-1 text-[10px] font-medium border border-phosphor text-phosphor hover:bg-phosphor hover:text-void disabled:opacity-50"
+              >
+                Try sample skill
+              </button>
+              <span className="text-[10px] text-terminal-muted">(built-in <code className="text-phosphor">sample-skill</code> in this repo — adds circuit <code className="text-phosphor">/sample-echo</code>)</span>
+            </div>
+            <div className="flex flex-col gap-2">
+              <input
+                type="text"
+                value={extensionsInstallUrl}
+                onChange={(e) => { setExtensionsInstallUrl(e.target.value); setExtensionsInstallError(null) }}
+                placeholder="https://github.com/user/repo or .zip URL"
+                className="w-full bg-void border border-terminal-border p-2 text-phosphor text-sm font-mono placeholder:text-terminal-muted focus:outline-none focus:border-phosphor"
+              />
+              <input
+                type="text"
+                value={extensionsInstallPath}
+                onChange={(e) => { setExtensionsInstallPath(e.target.value); setExtensionsInstallError(null) }}
+                placeholder="Or folder path"
+                className="w-full bg-void border border-terminal-border p-2 text-phosphor text-sm font-mono placeholder:text-terminal-muted focus:outline-none focus:border-phosphor"
+              />
+              {extensionsInstallError && <p className="text-[10px] text-red-400">{extensionsInstallError}</p>}
+              <button
+                type="button"
+                onClick={() => void handleInstallExtension()}
+                disabled={extensionsInstallBusy || (!extensionsInstallUrl.trim() && !extensionsInstallPath.trim())}
+                className="self-start px-3 py-1.5 text-[11px] font-bold border border-phosphor text-phosphor hover:bg-phosphor hover:text-void disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {extensionsInstallBusy ? 'Installing…' : 'Install'}
+              </button>
+            </div>
+          </div>
+          <div className="border border-terminal-border bg-void/40 p-4 space-y-3">
+            <div className="text-[10px] text-phosphor font-bold tracking-wider">INSTALLED SKILLS</div>
+            {extensionsInstalled.length === 0 ? (
+              <p className="text-[10px] text-terminal-muted">None yet. Install one above; circuits show on the Circuit Board and in <code className="text-phosphor">/circuits</code>.</p>
+            ) : (
+              <ul className="space-y-2">
+                {extensionsInstalled.map((skill) => (
+                  <li key={skill.id} className="flex items-start justify-between gap-2 py-1.5 border-b border-terminal-border/40 last:border-0">
+                    <div className="min-w-0">
+                      <span className="text-[11px] text-phosphor font-medium">{skill.name}</span>
+                      <span className="text-[10px] text-terminal-muted ml-1.5">v{skill.version}</span>
+                      {skill.circuitCount > 0 && <span className="text-[10px] text-terminal-muted block mt-0.5">{skill.circuitCount} circuit{skill.circuitCount !== 1 ? 's' : ''}</span>}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void handleUninstallExtension(skill.id)}
+                      disabled={extensionsUninstallBusy === skill.id}
+                      className="shrink-0 px-2 py-1 text-[10px] border border-terminal-border text-terminal-muted hover:border-red-500 hover:text-red-400 disabled:opacity-50"
+                    >
+                      {extensionsUninstallBusy === skill.id ? '…' : 'Remove'}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <p className="text-[10px] text-terminal-muted">
+            <strong className="text-phosphor">1:1 with Agent Skills:</strong> Same <code className="text-phosphor">SKILL.md</code> as{' '}
+            <a href="https://github.com/anthropics/skills" target="_blank" rel="noopener noreferrer" className="text-phosphor hover:underline">anthropics/skills</a>.
+            {' '}Instruction-only skills (name + description + body) become one runnable circuit each; skills with a <code className="text-phosphor">circuits</code> block use those. Install a skill folder from that repo (e.g. path to <code className="text-phosphor">skills/…</code>) to get <code className="text-phosphor">/run &lt;name&gt;</code>. See docs/SKILLS_AND_CIRCUITS.md.
+          </p>
         </section>
       )
     }

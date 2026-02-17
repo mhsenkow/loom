@@ -33,7 +33,7 @@ backend_dir = Path(__file__).parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-from app.routers import modules, images, files, circuits, search, remote, code_context, music, sessions, web, tts, qdc, system, scheduler, share, connectors
+from app.routers import modules, images, files, circuits, search, remote, code_context, music, sessions, web, tts, qdc, system, scheduler, share, connectors, extensions
 from app.routers import providers as providers_router
 from app.services.ollama_client import ollama_client
 from app.services.provider_manager import provider_manager
@@ -169,6 +169,7 @@ app.include_router(system.router, prefix="/api/system", tags=["system"])
 app.include_router(scheduler.router, prefix="/api/scheduler", tags=["scheduler"])
 app.include_router(share.router, prefix="/api/share", tags=["share"])
 app.include_router(connectors.router, prefix="/api/connectors", tags=["connectors"])
+app.include_router(extensions.router, prefix="/api/extensions", tags=["extensions"])
 
 
 # REST Endpoints (when not serving frontend, / returns API info)

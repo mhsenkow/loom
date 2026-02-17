@@ -63,9 +63,9 @@ async def run_module(
         return content or inp
 
     if module_type == "data_loader":
-        path = (content or "").strip()
+        path = (inp or content or "").strip()
         if not path:
-            raise ValueError("No file path specified")
+            raise ValueError("No file path specified. Enter a path in the cell content or connect from previous cell.")
         mode: FileReadMode = "auto"
         max_chars = 100_000
         try:

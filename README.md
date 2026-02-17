@@ -469,6 +469,8 @@ loom/
 - **[LOCAL_CONVERSATIONAL_AI.md](./LOCAL_CONVERSATIONAL_AI.md)** - Local conversation + streaming speech stack details
 - **[CLOUD_ORCHESTRATION_AND_QDC.md](./CLOUD_ORCHESTRATION_AND_QDC.md)** - Orchestrator routing, quick lane, providers, and QDC job lane
 - **[TEMPLATE_UPDATES.md](./TEMPLATE_UPDATES.md)** - Available circuit templates
+- **[docs/SKILLS_AND_CIRCUITS.md](./docs/SKILLS_AND_CIRCUITS.md)** - Skills as installable contract; circuits as local visualization; Extensions library
+- **[sample-skill/](./sample-skill/)** - Example skill you can install from Settings → Extensions (“Try sample skill” or path `sample-skill`)
 - **[MODULE_PERSISTENCE_IMPLEMENTATION.md](./MODULE_PERSISTENCE_IMPLEMENTATION.md)** - How module storage works
 - **[STORAGE_ANALYSIS.md](./STORAGE_ANALYSIS.md)** - Storage architecture details
 
