@@ -36,6 +36,7 @@ Think *Alien* terminals, *Metal Gear Solid* UI, or a highly polished Linux termi
 - **QDC Async Job Lane**: Upload/run/status/results flow with terminal/socket progress updates
 - **Session Management**: Save, load, and restore sessions
 - **Circuit Persistence**: Save and load complete circuit configurations
+- **Telegram connector**: Message your bot for AI chat, run circuits by name (`/steelman`, `/run dailybriefing`), `/dream` image gen, `/quick`, vision on photos; one conversation store per chat; Settings → Connections
 - **Retro Aesthetics**: CRT scanlines, phosphor green, monospace everything
 
 ## 📋 Prerequisites
@@ -316,6 +317,8 @@ Once LOOM is running, you can use these commands in the terminal:
 | `/qdc ship <path> :: <prompt>` | Package + upload + run in one command |
 | `/qdc ship-model <path> :: <prompt>` | Package model + upload + run |
 | `/qdc relay <prompt>` | Continue chat using latest QDC cloud output as context |
+| `/circuits` | List all saved circuits and templates (in terminal) |
+| `/run <name>` or `/<name>` | Run a circuit by name (e.g. `/run steelman`, `/steelman`); see `/circuits` for names |
 
 **Tip:** You can also type naturally. Non-command input goes to chat unless it is detected as an action request (image/music/speech/QDC), in which case LOOM asks for `yes`, `edit: ...`, or `no`.
 
@@ -365,6 +368,23 @@ LOOM can turn plain-language requests into assisted actions:
 - Save and load complete circuit configurations
 - Share circuits by name
 
+### Telegram
+
+When the Telegram connector is set up (Settings → Connections), you can message your bot and get AI replies, run circuits, and more. **Requires the LOOM tab to be open** for full command support (backend relays messages to the frontend).
+
+| In Telegram | Action |
+|-------------|--------|
+| Any message | AI chat (orchestrator picks model) |
+| `/help` | List commands |
+| `/circuits` | List all circuits and templates (may be multiple messages) |
+| `/<name>` or `/run <name>` | Run a circuit (e.g. `/steelman`, `/run dailybriefing`); optional input: `/steelman Your claim here` |
+| `/quick <question>` | Answer via quick cloud lane |
+| `/dream <prompt>` or `/imagine <prompt>` | Generate image (Flux) and send photo |
+| `/status` | Check that LOOM is connected |
+| Send a photo | Vision analysis; bot replies with "I see: …" |
+
+See [docs/CONNECTIONS_TELEGRAM_DISCORD.md](docs/CONNECTIONS_TELEGRAM_DISCORD.md) for bot token setup and architecture.
+
 ## 🔧 Troubleshooting
 
 ### Backend won't start
@@ -404,6 +424,12 @@ LOOM can turn plain-language requests into assisted actions:
 - **Window doesn't open**: Make sure the Vite dev server is running first
 - **Blank screen**: Check the browser console for errors (DevTools should open automatically)
 
+### Telegram
+
+- **Bot doesn't reply**: Ensure the LOOM tab is open in your browser (backend relays to frontend). Backend and frontend must both be running.
+- **Duplicate replies**: Fixed via idempotency (one reply per message/update); if you still see duplicates, ensure you're on the latest version.
+- **"Not connected" on `/status`**: In LOOM, go to Settings → Connections, paste your bot token from [@BotFather](https://t.me/BotFather), and click Connect. Message the bot once; that chat becomes the default for replies.
+
 ## 📁 Project Structure
 
 ```
@@ -422,7 +448,7 @@ loom/
 │
 ├── backend/                  # Python FastAPI server
 │   ├── app/
-│   │   ├── routers/          # REST endpoints (modules, files, images, circuits, providers, qdc, search)
+│   │   ├── routers/          # REST endpoints (modules, files, images, circuits, providers, qdc, connectors, search)
 │   │   ├── services/         # Ollama, ChromaDB, orchestrator, qdc lane, file processing, storage
 │   │   └── models/           # Pydantic schemas
 │   ├── data/                 # Local data storage (ChromaDB, SQLite)
@@ -437,6 +463,7 @@ loom/
 
 ## 📚 Additional Documentation
 
+- **[docs/CONNECTIONS_TELEGRAM_DISCORD.md](./docs/CONNECTIONS_TELEGRAM_DISCORD.md)** - Telegram (and Discord) connector: setup, commands, API, troubleshooting
 - **[CHROMADB_INTEGRATION.md](./CHROMADB_INTEGRATION.md)** - Complete guide to vector store and RAG
 - **[VECTOR_CELLS_GUIDE.md](./VECTOR_CELLS_GUIDE.md)** - Simple guide to INDEX and SEARCH cells
 - **[LOCAL_CONVERSATIONAL_AI.md](./LOCAL_CONVERSATIONAL_AI.md)** - Local conversation + streaming speech stack details
@@ -485,6 +512,14 @@ loom/
 - `GET /api/qdc/jobs/{id}/results` - Get QDC job result
 - `POST /api/qdc/jobs/{id}/rerun` - Rerun QDC job
 - `POST /api/qdc/jobs/{id}/cancel` - Cancel QDC job
+- `GET /api/connectors/status` - Connectors status (Telegram/Discord connected, username)
+- `POST /api/connectors/telegram/connect` - Connect Telegram bot (token)
+- `POST /api/connectors/telegram/disconnect` - Disconnect Telegram
+- `POST /api/connectors/telegram/send` - Send message to Telegram (chat_id, message)
+- `POST /api/connectors/telegram/send-status` - Send status message (e.g. "Thinking…"), returns message_id for edit
+- `POST /api/connectors/telegram/edit-message` - Edit a sent message (chat_id, message_id, text)
+- `POST /api/connectors/telegram/send-photo` - Send photo (chat_id, image_base64, caption)
+- `GET /api/connectors/telegram/conversation` - Get conversation history for a chat_id
 
 ### Socket.IO Events
 
@@ -500,6 +535,7 @@ loom/
 - `orchestrator_event` - Circuit/model suggestion or auto-switch details
 - `pull_status` - Model pull progress `{ status, model, percent, message }`
 - `qdc_job_event` - QDC async job progress/status updates
+- `telegram_inbound` - Inbound Telegram message (text, photo, etc.) for the feed
 
 ## 🛠️ Development
 
@@ -572,6 +608,7 @@ npm run electron:build
 - Circuit QDC nodes (`qdc_upload`, `qdc_run`, `qdc_status`, `qdc_results`)
 - Circuit templates and persistence
 - Session save/load/restore
+- **Telegram connector:** Connect bot in Settings → Connections; inbound messages in feed; AI chat (orchestrator), `/circuits`, `/run`/`/<name>`, `/quick`, `/dream`/`/imagine`, `/status`, photo → vision; one conversation store per chat; status message ("Thinking…" → "{Model} thinking…" → reply)
 
 **🚧 In Development:**
 - Live Qualcomm QDC API execution backend (current lane is mock-backed for UX integration)

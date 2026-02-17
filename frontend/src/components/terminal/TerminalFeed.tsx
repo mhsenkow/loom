@@ -1303,6 +1303,9 @@ export function TerminalFeed() {
       const ts = Date.now()
       const base = `${API_BASE_URL}/api/connectors/telegram/files/`
       if (data.type === 'image' && data.image_url_path) {
+        const imgChatId = data.chat_id != null ? String(data.chat_id) : null
+        const imgMessageId = (data as { message_id?: number }).message_id
+        const imgUpdateId = (data as { update_id?: number }).update_id
         setEntries(prev => [...prev, {
           id: `telegram-${ts}-img`,
           type: 'image',
@@ -1311,6 +1314,49 @@ export function TerminalFeed() {
           imageUrl: base + data.image_url_path,
           metadata: { source: 'telegram' },
         }])
+        if (imgChatId) {
+          fetch(`${API_BASE_URL}/api/connectors/telegram/send-status`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: imgChatId, text: 'Analyzing image…' }),
+          }).catch(() => {})
+          fetch(`${base}${data.image_url_path}`)
+            .then(r => r.blob())
+            .then(blob => new Promise<string>((res, rej) => {
+              const reader = new FileReader()
+              reader.onloadend = () => {
+                const dataUrl = reader.result as string
+                const b64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl
+                res(b64 || '')
+              }
+              reader.onerror = rej
+              reader.readAsDataURL(blob)
+            }))
+            .then(imageBase64 => {
+              if (!imageBase64) return
+              return fetch(`${API_BASE_URL}/api/images/analyze`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image_base64: imageBase64, prompt: 'Describe this image in detail. What do you see? List key elements, objects, text, and notable features.' }),
+              })
+            })
+            .then(r => r?.ok ? r.json() : null)
+            .then((analysis: { success?: boolean; analysis?: string } | null) => {
+              if (!analysis?.success || !analysis?.analysis) return
+              const body: { message: string; chat_id: string; in_reply_to_message_id?: number; in_reply_to_update_id?: number } = {
+                chat_id: imgChatId,
+                message: `🖼 I see: ${analysis.analysis.slice(0, 3500)}${analysis.analysis.length > 3500 ? '…' : ''}`,
+              }
+              if (typeof imgMessageId === 'number') body.in_reply_to_message_id = imgMessageId
+              if (typeof imgUpdateId === 'number') body.in_reply_to_update_id = imgUpdateId
+              return fetch(`${API_BASE_URL}/api/connectors/telegram/send`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+              })
+            })
+            .catch(() => {})
+        }
         return
       }
       if (data.type === 'audio' && data.audio_url_path) {
@@ -1355,9 +1401,9 @@ export function TerminalFeed() {
         const inReplyToMessageId = (data as { message_id?: number }).message_id
         const inReplyToUpdateId = (data as { update_id?: number }).update_id
         const rawText = (data.text || '').trim()
-        const dreamMatch = /^\/dream\s*(.*)$/i.exec(rawText)
+        const dreamMatch = /^\/(dream|imagine)\s*(.*)$/i.exec(rawText)
         if (dreamMatch) {
-          const prompt = dreamMatch[1].trim()
+          const prompt = dreamMatch[2].trim()
           if (!prompt) {
             fetch(`${API_BASE_URL}/api/connectors/telegram/send`, {
               method: 'POST',
@@ -1411,6 +1457,265 @@ export function TerminalFeed() {
               inFlightTelegramKeyRef.current = null
             })
           return
+        }
+        const helpMatch = /^\/help\s*$/i.exec(rawText)
+        if (helpMatch) {
+          const helpText = [
+            '📱 Telegram commands:',
+            '',
+            '/dream <prompt> — Generate an image (Flux)',
+            '/imagine <prompt> — Same as /dream',
+            '/quick <question> — Answer via free/cheap cloud lane',
+            '/circuits — List all saved circuits (may be multiple messages)',
+            '/<name> or /run <name> — Run a circuit (e.g. /steelman or /run dailybriefing)',
+            '/status — Check LOOM connection',
+            '/help — This message',
+            '',
+            'Or just send a message for AI chat.',
+          ].join('\n')
+          fetch(`${API_BASE_URL}/api/connectors/telegram/send`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, message: helpText }),
+          }).catch(() => {})
+          inFlightTelegramKeyRef.current = null
+          return
+        }
+        const statusMatch = /^\/status\s*$/i.exec(rawText)
+        if (statusMatch) {
+          fetch(`${API_BASE_URL}/api/connectors/status`)
+            .then(r => r.json())
+            .then((data: { telegram?: { connected?: boolean; username?: string } }) => {
+              const tg = data?.telegram
+              const msg = tg?.connected
+                ? `✅ LOOM connected. Telegram: @${tg?.username ?? 'bot'}`
+                : '✅ LOOM backend OK. Telegram: not connected (Settings → Connections).'
+              return fetch(`${API_BASE_URL}/api/connectors/telegram/send`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: chatId, message: msg }),
+              })
+            })
+            .catch(() =>
+              fetch(`${API_BASE_URL}/api/connectors/telegram/send`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: chatId, message: '✅ LOOM tab reached. Backend status unknown.' }),
+              })
+            )
+            .finally(() => { inFlightTelegramKeyRef.current = null })
+          return
+        }
+        const circuitsMatch = /^\/circuits(\s+all)?\s*$/i.exec(rawText)
+        if (circuitsMatch) {
+          fetch(`${API_BASE_URL}/api/circuits/`)
+            .then(r => r.json())
+            .then(async (circuits: Record<string, unknown>) => {
+              const savedNames = Object.keys(circuits || {}).sort()
+              const templateIds = NOTEBOOK_TEMPLATES.map(t => t.id)
+              const names = [...savedNames, ...templateIds.filter(id => !(id in (circuits || {})))].sort()
+              if (names.length === 0) {
+                await fetch(`${API_BASE_URL}/api/connectors/telegram/send`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ chat_id: chatId, message: 'No saved circuits yet. Create them in the Circuit board in LOOM.' }),
+                })
+                return
+              }
+              const lines = names.map(n => `• ${n}`)
+              const maxMsgLen = 4000
+              const oneMessage = `📋 Circuits (${names.length}):\n${lines.join('\n')}`
+              if (oneMessage.length <= maxMsgLen) {
+                await fetch(`${API_BASE_URL}/api/connectors/telegram/send`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ chat_id: chatId, message: oneMessage }),
+                })
+                return
+              }
+              const chunks: string[] = []
+              let current = ''
+              const partHeaderLen = 25
+              for (const line of lines) {
+                const next = current ? current + '\n' + line : line
+                if (next.length + partHeaderLen > maxMsgLen && current) {
+                  chunks.push(current)
+                  current = line
+                } else {
+                  current = next
+                }
+              }
+              if (current) chunks.push(current)
+              const total = chunks.length
+              for (let i = 0; i < chunks.length; i++) {
+                const msg = `📋 Circuits (part ${i + 1}/${total}):\n${chunks[i]}`
+                await fetch(`${API_BASE_URL}/api/connectors/telegram/send`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ chat_id: chatId, message: msg }),
+                })
+              }
+            })
+            .catch(() =>
+              fetch(`${API_BASE_URL}/api/connectors/telegram/send`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: chatId, message: 'Could not load circuits. Is the backend running?' }),
+              })
+            )
+            .finally(() => { inFlightTelegramKeyRef.current = null })
+          return
+        }
+        const quickMatch = /^\/quick\s+(.+)$/is.exec(rawText)
+        if (quickMatch) {
+          const prompt = quickMatch[1].trim()
+          if (!prompt) {
+            fetch(`${API_BASE_URL}/api/connectors/telegram/send`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: chatId, message: 'Usage: /quick <question>' }),
+            }).catch(() => {})
+            inFlightTelegramKeyRef.current = null
+            return
+          }
+          let quickContext: string | undefined
+          try {
+            const convRes = await fetch(`${API_BASE_URL}/api/connectors/telegram/conversation?chat_id=${encodeURIComponent(chatId)}`)
+            if (convRes.ok) {
+              const conv = await convRes.json()
+              const messages = (conv.messages || []) as { role: string; content: string }[]
+              const block = messages.slice(-20).map(m => `${m.role}: ${m.content}`).join('\n')
+              if (block) quickContext = `[Telegram conversation]\n${block}`
+            }
+          } catch { /* ignore */ }
+          fetch(`${API_BASE_URL}/api/providers/quick-model`)
+            .then(r => r.json())
+            .then((data: { model?: string }) => {
+              const quickModel = typeof data?.model === 'string' && data.model.trim() ? data.model.trim() : 'llama3.1:8b'
+              const run = handleAIRequestRef.current
+              if (run) {
+                run(prompt, ts, 'input', quickModel, {
+                  telegramChatId: chatId,
+                  onComplete: (response) => {
+                    const statusMsg = telegramStatusMessageRef.current
+                    telegramStatusMessageRef.current = null
+                    inFlightTelegramKeyRef.current = null
+                    if (statusMsg?.chatId === chatId) {
+                      fetch(`${API_BASE_URL}/api/connectors/telegram/edit-message`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          chat_id: chatId,
+                          message_id: statusMsg.messageId,
+                          text: response,
+                          append_to_conversation: true,
+                          in_reply_to_message_id: inReplyToMessageId,
+                          in_reply_to_update_id: inReplyToUpdateId,
+                        }),
+                      }).then(() => { window.dispatchEvent(new CustomEvent('loom:telegram-conversation-update')) }).catch(() => {
+                        fetch(`${API_BASE_URL}/api/connectors/telegram/send`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ chat_id: chatId, message: response, in_reply_to_message_id: inReplyToMessageId, in_reply_to_update_id: inReplyToUpdateId }),
+                        }).then(() => { window.dispatchEvent(new CustomEvent('loom:telegram-conversation-update')) }).catch(() => {})
+                      })
+                    } else {
+                      fetch(`${API_BASE_URL}/api/connectors/telegram/send`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ chat_id: chatId, message: response, in_reply_to_message_id: inReplyToMessageId, in_reply_to_update_id: inReplyToUpdateId }),
+                      }).then(() => { window.dispatchEvent(new CustomEvent('loom:telegram-conversation-update')) }).catch(() => {})
+                    }
+                  },
+                  telegramContext: quickContext,
+                })
+              } else {
+                inFlightTelegramKeyRef.current = null
+              }
+            })
+            .catch(() => {
+              const run = handleAIRequestRef.current
+              if (run) {
+                run(prompt, ts, 'input', 'llama3.1:8b', {
+                  telegramChatId: chatId,
+                  onComplete: (response) => {
+                    inFlightTelegramKeyRef.current = null
+                    fetch(`${API_BASE_URL}/api/connectors/telegram/send`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ chat_id: chatId, message: response, in_reply_to_message_id: inReplyToMessageId, in_reply_to_update_id: inReplyToUpdateId }),
+                    }).catch(() => {})
+                  },
+                  telegramContext: quickContext,
+                })
+              } else {
+                inFlightTelegramKeyRef.current = null
+              }
+            })
+          return
+        }
+        const reservedCommands = ['help', 'circuits', 'dream', 'imagine', 'quick', 'status']
+        const runCircuitMatch = /^\/run\s+([a-zA-Z0-9_-]+)(?:\s+(.*))?$/s.exec(rawText)
+        const slashNameMatch = !runCircuitMatch && /^\/([a-zA-Z0-9_-]+)(?:\s+(.*))?$/s.exec(rawText)
+        const circuitNameFromRun = runCircuitMatch ? runCircuitMatch[1] : (slashNameMatch ? slashNameMatch[1] : null)
+        const inputRest = (runCircuitMatch ? runCircuitMatch[2] : slashNameMatch ? slashNameMatch[2] : '')?.trim() ?? ''
+        if (circuitNameFromRun && !reservedCommands.includes(circuitNameFromRun.toLowerCase())) {
+          const circuitNames = getCircuitNames()
+          const template = NOTEBOOK_TEMPLATES.find(t => t.id === circuitNameFromRun)
+          const isCircuit = circuitNames.includes(circuitNameFromRun) || !!template
+          if (isCircuit) {
+            if (template && !circuitNames.includes(circuitNameFromRun)) {
+              const savedCircuit: import('../../hooks/useCircuitRunner').SavedCircuit = {
+                name: template.id,
+                cells: template.cells.map((cell, idx) => {
+                  const { output: _o, ...rest } = cell as { output?: string; [k: string]: unknown }
+                  return { ...rest, id: `cell-${Date.now()}-${idx}` }
+                }) as import('../../hooks/useCircuitRunner').SavedCircuit['cells'],
+                modelSlots: { A: '', B: '', C: '', IMAGE: '' },
+                savedAt: Date.now(),
+              }
+              saveCircuit(savedCircuit)
+            }
+            const required = getRequiredInputs(circuitNameFromRun)
+            if (required.length > 1) {
+              fetch(`${API_BASE_URL}/api/connectors/telegram/send`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: chatId, message: `Circuit "${circuitNameFromRun}" needs ${required.length} inputs. Run it in LOOM.` }),
+              }).catch(() => {})
+              inFlightTelegramKeyRef.current = null
+              return
+            }
+            const inputs = required.length === 0 ? {} : { [required[0]]: inputRest }
+            fetch(`${API_BASE_URL}/api/connectors/telegram/send-status`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: chatId, text: `Running ${circuitNameFromRun}…` }),
+            }).catch(() => {})
+            runCircuit(circuitNameFromRun, inputs)
+              .then(async (output) => {
+                const body: { chat_id: string; message: string; in_reply_to_message_id?: number; in_reply_to_update_id?: number } = {
+                  chat_id: chatId,
+                  message: output.slice(0, 4096) + (output.length > 4096 ? '…' : ''),
+                }
+                if (typeof inReplyToMessageId === 'number') body.in_reply_to_message_id = inReplyToMessageId
+                if (typeof inReplyToUpdateId === 'number') body.in_reply_to_update_id = inReplyToUpdateId
+                await fetch(`${API_BASE_URL}/api/connectors/telegram/send`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(body),
+                })
+              })
+              .catch(async (err) => {
+                await fetch(`${API_BASE_URL}/api/connectors/telegram/send`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ chat_id: chatId, message: `Circuit failed: ${err?.message || err}` }),
+                })
+              })
+              .finally(() => { inFlightTelegramKeyRef.current = null })
+            return
+          }
         }
         const run = handleAIRequestRef.current
         let telegramContext: string | undefined
@@ -1495,7 +1800,7 @@ export function TerminalFeed() {
     }
     socket.on('telegram_inbound', handler)
     return () => { socket.off('telegram_inbound', handler) }
-  }, [])
+  }, [getCircuitNames, getRequiredInputs, runCircuit, saveCircuit])
 
   const addSystemEntry = useCallback((content: string, timestamp: number) => {
     setEntries(prev => [...prev, {

@@ -51,6 +51,7 @@ backend/data/tts/
 backend/data/qdc_packages/
 backend/data/connectors.json
 backend/data/telegram_conversation.json
+backend/data/telegram/
 *.sqlite3
 backend/jobs.sqlite
 backend/models/
