@@ -92,6 +92,11 @@ async def save_circuit(body: CircuitSave) -> dict[str, Any]:
 @router.delete("/{name}")
 async def delete_circuit(name: str) -> dict:
     """Delete a circuit by name."""
+    try:
+        from app.services.scheduler_service import scheduler_service
+        scheduler_service.sync_circuit_jobs(name, [])
+    except Exception:
+        pass
     if not storage.delete_circuit(name):
         raise HTTPException(status_code=404, detail="Circuit not found")
     return {"status": "deleted", "name": name}

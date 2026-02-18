@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Optional
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # DB path: project root / data / loom.db
 def _db_path() -> Path:
@@ -72,8 +72,33 @@ def _apply_migration_1(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_migration_2(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS scheduler_runs (
+            run_id TEXT PRIMARY KEY,
+            circuit_name TEXT NOT NULL,
+            job_id TEXT,
+            trigger TEXT NOT NULL DEFAULT 'scheduled',
+            status TEXT NOT NULL,
+            started_at REAL NOT NULL,
+            finished_at REAL,
+            duration_ms INTEGER,
+            error TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_scheduler_runs_started_at
+            ON scheduler_runs(started_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_scheduler_runs_circuit_name
+            ON scheduler_runs(circuit_name);
+        CREATE INDEX IF NOT EXISTS idx_scheduler_runs_job_id
+            ON scheduler_runs(job_id);
+        """
+    )
+
+
 MIGRATIONS: list[tuple[int, Any]] = [
     (1, _apply_migration_1),
+    (2, _apply_migration_2),
 ]
 
 
@@ -395,3 +420,114 @@ def delete_session(name: str) -> bool:
         return cur.rowcount > 0
     finally:
         conn.close()
+
+
+# --- Scheduler Runs ---
+
+def upsert_scheduler_run(
+    run_id: str,
+    circuit_name: str,
+    status: str,
+    started_at: float,
+    *,
+    job_id: Optional[str] = None,
+    trigger: str = "scheduled",
+    finished_at: Optional[float] = None,
+    error: Optional[str] = None,
+) -> dict[str, Any]:
+    """Create or update a scheduler run record."""
+    init_db()
+    conn = _get_conn()
+    try:
+        duration_ms: Optional[int] = None
+        if finished_at is not None:
+            duration_ms = max(0, int((finished_at - started_at) * 1000))
+        conn.execute(
+            """
+            INSERT INTO scheduler_runs
+                (run_id, circuit_name, job_id, trigger, status, started_at, finished_at, duration_ms, error)
+            VALUES
+                (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+                circuit_name = excluded.circuit_name,
+                job_id = excluded.job_id,
+                trigger = excluded.trigger,
+                status = excluded.status,
+                started_at = excluded.started_at,
+                finished_at = excluded.finished_at,
+                duration_ms = excluded.duration_ms,
+                error = excluded.error
+            """,
+            (
+                run_id,
+                circuit_name,
+                job_id,
+                trigger,
+                status,
+                started_at,
+                finished_at,
+                duration_ms,
+                error,
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            """
+            SELECT run_id, circuit_name, job_id, trigger, status, started_at, finished_at, duration_ms, error
+            FROM scheduler_runs
+            WHERE run_id = ?
+            """,
+            (run_id,),
+        ).fetchone()
+        return _row_to_scheduler_run(row) if row else {}
+    finally:
+        conn.close()
+
+
+def list_scheduler_runs(
+    *,
+    circuit_name: Optional[str] = None,
+    job_id: Optional[str] = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Return recent scheduler runs (newest first)."""
+    init_db()
+    conn = _get_conn()
+    try:
+        safe_limit = max(1, min(int(limit), 1000))
+        where: list[str] = []
+        args: list[Any] = []
+        if circuit_name:
+            where.append("circuit_name = ?")
+            args.append(circuit_name)
+        if job_id:
+            where.append("job_id = ?")
+            args.append(job_id)
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        rows = conn.execute(
+            f"""
+            SELECT run_id, circuit_name, job_id, trigger, status, started_at, finished_at, duration_ms, error
+            FROM scheduler_runs
+            {where_sql}
+            ORDER BY started_at DESC
+            LIMIT ?
+            """,
+            (*args, safe_limit),
+        ).fetchall()
+        return [_row_to_scheduler_run(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def _row_to_scheduler_run(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "runId": row["run_id"],
+        "circuitName": row["circuit_name"],
+        "jobId": row["job_id"] or None,
+        "trigger": row["trigger"] or "scheduled",
+        "status": row["status"],
+        "startedAt": float(row["started_at"]),
+        "finishedAt": float(row["finished_at"]) if row["finished_at"] is not None else None,
+        "durationMs": int(row["duration_ms"]) if row["duration_ms"] is not None else None,
+        "error": row["error"] or None,
+    }

@@ -20,7 +20,7 @@ import type { LogEntry, ModuleType, ModuleStatus } from '../../types/module'
 import { useSocket } from '../../hooks/useSocket'
 import { useSystemStatus } from '../../hooks/useSystemStatus'
 import { useSendToTerminal } from '../../hooks/useTerminalOutput'
-import { saveCircuit, saveModelSlots, loadModelSlots, SavedCircuit } from '../../hooks/useCircuitRunner'
+import { saveCircuit, saveModelSlots, loadModelSlots, loadSavedCircuits, SavedCircuit } from '../../hooks/useCircuitRunner'
 import { saveModuleToBackend, deleteModuleFromBackend } from '../../hooks/useModules'
 import { ProviderSetup } from '../terminal/ProviderSetup'
 import { DialogModal } from '../shell/DialogModal'
@@ -56,6 +56,8 @@ const SLOT_LABELS: Record<ModelSlot, { label: string; desc: string; color: strin
 
 const IMAGE_SLOT_DEFAULT = 'openai:dall-e-3'
 const CIRCUIT_IMPORT_EVENT = 'loom:circuit-import'
+const OPEN_CIRCUIT_EVENT = 'loom:open-circuit'
+const SCHEDULER_RUNS_UPDATED_EVENT = 'loom:scheduler-runs-updated'
 
 // Register custom node types
 const nodeTypes = {
@@ -500,6 +502,52 @@ export function CircuitBoard() {
     }
   }, [viewMode, setNodes, setEdges])
 
+  const openCircuitByName = useCallback(async (name: string) => {
+    const normalizedName = normalizeCircuitName(name)
+    try {
+      let circuit: SavedCircuit | null = null
+
+      const response = await fetch(`${API_BASE_URL}/api/circuits/${encodeURIComponent(normalizedName)}`)
+      if (response.ok) {
+        circuit = await response.json()
+      }
+
+      if (!circuit) {
+        const local = loadSavedCircuits()
+        circuit = local[normalizedName] || local[name] || null
+      }
+
+      if (!circuit) {
+        showErrorToast(`Circuit "${normalizedName}" not found.`, 'Open Circuit')
+        return
+      }
+
+      const loadedName = normalizeCircuitName(circuit.name || normalizedName)
+      const loadedCells: CellData[] = (circuit.cells || []).map((cell, index) => ({
+        ...(cell as CellData),
+        id: (cell as CellData).id || `cell-${Date.now()}-${index}`,
+        status: 'idle',
+      }))
+
+      setCells(loadedCells)
+      setCircuitName(loadedName)
+      setActiveCellId(null)
+      if (circuit.modelSlots) {
+        setModelSlots(prev => ({ ...prev, ...circuit.modelSlots }))
+      }
+      baselineSnapshotRef.current = createCircuitSnapshot(loadedName, loadedCells)
+      setHasUnsavedChanges(false)
+      setShowSaveSuccess(false)
+      if (viewMode === 'canvas') {
+        setNodes(cellsToNodes(loadedCells))
+        setEdges(generateEdges(loadedCells))
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      showErrorToast(`Failed to open circuit: ${message}`, 'Open Circuit')
+    }
+  }, [viewMode, setNodes, setEdges])
+
   // Sync cells to nodes when switching to canvas
   const syncToCanvas = useCallback(() => {
     setNodes(cellsToNodes(cells))
@@ -520,6 +568,18 @@ export function CircuitBoard() {
       setEdges(generateEdges(newCells))
     }
   }, [viewMode, setNodes, setEdges])
+
+  useEffect(() => {
+    const onOpenCircuit = (event: Event) => {
+      const custom = event as CustomEvent<{ name?: string }>
+      const name = custom.detail?.name?.trim()
+      if (!name) return
+      void openCircuitByName(name)
+    }
+
+    window.addEventListener(OPEN_CIRCUIT_EVENT, onOpenCircuit as EventListener)
+    return () => window.removeEventListener(OPEN_CIRCUIT_EVENT, onOpenCircuit as EventListener)
+  }, [openCircuitByName])
 
   const onConnect = useCallback(
     (connection: Connection) => {
@@ -1429,11 +1489,45 @@ export function CircuitBoard() {
     stopGeneration()
   }, [stopGeneration])
 
+  const logManualCircuitRun = useCallback(async (params: {
+    runId: string
+    status: 'running' | 'success' | 'failed'
+    startedAt: number
+    finishedAt?: number
+    error?: string
+  }) => {
+    const name = normalizeCircuitName(circuitName)
+    if (!name) return
+    try {
+      await fetch(`${API_BASE_URL}/api/scheduler/runs/log`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          run_id: params.runId,
+          circuit_name: name,
+          status: params.status,
+          trigger: 'manual-ui',
+          started_at: params.startedAt,
+          finished_at: params.finishedAt,
+          error: params.error,
+        }),
+      })
+      window.dispatchEvent(new CustomEvent(SCHEDULER_RUNS_UPDATED_EVENT))
+    } catch {
+      // Non-blocking: local execution should continue even if history logging fails.
+    }
+  }, [circuitName])
+
   // Run all cells sequentially (with optional loop-back from conditionals)
   const runAllCells = useCallback(async () => {
     if (isRunning) return
     setIsRunning(true)
     isRunningRef.current = true
+    const runId = `manual-ui-${Date.now()}-${Math.floor(Math.random() * 100000)}`
+    const startedAt = Date.now()
+    let runStatus: 'success' | 'failed' = 'success'
+    let runError: string | undefined
+    void logManualCircuitRun({ runId, status: 'running', startedAt })
 
     const workingCells = [...cells]
     const loopCounts = new Map<string, number>()
@@ -1441,13 +1535,19 @@ export function CircuitBoard() {
     try {
       for (let i = 0; i < workingCells.length; i++) {
         // Check for stop signal
-        if (!isRunningRef.current) break
+        if (!isRunningRef.current) {
+          runStatus = 'failed'
+          runError = 'Stopped by user'
+          break
+        }
 
         const cell = workingCells[i]
         const validationError = getValidationError(cell, i)
         if (validationError) {
           updateCell(cell.id, { status: 'error', error: `Validation: ${validationError}` })
           showErrorToast(`Cell ${i + 1} (${cell.label}): ${validationError}`, 'Cannot Run Circuit')
+          runStatus = 'failed'
+          runError = validationError
           break
         }
         updateCell(cell.id, { status: 'running', output: undefined, error: undefined })
@@ -1477,15 +1577,25 @@ export function CircuitBoard() {
           updateCell(cell.id, { status: 'success', output })
           workingCells[i] = { ...workingCells[i], output }
         } catch (e) {
-          updateCell(cell.id, { status: 'error', error: e instanceof Error ? e.message : 'Unknown error' })
+          const message = e instanceof Error ? e.message : 'Unknown error'
+          updateCell(cell.id, { status: 'error', error: message })
+          runStatus = 'failed'
+          runError = message
           break
         }
       }
     } finally {
       setIsRunning(false)
       isRunningRef.current = false
+      void logManualCircuitRun({
+        runId,
+        status: runStatus,
+        startedAt,
+        finishedAt: Date.now(),
+        error: runError,
+      })
     }
-  }, [cells, isRunning, executeCell, updateCell, gatherInput, getValidationError])
+  }, [cells, isRunning, executeCell, updateCell, gatherInput, getValidationError, logManualCircuitRun])
 
   // Run just the active cell
   const runActiveCell = useCallback(() => {

@@ -51,6 +51,42 @@ from app.services.share_service import share_service
 
 logger = logging.getLogger(__name__)
 
+# CORS allowlist:
+# - Use LOOM_ALLOWED_ORIGINS when provided (comma-separated origins)
+# - Otherwise allow common local dev origins
+def _load_allowed_origins() -> tuple[list[str], bool]:
+    raw = (os.getenv("LOOM_ALLOWED_ORIGINS") or "").strip()
+    if raw:
+        origins = [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
+        if not origins:
+            origins = ["*"]
+        return origins, False
+    # Default local development origins
+    return [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ], True
+
+
+ALLOWED_ORIGINS, _USING_DEFAULT_LOCAL_ORIGINS = _load_allowed_origins()
+ALLOW_ALL_ORIGINS = "*" in ALLOWED_ORIGINS
+LOCALHOST_ORIGIN_REGEX = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+
+
+def _is_localhost_origin(origin: str) -> bool:
+    return re.match(LOCALHOST_ORIGIN_REGEX, origin.rstrip("/")) is not None
+
+
+ALLOW_LOCALHOST_REGEX = (
+    not ALLOW_ALL_ORIGINS
+    and (
+        _USING_DEFAULT_LOCAL_ORIGINS
+        or (ALLOWED_ORIGINS and all(_is_localhost_origin(origin) for origin in ALLOWED_ORIGINS))
+    )
+)
+
 # Optional: serve built frontend from backend (e.g. Docker single-container)
 SERVE_FRONTEND = os.getenv("LOOM_SERVE_FRONTEND", "").strip().lower() in ("1", "true", "yes")
 FRONTEND_DIST = os.getenv("LOOM_FRONTEND_DIST") or str(backend_dir / "frontend_dist")
@@ -60,6 +96,8 @@ async def _initialize_services() -> None:
     storage_init_db()
     vector_store.set_ollama_client(ollama_client)
     scheduler_service.start()  # Start scheduler
+    scheduler_service.ensure_sample_schedule()
+    logger.info("CORS origins configured: %s", "*, all origins" if ALLOW_ALL_ORIGINS else ", ".join(ALLOWED_ORIGINS))
     try:
         from app.services.telegram_listener import get_telegram_listener
         get_telegram_listener(sio).start()
@@ -119,15 +157,22 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins
+    allow_origins=["*"] if ALLOW_ALL_ORIGINS else ALLOWED_ORIGINS,
+    allow_origin_regex=(
+        LOCALHOST_ORIGIN_REGEX
+        if ALLOW_LOCALHOST_REGEX
+        else None
+    ),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Initialize Socket.IO
-# Allow all origins for now to simplify local development
-sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
+sio = socketio.AsyncServer(
+    async_mode='asgi',
+    cors_allowed_origins='*' if (ALLOW_ALL_ORIGINS or ALLOW_LOCALHOST_REGEX) else ALLOWED_ORIGINS,
+)
 
 
 # Wrap FastAPI with Socket.IO

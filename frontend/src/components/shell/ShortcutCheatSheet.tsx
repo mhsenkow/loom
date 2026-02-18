@@ -11,6 +11,7 @@ interface ShortcutItem {
 const GLOBAL_SHORTCUTS: ShortcutItem[] = [
   { keys: 'Ctrl/Cmd + 1', action: 'Switch to Terminal' },
   { keys: 'Ctrl/Cmd + 2', action: 'Switch to Circuit' },
+  { keys: 'Ctrl/Cmd + 3', action: 'Switch to Calendar' },
   { keys: 'Ctrl/Cmd + ,', action: 'Open Settings' },
   { keys: 'Ctrl/Cmd + /', action: 'Open shortcut help' },
   { keys: '?', action: 'Open shortcut help' },

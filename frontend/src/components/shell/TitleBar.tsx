@@ -5,8 +5,8 @@ import { API_BASE_URL } from '../../config/api'
 import { showInfoToast, showErrorToast, showSuccessToast } from '../../utils/uiNotifications'
 
 interface TitleBarProps {
-  viewMode: 'terminal' | 'circuit'
-  onViewModeChange: (mode: 'terminal' | 'circuit') => void
+  viewMode: 'terminal' | 'circuit' | 'calendar'
+  onViewModeChange: (mode: 'terminal' | 'circuit' | 'calendar') => void
   crtEnabled: boolean
   crtIntensity: CrtIntensityPreset
   onCrtToggle: () => void
@@ -249,6 +249,12 @@ export function TitleBar({
             onClick={() => onViewModeChange('circuit')}
           >
             CIRCUIT
+          </ViewTab>
+          <ViewTab
+            active={viewMode === 'calendar'}
+            onClick={() => onViewModeChange('calendar')}
+          >
+            CALENDAR
           </ViewTab>
         </nav>
 

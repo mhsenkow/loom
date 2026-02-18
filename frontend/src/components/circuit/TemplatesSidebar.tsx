@@ -1998,6 +1998,87 @@ export const NOTEBOOK_TEMPLATES: NotebookTemplate[] = [
       notification('NOTIFY', 'LOOM — Weekly thought', '{{input}}'),
     ]
   },
+  {
+    id: 'annoy-mode',
+    name: 'Annoy Mode (OFF by default)',
+    description: 'Starts OFF. Set cron to * * * * * * to trigger every second and send nonstop alerts.',
+    icon: '🚨',
+    category: 'scripts',
+    cells: [
+      {
+        type: 'cron_trigger',
+        label: 'OFF (set * * * * * * to enable)',
+        content: '',
+      },
+      ai(
+        'ANNOY MESSAGE',
+        'Write a short, annoying alert in all caps. Keep it under 10 words and make it repetitive.',
+        'C',
+        'none'
+      ),
+      notification('ALERT', 'LOOM — ANNOY MODE', '{{input}}'),
+    ]
+  },
+  {
+    id: 'site-research-email-draft',
+    name: 'Site Research → Email Draft (OFF)',
+    description: 'OFF by default. Fetch website content, analyze it, draft an email update, save to outbox, then notify.',
+    icon: '📧',
+    category: 'hybrid',
+    cells: [
+      {
+        type: 'cron_trigger',
+        label: 'OFF (set schedule to enable)',
+        content: '',
+      },
+      shellExec('FETCH SITE', 'curl -L -s https://example.com | head -n 120', 'none'),
+      ai('ANALYZE', 'Analyze this website content. Extract key updates, risks, and opportunities in concise bullets.', 'B'),
+      ai('EMAIL DRAFT', 'Write an executive email update with: Subject line, 3 bullet takeaways, and one recommended action.', 'A'),
+      fileWrite('SAVE OUTBOX', '{{input}}', 'outbox/site-research-email.txt', 'overwrite'),
+      notification('NOTIFY', 'LOOM — Site Research Draft Ready', 'Saved to outbox/site-research-email.txt', 'none'),
+    ]
+  },
+  {
+    id: 'status-watch-telegram',
+    name: 'Status Watch → Telegram (OFF)',
+    description: 'OFF by default. Checks status page, summarizes current health, and sends update to Telegram.',
+    icon: '📡',
+    category: 'hybrid',
+    cells: [
+      {
+        type: 'cron_trigger',
+        label: 'OFF (set schedule to enable)',
+        content: '',
+      },
+      shellExec('FETCH STATUS', 'curl -L -s https://www.githubstatus.com/ | head -n 160', 'none'),
+      ai('SUMMARIZE', 'Summarize service health. If incident keywords appear, start with ALERT:. Keep under 6 lines.', 'B'),
+      {
+        type: 'telegram_send',
+        label: 'SEND TELEGRAM',
+        content: '{{input}}',
+        inputMode: 'previous',
+      },
+      output('OUTPUT'),
+    ]
+  },
+  {
+    id: 'competitor-brief-notify',
+    name: 'Competitor Brief → Notify (OFF)',
+    description: 'OFF by default. Pulls a competitor page, writes a concise brief, saves report, then notifies.',
+    icon: '📈',
+    category: 'hybrid',
+    cells: [
+      {
+        type: 'cron_trigger',
+        label: 'OFF (set schedule to enable)',
+        content: '',
+      },
+      shellExec('FETCH PAGE', 'curl -L -s https://openai.com/news/ | head -n 160', 'none'),
+      ai('RESEARCH BRIEF', 'Create a competitor brief: key announcements, strategic implications, and one response idea.', 'B'),
+      fileWrite('SAVE REPORT', '{{input}}', 'reports/competitor-brief.txt', 'overwrite'),
+      notification('NOTIFY', 'LOOM — Competitor Brief Ready', 'Saved to reports/competitor-brief.txt', 'none'),
+    ]
+  },
 ]
 
 

@@ -3,6 +3,7 @@ import { CRTContainer } from './components/shell/CRTContainer'
 import { TitleBar } from './components/shell/TitleBar'
 import { TerminalFeed } from './components/terminal/TerminalFeed'
 import { CircuitBoard } from './components/circuit/CircuitBoard'
+import { SchedulerCalendarView } from './components/scheduler/SchedulerCalendarView'
 import {
   SettingsModal,
   loadSettings,
@@ -25,7 +26,7 @@ import { requestDesktopNotificationPermission } from './utils/uiNotifications'
 import { useSocket } from './hooks/useSocket'
 import { useSystemStatus } from './hooks/useSystemStatus'
 
-type ViewMode = 'terminal' | 'circuit'
+type ViewMode = 'terminal' | 'circuit' | 'calendar'
 
 /** Catches render errors in Settings so the app does not crash. */
 class SettingsModalErrorBoundary extends Component<
@@ -242,6 +243,11 @@ function App() {
         setViewMode('circuit')
         return
       }
+      if (ctrlOrMeta && key === '3') {
+        event.preventDefault()
+        setViewMode('calendar')
+        return
+      }
       if (ctrlOrMeta && key === ',') {
         event.preventDefault()
         setSettingsOpen(true)
@@ -276,6 +282,15 @@ function App() {
 
     window.addEventListener('loom:circuit-import', onCircuitImport as EventListener)
     return () => window.removeEventListener('loom:circuit-import', onCircuitImport as EventListener)
+  }, [])
+
+  useEffect(() => {
+    const onOpenCircuit = () => {
+      setViewMode('circuit')
+    }
+
+    window.addEventListener('loom:open-circuit', onOpenCircuit as EventListener)
+    return () => window.removeEventListener('loom:open-circuit', onOpenCircuit as EventListener)
   }, [])
 
   // Format RAM display using backend health metrics.
@@ -372,6 +387,11 @@ function App() {
           {/* Circuit - Deep dive notebooks, session-based */}
           <div className={`absolute inset-0 ${viewMode === 'circuit' ? 'block' : 'hidden'}`}>
             <CircuitBoard />
+          </div>
+
+          {/* Calendar - Scheduled circuit runs */}
+          <div className={`absolute inset-0 ${viewMode === 'calendar' ? 'block' : 'hidden'}`}>
+            <SchedulerCalendarView />
           </div>
         </main>
 
